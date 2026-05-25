@@ -179,9 +179,43 @@ struct privacyTests {
         #expect(!MainShellAction.allCases.map(\.rawValue).contains("share"))
     }
 
-    @Test func mediaPreviewBadgesUsePhotoAndVideoIcons() {
+    @Test func mediaPreviewBadgesUsePhotoVideoAndAudioIcons() {
         #expect(VaultItemKind.image.previewBadgeSystemImage == "photo.fill")
         #expect(VaultItemKind.video.previewBadgeSystemImage == "video.fill")
+        #expect(VaultItemKind.audio.previewBadgeSystemImage == "waveform")
+        #expect(VaultItemKind.image.isPreviewableMedia)
+        #expect(VaultItemKind.video.isPreviewableMedia)
+        #expect(VaultItemKind.audio.isPreviewableMedia)
+        #expect(!VaultItemKind.document.isPreviewableMedia)
+    }
+
+    @Test func importSummaryFormatsCountsByMediaKind() {
+        var summary = ImportSummary()
+        summary.record(.image)
+        summary.record(.image)
+        summary.record(.video)
+        summary.recordFailure()
+
+        #expect(summary.importedCount == 3)
+        #expect(summary.failedCount == 1)
+        #expect(summary.displayTitle == L.string("Import Complete"))
+        #expect(summary.displayMessage.contains("2 Images"))
+        #expect(summary.displayMessage.contains("1 Video"))
+    }
+
+    @Test func mediaGridLayoutSupportsReusablePinchSizing() {
+        #expect(MediaGridLayout.defaultScale == 1)
+        #expect(MediaGridLayout.clampedScale(0.25) == MediaGridLayout.minimumScale)
+        #expect(MediaGridLayout.clampedScale(3) == MediaGridLayout.maximumScale)
+        #expect(MediaGridLayout.tileMinimum(for: 390, scale: 0.8) == 88)
+        #expect(MediaGridLayout.tileMinimum(for: 390, scale: 1.4) == 154)
+        #expect(MediaGridLayout.spacing == 10)
+    }
+
+    @Test func homeIconLayoutsStayCompact() {
+        #expect(VaultHomeHeaderLayout.actionSize == 34)
+        #expect(VaultHomeHeaderLayout.iconFontSize == 17)
+        #expect(VaultCategoryCarouselLayout.iconFontSize == 40)
     }
 
     @Test func onboardingSetupStartsWithSecurityCodeThenConfirmsGestureLast() {

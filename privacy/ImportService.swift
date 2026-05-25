@@ -9,18 +9,20 @@ enum ImportService {
     static let sharedInboxDirectoryName = "SharedImports"
 
     @MainActor
+    @discardableResult
     static func importPickerItems(
         _ items: [PhotosPickerItem],
         context: ModelContext,
         vaultStore: VaultStore,
         sync: CloudKitSyncService
-    ) async {
+    ) async -> ImportSummary {
+        var summary = ImportSummary()
         for item in items {
             guard let data = try? await item.loadTransferable(type: Data.self) else { continue }
             let contentType = item.supportedContentTypes.first
             let kind: VaultItemKind = contentType?.conforms(to: UTType.movie) == true ? .video : .image
             let name = "Photo-\(Date().timeIntervalSince1970).\(contentType?.preferredFilenameExtension ?? "dat")"
-            await vaultStore.importData(
+            let success = await vaultStore.importData(
                 data,
                 originalName: name,
                 mimeType: contentType?.preferredMIMEType ?? "application/octet-stream",
@@ -29,24 +31,31 @@ enum ImportService {
                 context: context,
                 sync: sync
             )
+            if success {
+                summary.record(kind)
+            } else {
+                summary.recordFailure()
+            }
         }
+        return summary
     }
 
     @MainActor
+    @discardableResult
     static func importFile(
         url: URL,
         context: ModelContext,
         vaultStore: VaultStore,
         sync: CloudKitSyncService,
         source: String = "Files"
-    ) async {
+    ) async -> Bool {
         let didAccess = url.startAccessingSecurityScopedResource()
         defer {
             if didAccess { url.stopAccessingSecurityScopedResource() }
         }
-        guard let data = try? Data(contentsOf: url) else { return }
+        guard let data = try? Data(contentsOf: url) else { return false }
         let type = UTType(filenameExtension: url.pathExtension)
-        await vaultStore.importData(
+        return await vaultStore.importData(
             data,
             originalName: url.lastPathComponent,
             mimeType: type?.preferredMIMEType ?? "application/octet-stream",
@@ -55,6 +64,34 @@ enum ImportService {
             context: context,
             sync: sync
         )
+    }
+
+    @MainActor
+    static func importFiles(
+        urls: [URL],
+        context: ModelContext,
+        vaultStore: VaultStore,
+        sync: CloudKitSyncService,
+        source: String = "Files"
+    ) async -> ImportSummary {
+        var summary = ImportSummary()
+        for url in urls {
+            let type = UTType(filenameExtension: url.pathExtension)
+            let kind = kind(for: type, fileExtension: url.pathExtension)
+            let success = await importFile(
+                url: url,
+                context: context,
+                vaultStore: vaultStore,
+                sync: sync,
+                source: source
+            )
+            if success {
+                summary.record(kind)
+            } else {
+                summary.recordFailure()
+            }
+        }
+        return summary
     }
 
     @MainActor

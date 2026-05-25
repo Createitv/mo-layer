@@ -206,6 +206,8 @@ struct VaultHomeView: View {
     @State private var showImportHub = false
     @State private var showCreateFolder = false
     @State private var selectedFolderId: String?
+    @State private var importSummary: ImportSummary?
+    @State private var mediaGridScale = MediaGridLayout.defaultScale
 
     private var activeItems: [VaultItem] { items.filter { $0.deletedAt == nil } }
     private var activeFolders: [VaultFolder] { folders.filter { $0.deletedAt == nil } }
@@ -254,10 +256,6 @@ struct VaultHomeView: View {
                     }
                     .frame(height: VaultCategoryCarouselLayout.cardHeight)
 
-                    Text("Recent Imports")
-                        .font(.headline)
-                        .foregroundStyle(AppTheme.ink)
-
                     VStack(alignment: .leading, spacing: 10) {
                         HStack {
                             Text("Albums")
@@ -296,8 +294,7 @@ struct VaultHomeView: View {
                         }
                     }
 
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 104), spacing: 10)], spacing: 10) {
-                        ForEach(visibleItems) { item in
+                    ZoomableMediaGrid(items: visibleItems, scale: $mediaGridScale) { item in
                             VaultItemTile(item: item)
                                 .onTapGesture { open(item, in: visibleItems) }
                                 .contextMenu {
@@ -307,7 +304,6 @@ struct VaultHomeView: View {
                                         Label(L.string("Details"), systemImage: "info.circle")
                                     }
                                 }
-                        }
                     }
                 }
                 .padding()
@@ -327,7 +323,10 @@ struct VaultHomeView: View {
                 FolderEditorView()
             }
             .fullScreenCover(isPresented: $showImportHub) {
-                ImportHubView(showsCloseButton: true)
+                ImportHubView(showsCloseButton: true) { summary in
+                    importSummary = summary
+                    showImportHub = false
+                }
             }
             .fullScreenCover(isPresented: $showProfileCenter) {
                 ProfileCenterView()
@@ -336,19 +335,31 @@ struct VaultHomeView: View {
                 await vaultStore.pullCloudIndex(context: modelContext, sync: sync)
                 await vaultStore.syncPendingChanges(context: modelContext, sync: sync)
             }
+            .alert(item: $importSummary) { summary in
+                Alert(
+                    title: Text(summary.displayTitle),
+                    message: Text(summary.displayMessage),
+                    dismissButton: .default(Text("OK"))
+                )
+            }
         }
     }
 
     private func open(_ item: VaultItem, in collection: [VaultItem]) {
-        guard item.kind.isVisualMedia else {
+        guard item.kind.isPreviewableMedia else {
             selectedItem = item
             return
         }
         previewSelection = MediaPreviewSelection(
-            items: collection.filter { $0.kind.isVisualMedia },
+            items: collection.filter { $0.kind.isPreviewableMedia },
             initialItemId: item.id
         )
     }
+}
+
+enum VaultHomeHeaderLayout {
+    static let actionSize: CGFloat = 34
+    static let iconFontSize: CGFloat = 17
 }
 
 struct VaultHomeHeader: View {
@@ -366,9 +377,9 @@ struct VaultHomeHeader: View {
 
             Button(action: profileAction) {
                 Image(systemName: "person.crop.circle")
-                    .font(.title2.weight(.semibold))
+                    .font(.system(size: VaultHomeHeaderLayout.iconFontSize, weight: .semibold))
                     .foregroundStyle(AppTheme.primary)
-                    .frame(width: 40, height: 40)
+                    .frame(width: VaultHomeHeaderLayout.actionSize, height: VaultHomeHeaderLayout.actionSize)
                     .background(AppTheme.primary.opacity(0.08))
                     .clipShape(Circle())
             }
@@ -377,9 +388,9 @@ struct VaultHomeHeader: View {
 
             Button(action: importAction) {
                 Image(systemName: "square.and.arrow.down")
-                    .font(.title2.weight(.semibold))
+                    .font(.system(size: VaultHomeHeaderLayout.iconFontSize, weight: .semibold))
                     .foregroundStyle(.white)
-                    .frame(width: 40, height: 40)
+                    .frame(width: VaultHomeHeaderLayout.actionSize, height: VaultHomeHeaderLayout.actionSize)
                     .background(AppTheme.primary)
                     .clipShape(Circle())
             }
@@ -425,6 +436,7 @@ enum VaultCategoryCarouselLayout {
     static let spacing: CGFloat = 12
     static let cardHeight: CGFloat = 176
     static let visualHeight: CGFloat = 104
+    static let iconFontSize: CGFloat = 40
     static let textAlignment: TextAlignment = .center
 
     static func cardWidth(containerWidth: CGFloat, categoryCount: Int) -> CGFloat {
@@ -534,12 +546,12 @@ struct VaultCategoryDetailView: View {
     }
 
     private func open(_ item: VaultItem) {
-        guard item.kind.isVisualMedia else {
+        guard item.kind.isPreviewableMedia else {
             selectedItem = item
             return
         }
         previewSelection = MediaPreviewSelection(
-            items: items.filter { $0.kind.isVisualMedia },
+            items: items.filter { $0.kind.isPreviewableMedia },
             initialItemId: item.id
         )
     }
@@ -693,7 +705,7 @@ struct CategoryCard: View {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .fill(category.previewTint.opacity(0.16))
                     Image(systemName: icon)
-                        .font(.system(size: 48, weight: .semibold))
+                        .font(.system(size: VaultCategoryCarouselLayout.iconFontSize, weight: .semibold))
                         .foregroundStyle(category.previewTint)
                 }
                 .frame(height: VaultCategoryCarouselLayout.visualHeight)
@@ -929,6 +941,8 @@ private struct FullscreenMediaPage: View {
                     .ignoresSafeArea()
                     .onAppear { player.play() }
                     .onDisappear { player.pause() }
+            } else if item.kind == .audio, let player {
+                AudioPreviewPanel(player: player)
             } else if isLoading {
                 ProgressView()
                     .tint(.white)
@@ -950,8 +964,39 @@ private struct FullscreenMediaPage: View {
         guard let url = try? await vaultStore.decryptedTemporaryURL(for: item, context: modelContext, sync: sync) else { return }
         if item.kind == .image, let data = try? Data(contentsOf: url), let loaded = UIImage(data: data) {
             image = loaded
-        } else if item.kind == .video {
+        } else if item.kind == .video || item.kind == .audio {
             player = AVPlayer(url: url)
+        }
+    }
+}
+
+private struct AudioPreviewPanel: View {
+    let player: AVPlayer
+    @State private var isPlaying = false
+
+    var body: some View {
+        VStack(spacing: 22) {
+            Image(systemName: "waveform.circle.fill")
+                .font(.system(size: 86, weight: .semibold))
+                .foregroundStyle(.white)
+
+            Button {
+                isPlaying.toggle()
+                isPlaying ? player.play() : player.pause()
+            } label: {
+                Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                    .font(.title2.weight(.bold))
+                    .foregroundStyle(.black)
+                    .frame(width: 64, height: 64)
+                    .background(.white)
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onDisappear {
+            player.pause()
+            isPlaying = false
         }
     }
 }
@@ -987,6 +1032,10 @@ private struct MediaFilmstripThumb: View {
 }
 
 extension VaultItemKind {
+    var isPreviewableMedia: Bool {
+        self == .image || self == .video || self == .audio
+    }
+
     var isVisualMedia: Bool {
         self == .image || self == .video
     }
@@ -995,6 +1044,7 @@ extension VaultItemKind {
         switch self {
         case .image: "photo.fill"
         case .video: "video.fill"
+        case .audio: "waveform"
         default: nil
         }
     }

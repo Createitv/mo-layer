@@ -1,4 +1,5 @@
 import Combine
+import AVFoundation
 import CloudKit
 import CryptoKit
 import Foundation
@@ -84,7 +85,7 @@ final class VaultStore: ObservableObject {
             let encryptedFile = try VaultCryptoService.encrypt(data, using: fileKey)
             let encryptedFilePath = try VaultFileStore.writeEncryptedObject(encryptedFile, itemId: itemId)
 
-            let thumbData = makeThumbnailData(from: data, kind: kind)
+            let thumbData = await makeThumbnailData(from: data, kind: kind)
             let encryptedThumbPath: String?
             if let thumbData {
                 let encryptedThumb = try VaultCryptoService.encrypt(thumbData, using: fileKey)
@@ -456,10 +457,52 @@ final class VaultStore: ObservableObject {
         return manifest
     }
 
-    private func makeThumbnailData(from data: Data, kind: VaultItemKind) -> Data? {
-        guard kind == .image, let image = UIImage(data: data) else {
+    private func makeThumbnailData(from data: Data, kind: VaultItemKind) async -> Data? {
+        switch kind {
+        case .image:
+            guard let image = UIImage(data: data) else { return nil }
+            return renderThumbnailData(from: image)
+        case .video:
+            return await makeVideoThumbnailData(from: data)
+        default:
             return nil
         }
+    }
+
+    private func makeVideoThumbnailData(from data: Data) async -> Data? {
+        let temporaryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("mov")
+        do {
+            try data.write(to: temporaryURL, options: .atomic)
+            defer { try? FileManager.default.removeItem(at: temporaryURL) }
+            let asset = AVURLAsset(url: temporaryURL)
+            let generator = AVAssetImageGenerator(asset: asset)
+            generator.appliesPreferredTrackTransform = true
+            generator.maximumSize = CGSize(width: 640, height: 640)
+            let image = try await generateImage(
+                with: generator,
+                at: CMTime(seconds: 0.1, preferredTimescale: 600)
+            )
+            return renderThumbnailData(from: UIImage(cgImage: image))
+        } catch {
+            return nil
+        }
+    }
+
+    private func generateImage(with generator: AVAssetImageGenerator, at time: CMTime) async throws -> CGImage {
+        try await withCheckedThrowingContinuation { continuation in
+            generator.generateCGImageAsynchronously(for: time) { image, _, error in
+                if let image {
+                    continuation.resume(returning: image)
+                } else {
+                    continuation.resume(throwing: error ?? CocoaError(.fileReadCorruptFile))
+                }
+            }
+        }
+    }
+
+    private func renderThumbnailData(from image: UIImage) -> Data? {
         let target = CGSize(width: 320, height: 320)
         let renderer = UIGraphicsImageRenderer(size: target)
         let rendered = renderer.image { _ in

@@ -13,6 +13,7 @@ struct ImportHubView: View {
     @EnvironmentObject private var sync: CloudKitSyncService
     @EnvironmentObject private var vaultStore: VaultStore
     var showsCloseButton = false
+    var onImported: (ImportSummary) -> Void = { _ in }
     @State private var pickerItems: [PhotosPickerItem] = []
     @State private var showFileImporter = false
     @State private var showCamera = false
@@ -22,16 +23,6 @@ struct ImportHubView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 14) {
-                    AppCard {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text("Encrypt Immediately After Import")
-                                .font(.title3.bold())
-                                .foregroundStyle(AppTheme.ink)
-                            Text("Photos, videos, and files are encrypted on this device before optional iCloud sync. Delete originals from Photos when appropriate.")
-                                .foregroundStyle(AppTheme.secondaryText)
-                        }
-                    }
-
                     PhotosPicker(selection: $pickerItems, matching: .any(of: [.images, .videos])) {
                         ActionRow(icon: "photo.on.rectangle", title: L.string("Import from Photos"), subtitle: L.string("Photos and videos"))
                     }
@@ -74,16 +65,16 @@ struct ImportHubView: View {
             }
             .onChange(of: pickerItems) { _, newItems in
                 Task {
-                    await ImportService.importPickerItems(newItems, context: modelContext, vaultStore: vaultStore, sync: sync)
+                    let summary = await ImportService.importPickerItems(newItems, context: modelContext, vaultStore: vaultStore, sync: sync)
                     pickerItems = []
+                    handleImported(summary)
                 }
             }
             .fileImporter(isPresented: $showFileImporter, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
                 if case .success(let urls) = result {
                     Task {
-                        for url in urls {
-                            await ImportService.importFile(url: url, context: modelContext, vaultStore: vaultStore, sync: sync)
-                        }
+                        let summary = await ImportService.importFiles(urls: urls, context: modelContext, vaultStore: vaultStore, sync: sync)
+                        handleImported(summary)
                     }
                 }
             }
@@ -91,7 +82,7 @@ struct ImportHubView: View {
                 CameraCaptureView { image in
                     guard let data = image.jpegData(compressionQuality: 0.9) else { return }
                     Task {
-                        await vaultStore.importData(
+                        let success = await vaultStore.importData(
                             data,
                             originalName: "Camera-\(Date().timeIntervalSince1970).jpg",
                             mimeType: "image/jpeg",
@@ -100,10 +91,25 @@ struct ImportHubView: View {
                             context: modelContext,
                             sync: sync
                         )
+                        var summary = ImportSummary()
+                        if success {
+                            summary.record(.image)
+                        } else {
+                            summary.recordFailure()
+                        }
+                        handleImported(summary)
                     }
                 }
             }
             .sheet(isPresented: $showScanner) { scannerSheet }
+        }
+    }
+
+    private func handleImported(_ summary: ImportSummary) {
+        guard summary.importedCount > 0 || summary.failedCount > 0 else { return }
+        onImported(summary)
+        if showsCloseButton {
+            dismiss()
         }
     }
 
@@ -120,9 +126,10 @@ struct ImportHubView: View {
         #if canImport(VisionKit)
         DocumentScannerView { images in
             Task {
+                var summary = ImportSummary()
                 for (index, image) in images.enumerated() {
                     guard let data = image.jpegData(compressionQuality: 0.9) else { continue }
-                    await vaultStore.importData(
+                    let success = await vaultStore.importData(
                         data,
                         originalName: "Scan-\(Date().timeIntervalSince1970)-\(index + 1).jpg",
                         mimeType: "image/jpeg",
@@ -131,7 +138,13 @@ struct ImportHubView: View {
                         context: modelContext,
                         sync: sync
                     )
+                    if success {
+                        summary.record(.image)
+                    } else {
+                        summary.recordFailure()
+                    }
                 }
+                handleImported(summary)
             }
         }
         #else
