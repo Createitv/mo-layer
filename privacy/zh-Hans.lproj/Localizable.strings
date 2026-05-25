@@ -119,8 +119,6 @@
 "Enter %@" = "输入 %@";
 "Draw Gesture" = "绘制轨迹";
 "Confirm Gesture" = "确认轨迹";
-"Enter a 9-digit security code." = "输入 9 位数字安全码。";
-"Confirm the security code before recording your gesture." = "确认安全码后，再开始记录你的轨迹。";
 "Use muscle memory to create a more natural entry method." = "用肌肉记忆创建一个更自然的进入方式。";
 "Confirm once more to finish creating the vault." = "最后确认一次，完成保险箱创建。";
 "Create Vault" = "创建保险箱";
