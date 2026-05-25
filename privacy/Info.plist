@@ -2,6 +2,33 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Encrypted Vault File</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.item</string>
+				<string>public.content</string>
+				<string>public.data</string>
+				<string>public.image</string>
+				<string>public.movie</string>
+				<string>public.audio</string>
+				<string>public.url</string>
+			</array>
+		</dict>
+	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>Used to capture photos directly into the encrypted vault and, if you enable intrusion capture, record failed unlock attempts.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Used to save exported content back to your photo library when you choose to export.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Used to select photos and videos that you choose to encrypt and import into your private vault.</string>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<false/>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>remote-notification</string>

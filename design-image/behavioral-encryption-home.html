@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>行为轨迹加密验证码首页</title>
+  <style>
+    :root {
+      --primary: #0f766e;
+      --success: #14b8a6;
+      --accent: #2563eb;
+      --ink: #0f172a;
+      --muted: #475569;
+      --line: #e2e8f0;
+      --bg: #f7f9fc;
+      --card: #ffffff;
+      --warning: #f59e0b;
+      --danger: #dc2626;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: #e5e7eb;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      color: var(--ink);
+    }
+
+    .phone {
+      width: 390px;
+      height: 844px;
+      background: var(--bg);
+      border-radius: 44px;
+      overflow: hidden;
+      border: 10px solid #111827;
+      box-shadow: 0 34px 80px rgba(15, 23, 42, 0.28);
+      position: relative;
+    }
+
+    .screen {
+      height: 100%;
+      padding: 18px 18px 20px;
+      position: relative;
+    }
+
+    .status {
+      height: 30px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--ink);
+      padding: 0 6px;
+    }
+
+    .icons {
+      display: flex;
+      gap: 5px;
+      align-items: center;
+    }
+
+    .bar {
+      width: 17px;
+      height: 10px;
+      border: 1.6px solid var(--ink);
+      border-radius: 3px;
+      position: relative;
+    }
+
+    .bar::after {
+      content: "";
+      position: absolute;
+      right: -4px;
+      top: 3px;
+      width: 2px;
+      height: 4px;
+      background: var(--ink);
+      border-radius: 2px;
+    }
+
+    .dot {
+      width: 4px;
+      height: 4px;
+      border-radius: 999px;
+      background: var(--ink);
+    }
+
+    .hero {
+      margin-top: 8px;
+      padding: 18px 16px 16px;
+      background: linear-gradient(145deg, #ffffff 0%, #f8fafc 68%, #ecfeff 100%);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(15, 118, 110, 0.06) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(15, 118, 110, 0.06) 1px, transparent 1px);
+      background-size: 26px 26px;
+      mask-image: linear-gradient(to bottom, black, transparent 76%);
+      pointer-events: none;
+    }
+
+    .topline {
+      position: relative;
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 9px;
+      border-radius: 999px;
+      color: var(--primary);
+      background: rgba(20, 184, 166, 0.12);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .shield {
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      color: white;
+      background: var(--primary);
+      box-shadow: 0 10px 22px rgba(15, 118, 110, 0.24);
+    }
+
+    h1 {
+      position: relative;
+      margin: 14px 0 6px;
+      font-size: 28px;
+      line-height: 1.12;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      position: relative;
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.55;
+    }
+
+    .trace-card {
+      position: relative;
+      margin-top: 18px;
+      height: 210px;
+      background: #0f172a;
+      border-radius: 8px;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .trace-card svg {
+      position: absolute;
+      inset: 0;
+    }
+
+    .metric {
+      position: absolute;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 7px 9px;
+      background: rgba(255, 255, 255, 0.1);
+      color: #e2e8f0;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 8px;
+      font-size: 11px;
+      font-weight: 700;
+      backdrop-filter: blur(10px);
+    }
+
+    .metric strong {
+      color: #ffffff;
+    }
+
+    .m1 { left: 14px; top: 14px; }
+    .m2 { right: 14px; top: 52px; }
+    .m3 { left: 18px; bottom: 18px; }
+    .m4 { right: 16px; bottom: 18px; color: #fef3c7; }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 13px;
+      min-height: 104px;
+    }
+
+    .card .icon {
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      margin-bottom: 9px;
+      color: var(--primary);
+      background: rgba(15, 118, 110, 0.1);
+      font-size: 15px;
+      font-weight: 900;
+    }
+
+    .card:nth-child(2) .icon {
+      color: var(--accent);
+      background: rgba(37, 99, 235, 0.1);
+    }
+
+    .card:nth-child(3) .icon {
+      color: var(--warning);
+      background: rgba(245, 158, 11, 0.12);
+    }
+
+    .card:nth-child(4) .icon {
+      color: var(--danger);
+      background: rgba(220, 38, 38, 0.1);
+    }
+
+    .card h2 {
+      margin: 0 0 5px;
+      font-size: 14px;
+      line-height: 1.25;
+      letter-spacing: 0;
+    }
+
+    .card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 11.5px;
+      line-height: 1.45;
+    }
+
+    .cta {
+      margin-top: 12px;
+      display: flex;
+      gap: 10px;
+    }
+
+    .button {
+      flex: 1;
+      height: 48px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      font-size: 14px;
+      font-weight: 800;
+      color: white;
+      background: var(--primary);
+    }
+
+    .button.secondary {
+      color: var(--primary);
+      background: rgba(15, 118, 110, 0.08);
+    }
+
+    .footnote {
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.4;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <main class="phone" aria-label="iOS app homepage screenshot mockup">
+    <section class="screen">
+      <div class="status">
+        <span>9:41</span>
+        <span class="icons" aria-hidden="true">
+          <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+          <span class="bar"></span>
+        </span>
+      </div>
+
+      <section class="hero">
+        <div class="topline">
+          <span class="eyebrow">行为轨迹加密验证码</span>
+          <span class="shield">盾</span>
+        </div>
+
+        <h1>用你的手势轨迹<br />解锁私密保险箱</h1>
+        <p class="subtitle">记录自由轨迹、速度、停顿和曲率特征，只保存加密后的行为模板，本机完成相似度验证。</p>
+
+        <div class="trace-card">
+          <svg viewBox="0 0 322 210" role="img" aria-label="gesture trace visualization">
+            <defs>
+              <linearGradient id="trace" x1="34" x2="290" y1="172" y2="32">
+                <stop offset="0" stop-color="#14b8a6" />
+                <stop offset="0.55" stop-color="#60a5fa" />
+                <stop offset="1" stop-color="#f59e0b" />
+              </linearGradient>
+              <filter id="glow">
+                <feGaussianBlur stdDeviation="4" result="blur" />
+                <feMerge>
+                  <feMergeNode in="blur" />
+                  <feMergeNode in="SourceGraphic" />
+                </feMerge>
+              </filter>
+            </defs>
+            <path d="M16 36 H306 M16 80 H306 M16 124 H306 M16 168 H306 M64 12 V198 M128 12 V198 M192 12 V198 M256 12 V198" stroke="#334155" stroke-width="1" opacity="0.55" />
+            <path d="M48 160 C90 104 80 52 134 55 C197 58 123 150 181 151 C236 152 230 62 276 48" fill="none" stroke="url(#trace)" stroke-width="8" stroke-linecap="round" filter="url(#glow)" />
+            <path d="M48 160 C90 104 80 52 134 55 C197 58 123 150 181 151 C236 152 230 62 276 48" fill="none" stroke="#ffffff" stroke-opacity="0.52" stroke-width="2" stroke-linecap="round" />
+            <circle cx="48" cy="160" r="7" fill="#14b8a6" />
+            <circle cx="134" cy="55" r="5" fill="#60a5fa" />
+            <circle cx="181" cy="151" r="5" fill="#60a5fa" />
+            <circle cx="276" cy="48" r="7" fill="#f59e0b" />
+          </svg>
+          <div class="metric m1">相似度 <strong>86%</strong></div>
+          <div class="metric m2">速度节奏 <strong>匹配</strong></div>
+          <div class="metric m3">停顿 180ms</div>
+          <div class="metric m4">本机验证</div>
+        </div>
+      </section>
+
+      <section class="grid" aria-label="security explanation">
+        <article class="card">
+          <div class="icon">轨</div>
+          <h2>自由轨迹</h2>
+          <p>不是九宫格，支持 S、月亮、∞ 等肌肉记忆动作。</p>
+        </article>
+        <article class="card">
+          <div class="icon">速</div>
+          <h2>行为特征</h2>
+          <p>提取速度、停顿、曲率和起终点，不只看形状。</p>
+        </article>
+        <article class="card">
+          <div class="icon">锁</div>
+          <h2>加密模板</h2>
+          <p>归一化后加密保存，不存明文轨迹和原始路径。</p>
+        </article>
+        <article class="card">
+          <div class="icon">验</div>
+          <h2>相似解锁</h2>
+          <p>无需 100% 重画，达到安全阈值即可通过。</p>
+        </article>
+      </section>
+
+      <div class="cta">
+        <div class="button">设置轨迹验证码</div>
+        <div class="button secondary">了解加密方式</div>
+      </div>
+      <p class="footnote">开发者不持有解密密钥；行为模板仅用于本机解锁验证。</p>
+    </section>
+  </main>
+</body>
+</html>

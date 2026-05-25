@@ -1,0 +1,584 @@
+import SwiftUI
+import SwiftData
+
+struct OnboardingView: View {
+    @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var auth: AuthenticationManager
+    @EnvironmentObject private var sync: CloudKitSyncService
+    @EnvironmentObject private var vaultStore: VaultStore
+    @State private var step: SetupStep = .backupKey
+    @State private var backupKey = ""
+    @State private var confirmBackupKey = ""
+    @State private var gesturePrimary: [GesturePoint] = []
+    @State private var gestureConfirmation: [GesturePoint] = []
+    @State private var animateMark = false
+    @State private var showCloudRestore = false
+    private let backupKeyLength = 9
+
+    var body: some View {
+        ZStack {
+            AppTheme.ink.ignoresSafeArea()
+            ScrollView {
+                VStack(spacing: 22) {
+                    SetupMotionMark(isAnimating: animateMark, step: step)
+
+                    VStack(spacing: 8) {
+                        Text(step.title)
+                            .font(.system(.title, design: .rounded, weight: .bold))
+                            .foregroundStyle(.white)
+                            .contentTransition(.numericText())
+                        Text(step.subtitle)
+                            .font(.callout)
+                            .foregroundStyle(.white.opacity(0.72))
+                            .multilineTextAlignment(.center)
+                    }
+
+                    SetupProgressView(step: step)
+
+                    ZStack {
+                        stepContent
+                            .id(step)
+                            .transition(.asymmetric(
+                                insertion: .move(edge: .trailing).combined(with: .opacity),
+                                removal: .move(edge: .leading).combined(with: .opacity)
+                            ))
+                    }
+                    .animation(.spring(response: 0.42, dampingFraction: 0.86), value: step)
+
+                    HStack(spacing: 12) {
+                        if step != .backupKey {
+                            Button("Back") {
+                                withAnimation { step = step.previous }
+                            }
+                            .buttonStyle(SetupBackButtonStyle())
+                        }
+
+                        Button(step.primaryActionTitle) {
+                            handlePrimaryAction()
+                        }
+                        .buttonStyle(AppButtonStyle())
+                    }
+
+                    if step == .backupKey {
+                        Button {
+                            showCloudRestore = true
+                        } label: {
+                            Label("Restore Existing iCloud Vault", systemImage: "icloud.and.arrow.down")
+                        }
+                        .buttonStyle(SecondaryButtonStyle())
+                    }
+
+                    if let message = auth.authMessage {
+                        Text(message)
+                            .font(.footnote)
+                            .foregroundStyle(AppTheme.warning)
+                            .multilineTextAlignment(.center)
+                    }
+                }
+                .padding(28)
+            }
+        }
+        .onAppear { animateMark = true }
+        .sheet(isPresented: $showCloudRestore) {
+            CloudVaultRestoreView()
+                .environmentObject(sync)
+                .environmentObject(vaultStore)
+        }
+    }
+
+    @ViewBuilder
+    private var stepContent: some View {
+        switch step {
+        case .backupKey:
+            SetupCard(icon: "key.fill") {
+                BackupKeyGridInput(value: $backupKey, length: backupKeyLength)
+            }
+        case .confirmBackupKey:
+            SetupCard(icon: "checkmark.seal.fill", title: L.string("Confirm Security Code"), detail: L.string("Make sure you have saved or remembered it. If you forget your gesture later, this code lets you create a new one.")) {
+                SecureField("Enter security code again", text: $confirmBackupKey)
+                    .textContentType(.password)
+                    .keyboardType(.numberPad)
+                    .textFieldStyle(.roundedBorder)
+                    .onChange(of: confirmBackupKey) { _, newValue in
+                        confirmBackupKey = normalizedSecurityCode(newValue)
+                    }
+                if !confirmBackupKey.isEmpty && normalizedSecurityCode(confirmBackupKey) != normalizedSecurityCode(backupKey) {
+                    Text("Security codes do not match")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(AppTheme.warning)
+                }
+            }
+        case .drawGesture:
+            SetupCard(icon: "scribble.variable", title: L.string("Draw Your Gesture"), detail: L.string("Draw a familiar freeform motion. The system records route, rhythm, and length features; exact position does not need to match.")) {
+                GestureTutorialCard()
+                GestureCapturePad(title: L.string("First Gesture"), subtitle: L.string("Press and draw one complete motion. Release to record.")) { points in
+                    recordPrimaryGesture(points)
+                }
+                if !gesturePrimary.isEmpty {
+                    StatusPill(title: L.string("First gesture recorded"), systemImage: "checkmark.circle.fill", tint: AppTheme.success)
+                }
+            }
+        case .confirmGesture:
+            SetupCard(icon: "signature", title: L.string("Draw Again to Confirm"), detail: L.string("The second gesture confirms that you can reproduce the motion reliably. Return and redraw if similarity is too low.")) {
+                GestureCapturePad(title: L.string("Confirmation Gesture"), subtitle: L.string("Keep a similar route and rhythm; size may differ slightly.")) { points in
+                    recordConfirmationGesture(points)
+                }
+                if !gestureConfirmation.isEmpty {
+                    StatusPill(title: L.string("Confirmation gesture recorded"), systemImage: "checkmark.circle.fill", tint: AppTheme.success)
+                }
+            }
+        }
+    }
+
+    private var canContinue: Bool {
+        switch step {
+        case .backupKey:
+            normalizedSecurityCode(backupKey).count == backupKeyLength
+        case .confirmBackupKey:
+            normalizedSecurityCode(confirmBackupKey) == normalizedSecurityCode(backupKey) && !confirmBackupKey.isEmpty
+        case .drawGesture:
+            !gesturePrimary.isEmpty
+        case .confirmGesture:
+            !gestureConfirmation.isEmpty
+        }
+    }
+
+    private func handlePrimaryAction() {
+        auth.authMessage = nil
+        guard canContinue else {
+            auth.authMessage = validationMessage
+            return
+        }
+        switch step {
+        case .backupKey, .confirmBackupKey, .drawGesture:
+            withAnimation { step = step.next }
+        case .confirmGesture:
+            Task {
+                let success = await auth.configure(
+                    backupKey: normalizedSecurityCode(backupKey),
+                    gesture: (gesturePrimary, gestureConfirmation)
+                )
+                if !success {
+                    gestureConfirmation = []
+                }
+            }
+        }
+    }
+
+    private func recordPrimaryGesture(_ points: [GesturePoint]) {
+        do {
+            try GestureCredentialService.validateCandidate(points)
+            gesturePrimary = points
+            gestureConfirmation = []
+            auth.authMessage = L.string("First gesture recorded. Draw it again with a similar route and rhythm.")
+        } catch {
+            gesturePrimary = []
+            gestureConfirmation = []
+            auth.authMessage = error.localizedDescription
+        }
+    }
+
+    private func recordConfirmationGesture(_ points: [GesturePoint]) {
+        do {
+            try GestureCredentialService.validateCandidate(points)
+            gestureConfirmation = points
+            auth.authMessage = L.string("Confirmation gesture recorded.")
+        } catch {
+            gestureConfirmation = []
+            auth.authMessage = error.localizedDescription
+        }
+    }
+
+    private func normalizedSecurityCode(_ value: String) -> String {
+        String(value.filter(\.isNumber).prefix(backupKeyLength))
+    }
+
+    private var validationMessage: String {
+        switch step {
+        case .backupKey:
+            L.format("Security code must be exactly %d digits.", backupKeyLength)
+        case .confirmBackupKey:
+            L.string("Security codes must match.")
+        case .drawGesture:
+            L.string("Draw the first gesture first.")
+        case .confirmGesture:
+            L.string("Draw the confirmation gesture again.")
+        }
+    }
+}
+
+private struct CloudVaultRestoreView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var sync: CloudKitSyncService
+    @EnvironmentObject private var vaultStore: VaultStore
+    @State private var recoveryKey = ""
+    @State private var isRestoring = false
+    @State private var didRestore = false
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("Restore iCloud Vault", systemImage: "icloud.and.arrow.down")
+                        .font(.title3.bold())
+                    Text("Enter the recovery key shown on your original device. The app will restore the same encryption root key, then you can set a new local gesture for this device.")
+                        .font(.subheadline)
+                        .foregroundStyle(AppTheme.secondaryText)
+                }
+
+                SecureField("Recovery key", text: $recoveryKey)
+                    .textContentType(.password)
+                    .textInputAutocapitalization(.characters)
+                    .textFieldStyle(.roundedBorder)
+
+                if let error = vaultStore.lastError, !didRestore {
+                    Text(error)
+                        .font(.footnote)
+                        .foregroundStyle(AppTheme.warning)
+                }
+
+                if didRestore {
+                    StatusPill(title: "Root key restored. Continue setup.", systemImage: "checkmark.circle.fill", tint: AppTheme.success)
+                }
+
+                Spacer()
+
+                Button {
+                    Task {
+                        isRestoring = true
+                        didRestore = await vaultStore.restoreRootKeyFromCloud(
+                            recoveryKey: recoveryKey,
+                            context: modelContext,
+                            sync: sync
+                        )
+                        isRestoring = false
+                        if didRestore {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+                                dismiss()
+                            }
+                        }
+                    }
+                } label: {
+                    Label(isRestoring ? "Restoring" : "Restore from iCloud", systemImage: "key.icloud")
+                }
+                .buttonStyle(AppButtonStyle())
+                .disabled(isRestoring || recoveryKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            .padding()
+            .navigationTitle("iCloud Restore")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { dismiss() }
+                }
+            }
+        }
+    }
+}
+
+private struct BackupKeyGridInput: View {
+    @Binding var value: String
+    let length: Int
+
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 10), count: 3)
+    private let digits = (1...9).map(String.init) + ["0"]
+
+    var body: some View {
+        VStack(spacing: 14) {
+            HStack(spacing: 7) {
+                ForEach(0..<length, id: \.self) { index in
+                    Circle()
+                        .fill(index < value.count ? AppTheme.success : .white.opacity(0.14))
+                        .frame(width: 14, height: 14)
+                        .overlay(Circle().stroke(.white.opacity(0.18)))
+                }
+            }
+            .accessibilityLabel(L.format("Security code has %d of %d digits", value.count, length))
+
+            LazyVGrid(columns: columns, spacing: 10) {
+                ForEach(digits, id: \.self) { digit in
+                    Button {
+                        guard value.count < length else { return }
+                        value.append(digit)
+                    } label: {
+                        Text(digit)
+                            .font(.system(.title2, design: .rounded, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity, minHeight: 58)
+                            .background(.white.opacity(0.1))
+                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(.white.opacity(0.12)))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(L.format("Enter %@", digit))
+                }
+            }
+
+            Button {
+                guard !value.isEmpty else { return }
+                value.removeLast()
+            } label: {
+                Label(L.string("Delete"), systemImage: "delete.left")
+                    .font(.system(.body, design: .rounded, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity, minHeight: 46)
+                    .background(.white.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Delete one security-code digit")
+        }
+    }
+}
+
+private struct GestureTutorialCard: View {
+    @State private var animate = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(.white.opacity(0.08))
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(.white.opacity(0.12)))
+
+                TutorialGestureShape()
+                    .trim(from: 0, to: animate ? 1 : 0.08)
+                    .stroke(AppTheme.success, style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
+                    .padding(24)
+                    .animation(.easeInOut(duration: 1.8).repeatForever(autoreverses: false), value: animate)
+
+                Circle()
+                    .fill(.white)
+                    .frame(width: 11, height: 11)
+                    .offset(x: animate ? 82 : -88, y: animate ? 10 : 34)
+                    .animation(.easeInOut(duration: 1.8).repeatForever(autoreverses: false), value: animate)
+            }
+            .frame(height: 112)
+            .onAppear { animate = true }
+
+            VStack(alignment: .leading, spacing: 7) {
+                Label(L.string("Press and draw one continuous stroke."), systemImage: "1.circle")
+                Label(L.string("Make the motion long enough, with a clear curve or turn."), systemImage: "2.circle")
+                Label(L.string("Draw it again with similar route and rhythm to confirm."), systemImage: "3.circle")
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.white.opacity(0.76))
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct TutorialGestureShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX + rect.width * 0.08, y: rect.midY + rect.height * 0.26))
+        path.addCurve(
+            to: CGPoint(x: rect.minX + rect.width * 0.48, y: rect.midY - rect.height * 0.18),
+            control1: CGPoint(x: rect.minX + rect.width * 0.20, y: rect.minY + rect.height * 0.02),
+            control2: CGPoint(x: rect.minX + rect.width * 0.34, y: rect.maxY - rect.height * 0.10)
+        )
+        path.addCurve(
+            to: CGPoint(x: rect.minX + rect.width * 0.92, y: rect.midY + rect.height * 0.08),
+            control1: CGPoint(x: rect.minX + rect.width * 0.62, y: rect.minY + rect.height * 0.02),
+            control2: CGPoint(x: rect.minX + rect.width * 0.72, y: rect.maxY - rect.height * 0.16)
+        )
+        return path
+    }
+}
+
+private enum SetupStep: Int, CaseIterable {
+    case backupKey
+    case confirmBackupKey
+    case drawGesture
+    case confirmGesture
+
+    var title: String {
+        switch self {
+        case .backupKey: L.string("Set Security Code")
+        case .confirmBackupKey: L.string("Confirm Security Code")
+        case .drawGesture: L.string("Draw Gesture")
+        case .confirmGesture: L.string("Confirm Gesture")
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .backupKey: L.string("Enter a 9-digit security code.")
+        case .confirmBackupKey: L.string("Confirm the security code before recording your gesture.")
+        case .drawGesture: L.string("Use muscle memory to create a more natural entry method.")
+        case .confirmGesture: L.string("Confirm once more to finish creating the vault.")
+        }
+    }
+
+    var primaryActionTitle: String {
+        self == .confirmGesture ? L.string("Create Vault") : L.string("Next")
+    }
+
+    var next: SetupStep {
+        SetupStep(rawValue: min(rawValue + 1, SetupStep.allCases.count - 1)) ?? .confirmGesture
+    }
+
+    var previous: SetupStep {
+        SetupStep(rawValue: max(rawValue - 1, 0)) ?? .backupKey
+    }
+}
+
+private struct SetupProgressView: View {
+    let step: SetupStep
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ForEach(SetupStep.allCases, id: \.rawValue) { item in
+                Capsule()
+                    .fill(item.rawValue <= step.rawValue ? AppTheme.success : .white.opacity(0.16))
+                    .frame(height: 6)
+                    .overlay(alignment: .leading) {
+                        if item == step {
+                            Capsule()
+                                .fill(.white.opacity(0.32))
+                                .frame(width: 22, height: 6)
+                                .offset(x: 6)
+                        }
+                    }
+                    .animation(.spring(response: 0.35, dampingFraction: 0.82), value: step)
+            }
+        }
+    }
+}
+
+private struct SetupMotionMark: View {
+    let isAnimating: Bool
+    let step: SetupStep
+
+    var body: some View {
+        ZStack {
+            ForEach(0..<3) { index in
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(index == 0 ? AppTheme.success : .white.opacity(0.18), lineWidth: index == 0 ? 3 : 1)
+                    .frame(width: CGFloat(88 + index * 18), height: CGFloat(88 + index * 18))
+                    .rotationEffect(.degrees(isAnimating ? Double(14 + index * 16) : Double(-14 - index * 10)))
+                    .scaleEffect(isAnimating ? 1.0 + CGFloat(index) * 0.025 : 0.94)
+                    .animation(.easeInOut(duration: 1.8 + Double(index) * 0.35).repeatForever(autoreverses: true), value: isAnimating)
+            }
+
+            Image(systemName: stepIcon)
+                .font(.system(size: 36, weight: .semibold))
+                .foregroundStyle(.white)
+                .symbolEffect(.pulse, value: step.rawValue)
+        }
+        .frame(height: 132)
+    }
+
+    private var stepIcon: String {
+        switch step {
+        case .backupKey: "key.fill"
+        case .confirmBackupKey: "checkmark.seal.fill"
+        case .drawGesture: "scribble.variable"
+        case .confirmGesture: "signature"
+        }
+    }
+}
+
+private struct SetupCard<Content: View>: View {
+    let icon: String
+    var title: String? = nil
+    var detail: String? = nil
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            if title != nil || detail != nil {
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: icon)
+                        .font(.title3)
+                        .foregroundStyle(AppTheme.success)
+                        .frame(width: 40, height: 40)
+                        .background(.white.opacity(0.08))
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    VStack(alignment: .leading, spacing: 5) {
+                        if let title {
+                            Text(title)
+                                .font(.headline)
+                                .foregroundStyle(.white)
+                        }
+                        if let detail {
+                            Text(detail)
+                                .font(.subheadline)
+                                .foregroundStyle(.white.opacity(0.68))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+            }
+
+            content
+        }
+        .padding(18)
+        .background(.white.opacity(0.07))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(.white.opacity(0.12)))
+    }
+}
+
+private struct SetupBackButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(.body, design: .rounded, weight: .semibold))
+            .foregroundStyle(.white.opacity(0.86))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 14)
+            .background(.white.opacity(0.08))
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .opacity(configuration.isPressed ? 0.78 : 1)
+    }
+}
+
+struct LockView: View {
+    @EnvironmentObject private var auth: AuthenticationManager
+    @State private var showResetGesture = false
+
+    var body: some View {
+        ZStack {
+            AppTheme.ink.ignoresSafeArea()
+            VStack(spacing: 24) {
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 52, weight: .semibold))
+                    .foregroundStyle(AppTheme.success)
+
+                VStack(spacing: 8) {
+                    Text("Private Space Locked")
+                        .font(.system(.largeTitle, design: .rounded, weight: .bold))
+                        .foregroundStyle(.white)
+                    Text("Unlock to view the vault and security center.")
+                        .foregroundStyle(.white.opacity(0.7))
+                }
+                .multilineTextAlignment(.center)
+
+                if auth.isGestureUnlockEnabled {
+                    GestureCapturePad(
+                        title: L.string("Draw Gesture to Unlock"),
+                        subtitle: L.string("Size and position may differ, but route and rhythm should be close.")
+                    ) { points in
+                        auth.unlockWithGesture(points)
+                    }
+                }
+
+                Button("Forgot gesture? Reset with security code") {
+                    showResetGesture = true
+                }
+                .buttonStyle(SecondaryButtonStyle())
+
+                if let message = auth.authMessage {
+                    Text(message)
+                        .font(.footnote)
+                        .foregroundStyle(AppTheme.warning)
+                }
+            }
+            .padding(28)
+        }
+        .sheet(isPresented: $showResetGesture) {
+            GestureResetView()
+        }
+    }
+}

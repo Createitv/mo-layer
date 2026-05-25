@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		FE9900112FC43A1100A00001 /* privacyShareExtension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = FE9900012FC43A1100A00001 /* privacyShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		FE153F622FB9B264004FFC9E /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -23,10 +27,25 @@
 		};
 /* End PBXContainerItemProxy section */
 
+/* Begin PBXCopyFilesBuildPhase section */
+		FE9900102FC43A1100A00001 /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				FE9900112FC43A1100A00001 /* privacyShareExtension.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
 		FE153F502FB9B262004FFC9E /* privacy.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = privacy.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		FE153F612FB9B264004FFC9E /* privacyTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = privacyTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		FE153F6B2FB9B264004FFC9E /* privacyUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = privacyUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		FE9900012FC43A1100A00001 /* privacyShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = privacyShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -36,6 +55,13 @@
 				Info.plist,
 			);
 			target = FE153F4F2FB9B262004FFC9E /* privacy */;
+		};
+		FE9900122FC43A1100A00001 /* Exceptions for "privacyShareExtension" folder in "privacyShareExtension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = FE9900032FC43A1100A00001 /* privacyShareExtension */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
@@ -56,6 +82,14 @@
 		FE153F6E2FB9B264004FFC9E /* privacyUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = privacyUITests;
+			sourceTree = "<group>";
+		};
+		FE9900022FC43A1100A00001 /* privacyShareExtension */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				FE9900122FC43A1100A00001 /* Exceptions for "privacyShareExtension" folder in "privacyShareExtension" target */,
+			);
+			path = privacyShareExtension;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -82,6 +116,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		FE9900052FC43A1100A00001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -89,6 +130,7 @@
 			isa = PBXGroup;
 			children = (
 				FE153F522FB9B262004FFC9E /* privacy */,
+				FE9900022FC43A1100A00001 /* privacyShareExtension */,
 				FE153F642FB9B264004FFC9E /* privacyTests */,
 				FE153F6E2FB9B264004FFC9E /* privacyUITests */,
 				FE153F512FB9B262004FFC9E /* Products */,
@@ -99,6 +141,7 @@
 			isa = PBXGroup;
 			children = (
 				FE153F502FB9B262004FFC9E /* privacy.app */,
+				FE9900012FC43A1100A00001 /* privacyShareExtension.appex */,
 				FE153F612FB9B264004FFC9E /* privacyTests.xctest */,
 				FE153F6B2FB9B264004FFC9E /* privacyUITests.xctest */,
 			);
@@ -115,6 +158,7 @@
 				FE153F4C2FB9B262004FFC9E /* Sources */,
 				FE153F4D2FB9B262004FFC9E /* Frameworks */,
 				FE153F4E2FB9B262004FFC9E /* Resources */,
+				FE9900102FC43A1100A00001 /* Embed App Extensions */,
 			);
 			buildRules = (
 			);
@@ -176,6 +220,28 @@
 			productReference = FE153F6B2FB9B264004FFC9E /* privacyUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
+		FE9900032FC43A1100A00001 /* privacyShareExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = FE9900202FC43A1100A00001 /* Build configuration list for PBXNativeTarget "privacyShareExtension" */;
+			buildPhases = (
+				FE9900042FC43A1100A00001 /* Sources */,
+				FE9900052FC43A1100A00001 /* Frameworks */,
+				FE9900062FC43A1100A00001 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				FE9900022FC43A1100A00001 /* privacyShareExtension */,
+			);
+			name = privacyShareExtension;
+			packageProductDependencies = (
+			);
+			productName = privacyShareExtension;
+			productReference = FE9900012FC43A1100A00001 /* privacyShareExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -197,6 +263,9 @@
 						CreatedOnToolsVersion = 26.4.1;
 						TestTargetID = FE153F4F2FB9B262004FFC9E;
 					};
+					FE9900032FC43A1100A00001 = {
+						CreatedOnToolsVersion = 26.4.1;
+					};
 				};
 			};
 			buildConfigurationList = FE153F4B2FB9B262004FFC9E /* Build configuration list for PBXProject "privacy" */;
@@ -205,6 +274,12 @@
 			knownRegions = (
 				en,
 				Base,
+				"zh-Hans",
+				ja,
+				de,
+				fr,
+				ko,
+				es,
 			);
 			mainGroup = FE153F472FB9B262004FFC9E;
 			minimizedProjectReferenceProxies = 1;
@@ -214,6 +289,7 @@
 			projectRoot = "";
 			targets = (
 				FE153F4F2FB9B262004FFC9E /* privacy */,
+				FE9900032FC43A1100A00001 /* privacyShareExtension */,
 				FE153F602FB9B264004FFC9E /* privacyTests */,
 				FE153F6A2FB9B264004FFC9E /* privacyUITests */,
 			);
@@ -242,6 +318,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		FE9900062FC43A1100A00001 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -260,6 +343,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		FE153F672FB9B264004FFC9E /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		FE9900042FC43A1100A00001 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -294,6 +384,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = privacy/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Palimpsest;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -328,6 +419,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = privacy/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Palimpsest;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -403,7 +495,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.4;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
@@ -461,7 +553,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.4;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
@@ -479,7 +571,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 677U99F8TX;
 				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.4;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = app.landlady.www.privacyTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -501,7 +593,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 677U99F8TX;
 				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.4;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = app.landlady.www.privacyTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -555,6 +647,64 @@
 			};
 			name = Release;
 		};
+		FE9900212FC43A1100A00001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = privacyShareExtension/privacyShareExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 677U99F8TX;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = privacyShareExtension/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = app.landlady.www.privacy.ShareExtension;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		FE9900222FC43A1100A00001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = privacyShareExtension/privacyShareExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 677U99F8TX;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = privacyShareExtension/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = app.landlady.www.privacy.ShareExtension;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -590,6 +740,15 @@
 			buildConfigurations = (
 				FE153F7D2FB9B264004FFC9E /* Debug */,
 				FE153F7E2FB9B264004FFC9E /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		FE9900202FC43A1100A00001 /* Build configuration list for PBXNativeTarget "privacyShareExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				FE9900212FC43A1100A00001 /* Debug */,
+				FE9900222FC43A1100A00001 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

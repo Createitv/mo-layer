@@ -1,23 +1,31 @@
-//
-//  privacyApp.swift
-//  privacy
-//
-//  Created by PangHuang on 5/17/26.
-//
-
-import SwiftUI
 import SwiftData
+import SwiftUI
 
 @main
 struct privacyApp: App {
+    @StateObject private var auth = AuthenticationManager()
+    @StateObject private var sync = CloudKitSyncService()
+    @StateObject private var vaultStore = VaultStore()
+    @StateObject private var subscription = SubscriptionManager()
+    @AppStorage(AppLanguage.storageKey) private var language = AppLanguage.english.rawValue
+
+    init() {
+        AppLanguage.installDefaultLanguagePreference()
+    }
+
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
-            Item.self,
+            VaultItem.self,
+            VaultFolder.self,
+            VaultTag.self,
+            SecurityEvent.self,
+            SubscriptionState.self,
+            VaultManifest.self
         ])
-        let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
+        let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
 
         do {
-            return try ModelContainer(for: schema, configurations: [modelConfiguration])
+            return try ModelContainer(for: schema, configurations: [configuration])
         } catch {
             fatalError("Could not create ModelContainer: \(error)")
         }
@@ -26,6 +34,12 @@ struct privacyApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .environmentObject(auth)
+                .environmentObject(sync)
+                .environmentObject(vaultStore)
+                .environmentObject(subscription)
+                .environment(\.locale, AppLanguage(rawValue: language)?.locale ?? Locale(identifier: "en"))
+                .id(language)
         }
         .modelContainer(sharedModelContainer)
     }

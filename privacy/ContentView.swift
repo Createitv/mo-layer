@@ -1,61 +1,105 @@
-//
-//  ContentView.swift
-//  privacy
-//
-//  Created by PangHuang on 5/17/26.
-//
-
 import SwiftUI
-import SwiftData
 
 struct ContentView: View {
-    @Environment(\.modelContext) private var modelContext
-    @Query private var items: [Item]
+    @EnvironmentObject private var auth: AuthenticationManager
+    @AppStorage("vault.hasSeenFirstRunGuide") private var hasSeenFirstRunGuide = false
+    @AppStorage(AppLanguage.storageKey) private var language = AppLanguage.english.rawValue
+
+    private var selectedLanguage: AppLanguage {
+        AppLanguage(rawValue: language) ?? .english
+    }
 
     var body: some View {
-        NavigationSplitView {
-            List {
-                ForEach(items) { item in
-                    NavigationLink {
-                        Text("Item at \(item.timestamp, format: Date.FormatStyle(date: .numeric, time: .standard))")
-                    } label: {
-                        Text(item.timestamp, format: Date.FormatStyle(date: .numeric, time: .standard))
-                    }
+        Group {
+            if !hasSeenFirstRunGuide {
+                FirstRunGuideView {
+                    hasSeenFirstRunGuide = true
                 }
-                .onDelete(perform: deleteItems)
-            }
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    EditButton()
-                }
-                ToolbarItem {
-                    Button(action: addItem) {
-                        Label("Add Item", systemImage: "plus")
-                    }
+            } else if !auth.isConfigured {
+                OnboardingView()
+            } else {
+                switch auth.sessionMode {
+                case .cover:
+                    PalimpsestCoverView()
+                case .realVault:
+                    MainAppView()
+                case .decoyVault:
+                    DecoyVaultView()
                 }
             }
-        } detail: {
-            Text("Select an item")
         }
+        .preferredColorScheme(.light)
+        .environment(\.locale, selectedLanguage.locale)
     }
+}
 
-    private func addItem() {
-        withAnimation {
-            let newItem = Item(timestamp: Date())
-            modelContext.insert(newItem)
-        }
-    }
+struct FirstRunGuideView: View {
+    let onStart: () -> Void
 
-    private func deleteItems(offsets: IndexSet) {
-        withAnimation {
-            for index in offsets {
-                modelContext.delete(items[index])
+    var body: some View {
+        ZStack {
+            AppTheme.ink.ignoresSafeArea()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 22) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Image(systemName: "lock.shield")
+                            .font(.system(size: 54, weight: .semibold))
+                            .foregroundStyle(AppTheme.success)
+                        Text("Welcome to Palimpsest")
+                            .font(.system(.largeTitle, design: .rounded, weight: .bold))
+                            .foregroundStyle(.white)
+                        Text("It looks like a file archive. Your encrypted private vault opens only with the correct gesture.")
+                            .foregroundStyle(.white.opacity(0.72))
+                    }
+
+                    VStack(spacing: 12) {
+                        GuideStep(icon: "folder", title: "Disguised file tool", detail: "Daily launches show a normal file archive instead of exposing your real vault.")
+                        GuideStep(icon: "scribble.variable", title: "Gesture entry", detail: "Use your own freeform gesture to enter the vault. Reset it with your security code if you forget it.")
+                        GuideStep(icon: "square.and.arrow.down", title: "Encrypt on import", detail: "Photos, videos, and files are encrypted on this device before optional iCloud sync.")
+                        GuideStep(icon: "theatermasks", title: "Decoy vault", detail: "Wrong gestures or access codes open a realistic archive, so real content stays hidden.")
+                    }
+
+                    Button("Set Up Palimpsest", action: onStart)
+                        .buttonStyle(AppButtonStyle())
+                }
+                .padding(28)
             }
         }
     }
 }
 
+private struct GuideStep: View {
+    let icon: String
+    let title: String
+    let detail: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 14) {
+            Image(systemName: icon)
+                .font(.title3)
+                .foregroundStyle(AppTheme.success)
+                .frame(width: 38, height: 38)
+                .background(.white.opacity(0.08))
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.headline)
+                    .foregroundStyle(.white)
+                Text(detail)
+                    .font(.subheadline)
+                    .foregroundStyle(.white.opacity(0.68))
+            }
+        }
+        .padding(14)
+        .background(.white.opacity(0.06))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+}
+
 #Preview {
     ContentView()
-        .modelContainer(for: Item.self, inMemory: true)
+        .environmentObject(AuthenticationManager())
+        .environmentObject(CloudKitSyncService())
+        .environmentObject(VaultStore())
+        .environmentObject(SubscriptionManager())
 }
