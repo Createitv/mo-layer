@@ -1,4 +1,3 @@
-import QuickLook
 import StoreKit
 import SwiftData
 import SwiftUI
@@ -6,13 +5,12 @@ import SwiftUI
 struct VaultItemDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
-    @Environment(\.openURL) private var openURL
     @EnvironmentObject private var vaultStore: VaultStore
     @EnvironmentObject private var sync: CloudKitSyncService
     @Query(sort: \VaultFolder.sortOrder) private var folders: [VaultFolder]
     let item: VaultItem
-    @State private var previewURL: URL?
-    @State private var shareURL: URL?
+    @State private var sharePayload: SharePayload?
+    @State private var isPreparingShare = false
 
     var body: some View {
         NavigationStack {
@@ -49,30 +47,20 @@ struct VaultItemDetailView: View {
 
                 if item.kind == .link, let urlString = vaultStore.metadata(for: item)?.remoteURL, let url = URL(string: urlString) {
                     Button {
-                        openURL(url)
+                        sharePayload = SharePayload(items: [url])
                     } label: {
-                        Label("Open Link", systemImage: "safari")
+                        Label(L.string("Share to Other Apps"), systemImage: "square.and.arrow.up")
                     }
                     .buttonStyle(AppButtonStyle())
                 } else {
                     Button {
-                        Task {
-                            previewURL = try? await vaultStore.decryptedTemporaryURL(for: item, context: modelContext, sync: sync)
-                        }
+                        Task { await prepareShare() }
                     } label: {
-                        Label(item.assetState == .cloudOnly ? L.string("Download and Preview") : L.string("Temporary Decrypted Preview"), systemImage: "eye")
+                        Label(isPreparingShare ? L.string("Preparing") : L.string("Share to Other Apps"), systemImage: "square.and.arrow.up")
                     }
                     .buttonStyle(AppButtonStyle())
+                    .disabled(isPreparingShare)
                 }
-
-                Button {
-                    Task {
-                        shareURL = try? await vaultStore.decryptedTemporaryURL(for: item, context: modelContext, sync: sync)
-                    }
-                } label: {
-                    Label("Export with System Share", systemImage: "square.and.arrow.up")
-                }
-                .buttonStyle(SecondaryButtonStyle())
 
                 Picker("Move to Album", selection: Binding(
                     get: { item.folderId ?? "" },
@@ -97,11 +85,11 @@ struct VaultItemDetailView: View {
 
                 Button(role: .destructive) {
                     Task {
-                        await vaultStore.moveToTrash(item, context: modelContext, sync: sync)
+                        await vaultStore.deleteImmediately(item, context: modelContext, sync: sync)
                         dismiss()
                     }
                 } label: {
-                    Label("Move to Trash", systemImage: "trash")
+                    Label(L.string("Delete"), systemImage: "trash")
                 }
                 .buttonStyle(AppButtonStyle(role: .destructive))
             }
@@ -109,51 +97,36 @@ struct VaultItemDetailView: View {
             .background(AppTheme.background)
             .navigationTitle("Private Item")
             .navigationBarTitleDisplayMode(.inline)
-            .quickLookPreview($previewURL)
-            .sheet(item: $shareURL) { url in
-                ShareSheet(items: [url])
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button {
+                            Task { await prepareShare() }
+                        } label: {
+                            Label(L.string("Export"), systemImage: "square.and.arrow.up")
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                }
+            }
+            .sheet(item: $sharePayload) { payload in
+                ShareSheet(items: payload.items)
             }
         }
     }
-}
 
-struct TrashView: View {
-    @Environment(\.dismiss) private var dismiss
-    @Environment(\.modelContext) private var modelContext
-    @EnvironmentObject private var vaultStore: VaultStore
-    @EnvironmentObject private var sync: CloudKitSyncService
-    @Query(sort: \VaultItem.deletedAt, order: .reverse) private var items: [VaultItem]
-
-    var body: some View {
-        NavigationStack {
-            List {
-                ForEach(items.filter { $0.deletedAt != nil }) { item in
-                    VStack(alignment: .leading) {
-                        Text(vaultStore.metadata(for: item)?.originalName ?? item.id)
-                        Text(item.deletedAt?.formatted(date: .abbreviated, time: .shortened) ?? "")
-                            .font(.caption)
-                            .foregroundStyle(AppTheme.secondaryText)
-                    }
-                    .swipeActions {
-                        Button("Restore") {
-                            Task { await vaultStore.restore(item, context: modelContext, sync: sync) }
-                        }
-                        .tint(AppTheme.primary)
-                        Button("Delete Permanently", role: .destructive) {
-                            Task {
-                                await vaultStore.permanentlyDelete(item, context: modelContext, sync: sync)
-                            }
-                        }
-                    }
-                }
-            }
-            .navigationTitle("Trash")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { dismiss() }
-                }
-            }
+    @MainActor
+    private func prepareShare() async {
+        guard !isPreparingShare else { return }
+        isPreparingShare = true
+        defer { isPreparingShare = false }
+        if item.kind == .link, let urlString = vaultStore.metadata(for: item)?.remoteURL, let url = URL(string: urlString) {
+            sharePayload = SharePayload(items: [url])
+            return
         }
+        guard let url = try? await vaultStore.decryptedTemporaryURL(for: item, context: modelContext, sync: sync) else { return }
+        sharePayload = SharePayload(items: [url])
     }
 }
 
@@ -166,10 +139,10 @@ struct MembershipView: View {
                 VStack(spacing: 16) {
                     AppCard {
                         VStack(alignment: .leading, spacing: 12) {
-                            Text("Pro Private Vault")
+                            Text(L.string("Pro Private Vault"))
                                 .font(.system(.title2, design: .rounded, weight: .bold))
                                 .foregroundStyle(AppTheme.ink)
-                            Text("The free plan keeps local encryption and iCloud encrypted sync. Pro unlocks unlimited storage, batch organization, advanced disguise, decoy passcodes, intrusion records, and advanced recovery.")
+                            Text(L.string("The free plan keeps local encryption and iCloud encrypted sync. Pro unlocks unlimited storage, batch organization, advanced disguise, decoy passcodes, intrusion records, and advanced recovery."))
                                 .foregroundStyle(AppTheme.secondaryText)
                             StatusPill(title: subscription.statusText, systemImage: "star.circle", tint: subscription.isPro ? AppTheme.success : AppTheme.primary)
                         }
@@ -179,9 +152,9 @@ struct MembershipView: View {
                         AppCard {
                             HStack {
                                 VStack(alignment: .leading, spacing: 4) {
-                                    Text(product.displayName)
+                                    Text(localizedName(for: product))
                                         .font(.headline)
-                                    Text(product.description)
+                                    Text(localizedDescription(for: product))
                                         .font(.caption)
                                         .foregroundStyle(AppTheme.secondaryText)
                                 }
@@ -198,24 +171,82 @@ struct MembershipView: View {
                     Button {
                         Task { await subscription.refreshEntitlements() }
                     } label: {
-                        Label("Restore Purchases", systemImage: "arrow.clockwise")
+                        Label(L.string("Restore Purchases"), systemImage: "arrow.clockwise")
                     }
                     .buttonStyle(SecondaryButtonStyle())
 
                     VStack(alignment: .leading, spacing: 8) {
-                        FeatureLine("Save unlimited photos, videos, and files")
-                        FeatureLine("Batch import and advanced organization")
-                        FeatureLine("Disguised entry and decoy passcode space")
-                        FeatureLine("Intrusion records and advanced trash recovery")
-                        FeatureLine("Advanced trash recovery")
+                        FeatureLine(L.string("Save unlimited photos, videos, and files"))
+                        FeatureLine(L.string("Batch import and advanced organization"))
+                        FeatureLine(L.string("Disguised entry and decoy passcode space"))
+                        FeatureLine(L.string("Intrusion records and advanced recovery"))
                     }
                     .padding(.top, 8)
                 }
                 .padding()
             }
             .background(AppTheme.background)
-            .navigationTitle("Pro")
+            .navigationTitle(L.string("Pro"))
         }
+    }
+
+    private func localizedName(for product: Product) -> String {
+        if shouldUseStoreKitText(product.displayName) {
+            return product.displayName
+        }
+        switch product.id {
+        case SubscriptionManager.monthly:
+            return L.string("Monthly Pro")
+        case SubscriptionManager.yearly:
+            return L.string("Yearly Pro")
+        case SubscriptionManager.lifetime:
+            return L.string("Lifetime Pro")
+        default:
+            return product.displayName
+        }
+    }
+
+    private func localizedDescription(for product: Product) -> String {
+        if shouldUseStoreKitText(product.description) {
+            return product.description
+        }
+        switch product.id {
+        case SubscriptionManager.monthly:
+            return L.string("Monthly access to Pro vault features.")
+        case SubscriptionManager.yearly:
+            return L.string("Best value yearly access to Pro vault features.")
+        case SubscriptionManager.lifetime:
+            return L.string("One-time unlock for current Pro vault features.")
+        default:
+            return product.description
+        }
+    }
+
+    private func shouldUseStoreKitText(_ text: String) -> Bool {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return false
+        }
+        if AppLanguage.current == .simplifiedChinese {
+            return true
+        }
+        return !text.containsChineseMembershipText
+    }
+}
+
+private extension String {
+    var containsChineseMembershipText: Bool {
+        [
+            "会员",
+            "月度",
+            "年度",
+            "终身",
+            "私密",
+            "保险箱",
+            "购买",
+            "免费版",
+            "解锁",
+            "恢复购买"
+        ].contains { contains($0) }
     }
 }
 
@@ -241,6 +272,11 @@ struct ShareSheet: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+}
+
+struct SharePayload: Identifiable {
+    let id = UUID()
+    let items: [Any]
 }
 
 extension URL: @retroactive Identifiable {

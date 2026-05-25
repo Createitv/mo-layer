@@ -20,7 +20,7 @@ struct ContentView: View {
             } else {
                 switch auth.sessionMode {
                 case .cover:
-                    PalimpsestCoverView()
+                    LockView()
                 case .realVault:
                     MainAppView()
                 case .decoyVault:
@@ -38,18 +38,18 @@ struct FirstRunGuideView: View {
 
     var body: some View {
         ZStack {
-            AppTheme.ink.ignoresSafeArea()
+            AppTheme.background.ignoresSafeArea()
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     VStack(alignment: .leading, spacing: 10) {
                         Image(systemName: "lock.shield")
                             .font(.system(size: 54, weight: .semibold))
-                            .foregroundStyle(AppTheme.success)
+                            .foregroundStyle(AppTheme.primary)
                         Text("Welcome to Palimpsest")
                             .font(.system(.largeTitle, design: .rounded, weight: .bold))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(AppTheme.ink)
                         Text("It looks like a file archive. Your encrypted private vault opens only with the correct gesture.")
-                            .foregroundStyle(.white.opacity(0.72))
+                            .foregroundStyle(AppTheme.secondaryText)
                     }
 
                     VStack(spacing: 12) {
@@ -77,22 +77,23 @@ private struct GuideStep: View {
         HStack(alignment: .top, spacing: 14) {
             Image(systemName: icon)
                 .font(.title3)
-                .foregroundStyle(AppTheme.success)
+                .foregroundStyle(AppTheme.primary)
                 .frame(width: 38, height: 38)
-                .background(.white.opacity(0.08))
+                .background(AppTheme.primary.opacity(0.1))
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             VStack(alignment: .leading, spacing: 4) {
                 Text(title)
                     .font(.headline)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(AppTheme.ink)
                 Text(detail)
                     .font(.subheadline)
-                    .foregroundStyle(.white.opacity(0.68))
+                    .foregroundStyle(AppTheme.secondaryText)
             }
         }
         .padding(14)
-        .background(.white.opacity(0.06))
+        .background(AppTheme.card)
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(AppTheme.line))
     }
 }
 

@@ -1,15 +1,15 @@
 import SwiftUI
 
 enum AppTheme {
-    static let primary = Color(red: 15 / 255, green: 118 / 255, blue: 110 / 255)
-    static let accent = Color(red: 37 / 255, green: 99 / 255, blue: 235 / 255)
+    static let primary = Color(red: 37 / 255, green: 99 / 255, blue: 235 / 255)
+    static let accent = Color(red: 14 / 255, green: 165 / 255, blue: 233 / 255)
     static let ink = Color(red: 15 / 255, green: 23 / 255, blue: 42 / 255)
-    static let background = Color(red: 247 / 255, green: 249 / 255, blue: 252 / 255)
-    static let card = Color.white
+    static let background = Color.white
+    static let card = Color(red: 248 / 255, green: 250 / 255, blue: 252 / 255)
     static let danger = Color(red: 220 / 255, green: 38 / 255, blue: 38 / 255)
     static let warning = Color(red: 245 / 255, green: 158 / 255, blue: 11 / 255)
-    static let success = Color(red: 20 / 255, green: 184 / 255, blue: 166 / 255)
-    static let line = Color(red: 226 / 255, green: 232 / 255, blue: 240 / 255)
+    static let success = Color(red: 37 / 255, green: 99 / 255, blue: 235 / 255)
+    static let line = Color(red: 219 / 255, green: 234 / 255, blue: 254 / 255)
     static let secondaryText = Color(red: 71 / 255, green: 85 / 255, blue: 105 / 255)
 }
 
@@ -71,4 +71,3 @@ struct AppCard<Content: View>: View {
             )
     }
 }
-

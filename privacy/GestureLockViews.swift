@@ -13,17 +13,17 @@ struct GestureCapturePad: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(title)
                     .font(.headline)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(AppTheme.ink)
                 Text(subtitle)
                     .font(.caption)
-                    .foregroundStyle(.white.opacity(0.68))
+                    .foregroundStyle(AppTheme.secondaryText)
             }
 
             GeometryReader { proxy in
                 ZStack {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(.white.opacity(0.08))
-                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(.white.opacity(0.18)))
+                        .fill(AppTheme.primary.opacity(0.05))
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(AppTheme.line))
 
                     Path { path in
                         guard let first = points.first else { return }
@@ -32,12 +32,12 @@ struct GestureCapturePad: View {
                             path.addLine(to: CGPoint(x: point.x * proxy.size.width, y: point.y * proxy.size.height))
                         }
                     }
-                    .stroke(AppTheme.success, style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
+                    .stroke(AppTheme.primary, style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
 
                     if points.isEmpty {
                         Image(systemName: "scribble.variable")
                             .font(.system(size: 34, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.38))
+                            .foregroundStyle(AppTheme.primary.opacity(0.34))
                     }
                 }
                 .contentShape(Rectangle())
@@ -107,12 +107,12 @@ struct GestureResetView: View {
     @State private var backupKey = ""
     @State private var primary: [GesturePoint] = []
     @State private var confirmation: [GesturePoint] = []
-    private let backupKeyLength = 9
+    private let backupKeyLength = 6
 
     var body: some View {
         NavigationStack {
             ZStack {
-                AppTheme.ink.ignoresSafeArea()
+                AppTheme.background.ignoresSafeArea()
                 VStack(spacing: 18) {
                     SecureField("Enter security code", text: $backupKey)
                         .textContentType(.password)
@@ -123,7 +123,7 @@ struct GestureResetView: View {
                         }
                     Text(L.format("Security code is %d digits and is only used to reset the gesture.", backupKeyLength))
                         .font(.caption)
-                        .foregroundStyle(.white.opacity(0.62))
+                        .foregroundStyle(AppTheme.secondaryText)
 
                     GestureEnrollmentPanel(primary: $primary, confirmation: $confirmation) { message in
                         auth.authMessage = message
@@ -161,7 +161,7 @@ struct GestureResetView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
-                        .foregroundStyle(.white)
+                        .foregroundStyle(AppTheme.primary)
                 }
             }
         }

@@ -6,18 +6,18 @@ struct OnboardingView: View {
     @EnvironmentObject private var auth: AuthenticationManager
     @EnvironmentObject private var sync: CloudKitSyncService
     @EnvironmentObject private var vaultStore: VaultStore
-    @State private var step: SetupStep = .backupKey
+    @State private var step: SetupStep = .securityCode
     @State private var backupKey = ""
     @State private var confirmBackupKey = ""
     @State private var gesturePrimary: [GesturePoint] = []
     @State private var gestureConfirmation: [GesturePoint] = []
     @State private var animateMark = false
     @State private var showCloudRestore = false
-    private let backupKeyLength = 9
+    private let backupKeyLength = 6
 
     var body: some View {
         ZStack {
-            AppTheme.ink.ignoresSafeArea()
+            AppTheme.background.ignoresSafeArea()
             ScrollView {
                 VStack(spacing: 22) {
                     SetupMotionMark(isAnimating: animateMark, step: step)
@@ -25,11 +25,11 @@ struct OnboardingView: View {
                     VStack(spacing: 8) {
                         Text(step.title)
                             .font(.system(.title, design: .rounded, weight: .bold))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(AppTheme.ink)
                             .contentTransition(.numericText())
                         Text(step.subtitle)
                             .font(.callout)
-                            .foregroundStyle(.white.opacity(0.72))
+                            .foregroundStyle(AppTheme.secondaryText)
                             .multilineTextAlignment(.center)
                     }
 
@@ -46,7 +46,7 @@ struct OnboardingView: View {
                     .animation(.spring(response: 0.42, dampingFraction: 0.86), value: step)
 
                     HStack(spacing: 12) {
-                        if step != .backupKey {
+                        if step != .securityCode {
                             Button("Back") {
                                 withAnimation { step = step.previous }
                             }
@@ -59,7 +59,7 @@ struct OnboardingView: View {
                         .buttonStyle(AppButtonStyle())
                     }
 
-                    if step == .backupKey {
+                    if step == .securityCode {
                         Button {
                             showCloudRestore = true
                         } label: {
@@ -89,25 +89,6 @@ struct OnboardingView: View {
     @ViewBuilder
     private var stepContent: some View {
         switch step {
-        case .backupKey:
-            SetupCard(icon: "key.fill") {
-                BackupKeyGridInput(value: $backupKey, length: backupKeyLength)
-            }
-        case .confirmBackupKey:
-            SetupCard(icon: "checkmark.seal.fill", title: L.string("Confirm Security Code"), detail: L.string("Make sure you have saved or remembered it. If you forget your gesture later, this code lets you create a new one.")) {
-                SecureField("Enter security code again", text: $confirmBackupKey)
-                    .textContentType(.password)
-                    .keyboardType(.numberPad)
-                    .textFieldStyle(.roundedBorder)
-                    .onChange(of: confirmBackupKey) { _, newValue in
-                        confirmBackupKey = normalizedSecurityCode(newValue)
-                    }
-                if !confirmBackupKey.isEmpty && normalizedSecurityCode(confirmBackupKey) != normalizedSecurityCode(backupKey) {
-                    Text("Security codes do not match")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(AppTheme.warning)
-                }
-            }
         case .drawGesture:
             SetupCard(icon: "scribble.variable", title: L.string("Draw Your Gesture"), detail: L.string("Draw a familiar freeform motion. The system records route, rhythm, and length features; exact position does not need to match.")) {
                 GestureTutorialCard()
@@ -127,19 +108,32 @@ struct OnboardingView: View {
                     StatusPill(title: L.string("Confirmation gesture recorded"), systemImage: "checkmark.circle.fill", tint: AppTheme.success)
                 }
             }
+        case .securityCode:
+            SetupCard(icon: "key.fill") {
+                BackupKeyGridInput(value: $backupKey, length: backupKeyLength)
+            }
+        case .confirmSecurityCode:
+            SetupCard(icon: "checkmark.seal.fill", title: L.string("Confirm Security Code"), detail: L.string("Make sure you have saved or remembered it. If you forget your gesture later, this code lets you create a new one.")) {
+                BackupKeyGridInput(value: $confirmBackupKey, length: backupKeyLength)
+                if !confirmBackupKey.isEmpty && normalizedSecurityCode(confirmBackupKey) != normalizedSecurityCode(backupKey) {
+                    Text("Security codes do not match")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(AppTheme.warning)
+                }
+            }
         }
     }
 
     private var canContinue: Bool {
         switch step {
-        case .backupKey:
-            normalizedSecurityCode(backupKey).count == backupKeyLength
-        case .confirmBackupKey:
-            normalizedSecurityCode(confirmBackupKey) == normalizedSecurityCode(backupKey) && !confirmBackupKey.isEmpty
         case .drawGesture:
             !gesturePrimary.isEmpty
         case .confirmGesture:
             !gestureConfirmation.isEmpty
+        case .securityCode:
+            normalizedSecurityCode(backupKey).count == backupKeyLength
+        case .confirmSecurityCode:
+            normalizedSecurityCode(confirmBackupKey) == normalizedSecurityCode(backupKey) && !confirmBackupKey.isEmpty
         }
     }
 
@@ -150,17 +144,31 @@ struct OnboardingView: View {
             return
         }
         switch step {
-        case .backupKey, .confirmBackupKey, .drawGesture:
+        case .securityCode, .confirmSecurityCode, .drawGesture:
             withAnimation { step = step.next }
         case .confirmGesture:
-            Task {
-                let success = await auth.configure(
-                    backupKey: normalizedSecurityCode(backupKey),
-                    gesture: (gesturePrimary, gestureConfirmation)
+            do {
+                let result = try GestureCredentialService.enrollmentMatchResult(
+                    primary: gesturePrimary,
+                    confirmation: gestureConfirmation
                 )
-                if !success {
+                guard result.isMatch else {
                     gestureConfirmation = []
+                    auth.authMessage = L.string("The two gestures are not similar enough. Please set them again.")
+                    return
                 }
+                Task {
+                    let success = await auth.configure(
+                        backupKey: normalizedSecurityCode(backupKey),
+                        gesture: (gesturePrimary, gestureConfirmation)
+                    )
+                    if !success {
+                        gestureConfirmation = []
+                    }
+                }
+            } catch {
+                gestureConfirmation = []
+                auth.authMessage = error.localizedDescription
             }
         }
     }
@@ -195,14 +203,14 @@ struct OnboardingView: View {
 
     private var validationMessage: String {
         switch step {
-        case .backupKey:
-            L.format("Security code must be exactly %d digits.", backupKeyLength)
-        case .confirmBackupKey:
-            L.string("Security codes must match.")
         case .drawGesture:
             L.string("Draw the first gesture first.")
         case .confirmGesture:
             L.string("Draw the confirmation gesture again.")
+        case .securityCode:
+            L.format("Security code must be exactly %d digits.", backupKeyLength)
+        case .confirmSecurityCode:
+            L.string("Security codes must match.")
         }
     }
 }
@@ -289,9 +297,9 @@ private struct BackupKeyGridInput: View {
             HStack(spacing: 7) {
                 ForEach(0..<length, id: \.self) { index in
                     Circle()
-                        .fill(index < value.count ? AppTheme.success : .white.opacity(0.14))
+                        .fill(index < value.count ? AppTheme.primary : AppTheme.line)
                         .frame(width: 14, height: 14)
-                        .overlay(Circle().stroke(.white.opacity(0.18)))
+                        .overlay(Circle().stroke(AppTheme.primary.opacity(0.18)))
                 }
             }
             .accessibilityLabel(L.format("Security code has %d of %d digits", value.count, length))
@@ -304,11 +312,11 @@ private struct BackupKeyGridInput: View {
                     } label: {
                         Text(digit)
                             .font(.system(.title2, design: .rounded, weight: .bold))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(AppTheme.ink)
                             .frame(maxWidth: .infinity, minHeight: 58)
-                            .background(.white.opacity(0.1))
+                            .background(AppTheme.primary.opacity(0.06))
                             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(.white.opacity(0.12)))
+                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(AppTheme.line))
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(L.format("Enter %@", digit))
@@ -321,9 +329,9 @@ private struct BackupKeyGridInput: View {
             } label: {
                 Label(L.string("Delete"), systemImage: "delete.left")
                     .font(.system(.body, design: .rounded, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(AppTheme.primary)
                     .frame(maxWidth: .infinity, minHeight: 46)
-                    .background(.white.opacity(0.08))
+                    .background(AppTheme.primary.opacity(0.08))
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
             .buttonStyle(.plain)
@@ -339,8 +347,8 @@ private struct GestureTutorialCard: View {
         VStack(alignment: .leading, spacing: 12) {
             ZStack {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(.white.opacity(0.08))
-                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(.white.opacity(0.12)))
+                    .fill(AppTheme.primary.opacity(0.06))
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(AppTheme.line))
 
                 TutorialGestureShape()
                     .trim(from: 0, to: animate ? 1 : 0.08)
@@ -349,7 +357,7 @@ private struct GestureTutorialCard: View {
                     .animation(.easeInOut(duration: 1.8).repeatForever(autoreverses: false), value: animate)
 
                 Circle()
-                    .fill(.white)
+                    .fill(AppTheme.primary)
                     .frame(width: 11, height: 11)
                     .offset(x: animate ? 82 : -88, y: animate ? 10 : 34)
                     .animation(.easeInOut(duration: 1.8).repeatForever(autoreverses: false), value: animate)
@@ -363,7 +371,7 @@ private struct GestureTutorialCard: View {
                 Label(L.string("Draw it again with similar route and rhythm to confirm."), systemImage: "3.circle")
             }
             .font(.caption.weight(.semibold))
-            .foregroundStyle(.white.opacity(0.76))
+            .foregroundStyle(AppTheme.secondaryText)
         }
         .accessibilityElement(children: .combine)
     }
@@ -387,27 +395,27 @@ private struct TutorialGestureShape: Shape {
     }
 }
 
-private enum SetupStep: Int, CaseIterable {
-    case backupKey
-    case confirmBackupKey
+enum SetupStep: Int, CaseIterable {
+    case securityCode
+    case confirmSecurityCode
     case drawGesture
     case confirmGesture
 
     var title: String {
         switch self {
-        case .backupKey: L.string("Set Security Code")
-        case .confirmBackupKey: L.string("Confirm Security Code")
         case .drawGesture: L.string("Draw Gesture")
         case .confirmGesture: L.string("Confirm Gesture")
+        case .securityCode: L.string("Set Security Code")
+        case .confirmSecurityCode: L.string("Confirm Security Code")
         }
     }
 
     var subtitle: String {
         switch self {
-        case .backupKey: L.string("Enter a 9-digit security code.")
-        case .confirmBackupKey: L.string("Confirm the security code before recording your gesture.")
         case .drawGesture: L.string("Use muscle memory to create a more natural entry method.")
-        case .confirmGesture: L.string("Confirm once more to finish creating the vault.")
+        case .confirmGesture: L.string("Draw the same gesture again so the app can confirm it matches.")
+        case .securityCode: L.string("Enter a 6-digit security code.")
+        case .confirmSecurityCode: L.string("Confirm the security code before entering the app.")
         }
     }
 
@@ -420,7 +428,7 @@ private enum SetupStep: Int, CaseIterable {
     }
 
     var previous: SetupStep {
-        SetupStep(rawValue: max(rawValue - 1, 0)) ?? .backupKey
+        SetupStep(rawValue: max(rawValue - 1, 0)) ?? .securityCode
     }
 }
 
@@ -431,12 +439,12 @@ private struct SetupProgressView: View {
         HStack(spacing: 8) {
             ForEach(SetupStep.allCases, id: \.rawValue) { item in
                 Capsule()
-                    .fill(item.rawValue <= step.rawValue ? AppTheme.success : .white.opacity(0.16))
+                    .fill(item.rawValue <= step.rawValue ? AppTheme.primary : AppTheme.line)
                     .frame(height: 6)
                     .overlay(alignment: .leading) {
                         if item == step {
                             Capsule()
-                                .fill(.white.opacity(0.32))
+                                .fill(AppTheme.accent.opacity(0.45))
                                 .frame(width: 22, height: 6)
                                 .offset(x: 6)
                         }
@@ -455,7 +463,7 @@ private struct SetupMotionMark: View {
         ZStack {
             ForEach(0..<3) { index in
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(index == 0 ? AppTheme.success : .white.opacity(0.18), lineWidth: index == 0 ? 3 : 1)
+                    .stroke(index == 0 ? AppTheme.primary : AppTheme.line, lineWidth: index == 0 ? 3 : 1)
                     .frame(width: CGFloat(88 + index * 18), height: CGFloat(88 + index * 18))
                     .rotationEffect(.degrees(isAnimating ? Double(14 + index * 16) : Double(-14 - index * 10)))
                     .scaleEffect(isAnimating ? 1.0 + CGFloat(index) * 0.025 : 0.94)
@@ -464,7 +472,7 @@ private struct SetupMotionMark: View {
 
             Image(systemName: stepIcon)
                 .font(.system(size: 36, weight: .semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(AppTheme.primary)
                 .symbolEffect(.pulse, value: step.rawValue)
         }
         .frame(height: 132)
@@ -472,10 +480,10 @@ private struct SetupMotionMark: View {
 
     private var stepIcon: String {
         switch step {
-        case .backupKey: "key.fill"
-        case .confirmBackupKey: "checkmark.seal.fill"
         case .drawGesture: "scribble.variable"
         case .confirmGesture: "signature"
+        case .securityCode: "key.fill"
+        case .confirmSecurityCode: "checkmark.seal.fill"
         }
     }
 }
@@ -492,20 +500,20 @@ private struct SetupCard<Content: View>: View {
                 HStack(alignment: .top, spacing: 12) {
                     Image(systemName: icon)
                         .font(.title3)
-                        .foregroundStyle(AppTheme.success)
+                        .foregroundStyle(AppTheme.primary)
                         .frame(width: 40, height: 40)
-                        .background(.white.opacity(0.08))
+                        .background(AppTheme.primary.opacity(0.1))
                         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     VStack(alignment: .leading, spacing: 5) {
                         if let title {
                             Text(title)
                                 .font(.headline)
-                                .foregroundStyle(.white)
+                                .foregroundStyle(AppTheme.ink)
                         }
                         if let detail {
                             Text(detail)
                                 .font(.subheadline)
-                                .foregroundStyle(.white.opacity(0.68))
+                                .foregroundStyle(AppTheme.secondaryText)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                     }
@@ -515,9 +523,9 @@ private struct SetupCard<Content: View>: View {
             content
         }
         .padding(18)
-        .background(.white.opacity(0.07))
+        .background(AppTheme.card)
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(.white.opacity(0.12)))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(AppTheme.line))
     }
 }
 
@@ -525,10 +533,10 @@ private struct SetupBackButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(.body, design: .rounded, weight: .semibold))
-            .foregroundStyle(.white.opacity(0.86))
+            .foregroundStyle(AppTheme.primary)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 14)
-            .background(.white.opacity(0.08))
+            .background(AppTheme.primary.opacity(0.08))
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .opacity(configuration.isPressed ? 0.78 : 1)
     }
@@ -540,18 +548,18 @@ struct LockView: View {
 
     var body: some View {
         ZStack {
-            AppTheme.ink.ignoresSafeArea()
+            AppTheme.background.ignoresSafeArea()
             VStack(spacing: 24) {
                 Image(systemName: "lock.fill")
                     .font(.system(size: 52, weight: .semibold))
-                    .foregroundStyle(AppTheme.success)
+                    .foregroundStyle(AppTheme.primary)
 
                 VStack(spacing: 8) {
                     Text("Private Space Locked")
                         .font(.system(.largeTitle, design: .rounded, weight: .bold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(AppTheme.ink)
                     Text("Unlock to view the vault and security center.")
-                        .foregroundStyle(.white.opacity(0.7))
+                        .foregroundStyle(AppTheme.secondaryText)
                 }
                 .multilineTextAlignment(.center)
 

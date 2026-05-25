@@ -22,7 +22,11 @@ struct privacyTests {
             SubscriptionState.self,
             VaultManifest.self
         ])
-        let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
+        let configuration = ModelConfiguration(
+            schema: schema,
+            isStoredInMemoryOnly: false,
+            cloudKitDatabase: .none
+        )
 
         _ = try ModelContainer(for: schema, configurations: [configuration])
     }
@@ -129,6 +133,63 @@ struct privacyTests {
         }
     }
 
+    @Test func vaultCategoriesFilterActiveItemsWithoutTrashCategory() {
+        let image = TestVaultItemFactory.item(kind: .image)
+        let video = TestVaultItemFactory.item(kind: .video)
+        let document = TestVaultItemFactory.item(kind: .document)
+        let archive = TestVaultItemFactory.item(kind: .archive)
+        let other = TestVaultItemFactory.item(kind: .other)
+        let trashedImage = TestVaultItemFactory.item(kind: .image, deletedAt: Date())
+        let items = [image, video, document, archive, other, trashedImage]
+
+        #expect(VaultCategory.allCases == [.images, .videos, .audio, .documents, .links])
+        #expect(VaultCategory.images.items(from: items) == [image])
+        #expect(VaultCategory.videos.items(from: items) == [video])
+        #expect(VaultCategory.documents.items(from: items) == [document, archive, other])
+        #expect(!VaultCategory.allCases.flatMap { $0.items(from: items) }.contains(trashedImage))
+    }
+
+    @Test func vaultCategoryCarouselUsesScrollableCardsOnlyWhenManyCategories() {
+        let compactWidth = VaultCategoryCarouselLayout.cardWidth(
+            containerWidth: 361,
+            categoryCount: 6
+        )
+        let regularWidth = VaultCategoryCarouselLayout.cardWidth(
+            containerWidth: 712,
+            categoryCount: 6
+        )
+        let fewCategoriesWidth = VaultCategoryCarouselLayout.cardWidth(
+            containerWidth: 361,
+            categoryCount: 3
+        )
+
+        #expect(compactWidth == 132)
+        #expect(regularWidth == 158)
+        #expect(fewCategoriesWidth == 112)
+        #expect(VaultCategoryCarouselLayout.cardHeight == 150)
+    }
+
+    @Test func mediaPreviewBadgesUsePhotoAndVideoIcons() {
+        #expect(VaultItemKind.image.previewBadgeSystemImage == "photo.fill")
+        #expect(VaultItemKind.video.previewBadgeSystemImage == "video.fill")
+    }
+
+    @Test func onboardingSetupStartsWithSecurityCodeThenConfirmsGestureLast() {
+        #expect(SetupStep.allCases == [.securityCode, .confirmSecurityCode, .drawGesture, .confirmGesture])
+        #expect(SetupStep.securityCode.next == .confirmSecurityCode)
+        #expect(SetupStep.confirmSecurityCode.next == .drawGesture)
+        #expect(SetupStep.drawGesture.next == .confirmGesture)
+        #expect(SetupStep.confirmGesture.primaryActionTitle == L.string("Create Vault"))
+    }
+
+}
+
+private enum TestVaultItemFactory {
+    static func item(kind: VaultItemKind, deletedAt: Date? = nil) -> VaultItem {
+        let item = VaultItem(kind: kind, encryptedMetadata: Data(), byteSize: 128)
+        item.deletedAt = deletedAt
+        return item
+    }
 }
 
 private enum TestGestureFactory {

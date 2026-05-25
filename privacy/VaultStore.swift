@@ -67,6 +67,7 @@ final class VaultStore: ObservableObject {
         }
     }
 
+    @discardableResult
     func importData(
         _ data: Data,
         originalName: String,
@@ -75,7 +76,7 @@ final class VaultStore: ObservableObject {
         kind: VaultItemKind,
         context: ModelContext,
         sync: CloudKitSyncService
-    ) async {
+    ) async -> Bool {
         do {
             let rootKey = try VaultCryptoService.ensureRootKey()
             let fileKey = VaultCryptoService.newFileKey()
@@ -117,8 +118,10 @@ final class VaultStore: ObservableObject {
             try context.save()
             _ = await sync.syncItem(item)
             try? context.save()
+            return true
         } catch {
             lastError = error.localizedDescription
+            return false
         }
     }
 
@@ -197,28 +200,25 @@ final class VaultStore: ObservableObject {
         return try decryptedTemporaryURL(for: item)
     }
 
+    func decryptedTemporaryURLs(for items: [VaultItem], context: ModelContext, sync: CloudKitSyncService) async -> [URL] {
+        var urls: [URL] = []
+        for item in items where item.deletedAt == nil {
+            if item.kind == .link,
+               let urlString = metadata(for: item)?.remoteURL,
+               let url = URL(string: urlString) {
+                urls.append(url)
+                continue
+            }
+
+            if let url = try? await decryptedTemporaryURL(for: item, context: context, sync: sync) {
+                urls.append(url)
+            }
+        }
+        return urls
+    }
+
     func toggleFavorite(_ item: VaultItem, context: ModelContext, sync: CloudKitSyncService) async {
         item.isFavorite.toggle()
-        item.updatedAt = Date()
-        item.localRevision += 1
-        item.syncStatus = .pending
-        try? context.save()
-        _ = await sync.syncItem(item)
-        try? context.save()
-    }
-
-    func moveToTrash(_ item: VaultItem, context: ModelContext, sync: CloudKitSyncService) async {
-        item.deletedAt = Date()
-        item.updatedAt = Date()
-        item.localRevision += 1
-        item.syncStatus = .pending
-        try? context.save()
-        _ = await sync.syncItem(item)
-        try? context.save()
-    }
-
-    func restore(_ item: VaultItem, context: ModelContext, sync: CloudKitSyncService) async {
-        item.deletedAt = nil
         item.updatedAt = Date()
         item.localRevision += 1
         item.syncStatus = .pending
@@ -235,6 +235,14 @@ final class VaultStore: ObservableObject {
             return
         }
 
+        VaultFileStore.remove(path: item.encryptedFilePath)
+        VaultFileStore.remove(path: item.encryptedThumbPath)
+        context.delete(item)
+        try? context.save()
+    }
+
+    func deleteImmediately(_ item: VaultItem, context: ModelContext, sync: CloudKitSyncService) async {
+        _ = await sync.deleteItem(item)
         VaultFileStore.remove(path: item.encryptedFilePath)
         VaultFileStore.remove(path: item.encryptedThumbPath)
         context.delete(item)
