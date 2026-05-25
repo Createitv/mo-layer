@@ -8,9 +8,11 @@ import VisionKit
 #endif
 
 struct ImportHubView: View {
+    @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var sync: CloudKitSyncService
     @EnvironmentObject private var vaultStore: VaultStore
+    var showsCloseButton = false
     @State private var pickerItems: [PhotosPickerItem] = []
     @State private var showFileImporter = false
     @State private var showCamera = false
@@ -62,6 +64,14 @@ struct ImportHubView: View {
             }
             .background(AppTheme.background)
             .navigationTitle("Import")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                if showsCloseButton {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button(L.string("Close")) { dismiss() }
+                    }
+                }
+            }
             .onChange(of: pickerItems) { _, newItems in
                 Task {
                     await ImportService.importPickerItems(newItems, context: modelContext, vaultStore: vaultStore, sync: sync)

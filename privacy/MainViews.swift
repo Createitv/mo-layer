@@ -16,16 +16,7 @@ struct MainAppView: View {
     @State private var sharedImportMessage: String?
 
     var body: some View {
-        TabView {
-            VaultHomeView()
-                .tabItem { Label("Vault", systemImage: "lock.rectangle.stack") }
-            ImportHubView()
-                .tabItem { Label("Import", systemImage: "square.and.arrow.down") }
-            SecurityCenterView()
-                .tabItem { Label("Security", systemImage: "shield.lefthalf.filled") }
-            MembershipView()
-                .tabItem { Label("Pro", systemImage: "star.circle") }
-        }
+        VaultHomeView()
         .tint(AppTheme.primary)
         .task {
             await sync.checkAccountStatus()
@@ -107,6 +98,21 @@ struct MainAppView: View {
         pendingSharedImports = []
         sharedImportMessage = nil
     }
+}
+
+enum MainShellAction: String, CaseIterable {
+    case profile
+    case `import`
+}
+
+enum MainShellImportPresentation {
+    case fullScreen
+}
+
+enum MainShellLayout {
+    static let usesBottomTabBar = false
+    static let trailingActions: [MainShellAction] = [.profile, .import]
+    static let importPresentation: MainShellImportPresentation = .fullScreen
 }
 
 struct SharedImportReviewSheet: View {
@@ -196,8 +202,8 @@ struct VaultHomeView: View {
     @Query(sort: \VaultFolder.sortOrder) private var folders: [VaultFolder]
     @State private var selectedItem: VaultItem?
     @State private var previewSelection: MediaPreviewSelection?
-    @State private var sharePayload: SharePayload?
-    @State private var isPreparingShare = false
+    @State private var showProfileCenter = false
+    @State private var showImportHub = false
     @State private var showCreateFolder = false
     @State private var selectedFolderId: String?
 
@@ -213,6 +219,11 @@ struct VaultHomeView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
+                    VaultHomeHeader(
+                        profileAction: { showProfileCenter = true },
+                        importAction: { showImportHub = true }
+                    )
+
                     GeometryReader { proxy in
                         let cardWidth = VaultCategoryCarouselLayout.cardWidth(
                             containerWidth: proxy.size.width,
@@ -291,12 +302,6 @@ struct VaultHomeView: View {
                                 .onTapGesture { open(item, in: visibleItems) }
                                 .contextMenu {
                                     Button {
-                                        Task { await share([item]) }
-                                    } label: {
-                                        Label(L.string("Share"), systemImage: "square.and.arrow.up")
-                                    }
-
-                                    Button {
                                         selectedItem = item
                                     } label: {
                                         Label(L.string("Details"), systemImage: "info.circle")
@@ -308,22 +313,9 @@ struct VaultHomeView: View {
                 .padding()
             }
             .background(AppTheme.background)
-            .navigationTitle("Vault")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        Task { await share(visibleItems) }
-                    } label: {
-                        Image(systemName: "square.and.arrow.up")
-                    }
-                    .disabled(visibleItems.isEmpty || isPreparingShare)
-                }
-            }
+            .toolbar(.hidden, for: .navigationBar)
             .sheet(item: $selectedItem) { item in
                 VaultItemDetailView(item: item)
-            }
-            .sheet(item: $sharePayload) { payload in
-                ShareSheet(items: payload.items)
             }
             .fullScreenCover(item: $previewSelection) { selection in
                 VaultMediaPreviewView(
@@ -334,21 +326,17 @@ struct VaultHomeView: View {
             .sheet(isPresented: $showCreateFolder) {
                 FolderEditorView()
             }
+            .fullScreenCover(isPresented: $showImportHub) {
+                ImportHubView(showsCloseButton: true)
+            }
+            .fullScreenCover(isPresented: $showProfileCenter) {
+                ProfileCenterView()
+            }
             .refreshable {
                 await vaultStore.pullCloudIndex(context: modelContext, sync: sync)
                 await vaultStore.syncPendingChanges(context: modelContext, sync: sync)
             }
         }
-    }
-
-    @MainActor
-    private func share(_ items: [VaultItem]) async {
-        guard !isPreparingShare else { return }
-        isPreparingShare = true
-        defer { isPreparingShare = false }
-        let urls = await vaultStore.decryptedTemporaryURLs(for: items, context: modelContext, sync: sync)
-        guard !urls.isEmpty else { return }
-        sharePayload = SharePayload(items: urls)
     }
 
     private func open(_ item: VaultItem, in collection: [VaultItem]) {
@@ -363,9 +351,81 @@ struct VaultHomeView: View {
     }
 }
 
+struct VaultHomeHeader: View {
+    let profileAction: () -> Void
+    let importAction: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Text("VAULT")
+                .font(.system(.largeTitle, design: .rounded, weight: .bold))
+                .foregroundStyle(AppTheme.ink)
+                .lineLimit(1)
+
+            Spacer()
+
+            Button(action: profileAction) {
+                Image(systemName: "person.crop.circle")
+                    .font(.title2.weight(.semibold))
+                    .foregroundStyle(AppTheme.primary)
+                    .frame(width: 40, height: 40)
+                    .background(AppTheme.primary.opacity(0.08))
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(L.string("Profile"))
+
+            Button(action: importAction) {
+                Image(systemName: "square.and.arrow.down")
+                    .font(.title2.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 40, height: 40)
+                    .background(AppTheme.primary)
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(L.string("Import"))
+        }
+        .frame(minHeight: 44)
+    }
+}
+
+struct ProfileCenterView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    NavigationLink {
+                        SecurityCenterView()
+                    } label: {
+                        Label(L.string("Security Center"), systemImage: "shield.lefthalf.filled")
+                    }
+
+                    NavigationLink {
+                        MembershipView()
+                    } label: {
+                        Label(L.string("Pro"), systemImage: "star.circle")
+                    }
+                }
+            }
+            .navigationTitle(L.string("Profile"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(L.string("Close")) { dismiss() }
+                }
+            }
+        }
+    }
+}
+
 enum VaultCategoryCarouselLayout {
     static let spacing: CGFloat = 12
-    static let cardHeight: CGFloat = 150
+    static let cardHeight: CGFloat = 176
+    static let visualHeight: CGFloat = 104
+    static let textAlignment: TextAlignment = .center
 
     static func cardWidth(containerWidth: CGFloat, categoryCount: Int) -> CGFloat {
         guard categoryCount > 0 else { return 0 }
@@ -427,13 +487,9 @@ enum VaultCategory: String, CaseIterable, Identifiable {
 }
 
 struct VaultCategoryDetailView: View {
-    @Environment(\.modelContext) private var modelContext
     @State private var selectedItem: VaultItem?
     @State private var previewSelection: MediaPreviewSelection?
-    @State private var sharePayload: SharePayload?
-    @State private var isPreparingShare = false
     @EnvironmentObject private var vaultStore: VaultStore
-    @EnvironmentObject private var sync: CloudKitSyncService
     let category: VaultCategory
     let items: [VaultItem]
 
@@ -447,13 +503,6 @@ struct VaultCategoryDetailView: View {
                         VaultCategoryItemRow(item: item)
                     }
                     .buttonStyle(.plain)
-                    .contextMenu {
-                        Button {
-                            Task { await share([item]) }
-                        } label: {
-                            Label(L.string("Share"), systemImage: "square.and.arrow.up")
-                        }
-                    }
                 }
             }
             .padding()
@@ -462,17 +511,10 @@ struct VaultCategoryDetailView: View {
         .navigationTitle(category.title)
         .navigationBarTitleDisplayMode(.large)
         .toolbar {
-            ToolbarItemGroup(placement: .topBarTrailing) {
+            ToolbarItem(placement: .topBarTrailing) {
                 Text(L.format("%d items", items.count))
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(AppTheme.secondaryText)
-
-                Button {
-                    Task { await share(items) }
-                } label: {
-                    Image(systemName: "square.and.arrow.up")
-                }
-                .disabled(items.isEmpty || isPreparingShare)
             }
         }
         .overlay {
@@ -483,25 +525,12 @@ struct VaultCategoryDetailView: View {
         .sheet(item: $selectedItem) { item in
             VaultItemDetailView(item: item)
         }
-        .sheet(item: $sharePayload) { payload in
-            ShareSheet(items: payload.items)
-        }
         .fullScreenCover(item: $previewSelection) { selection in
             VaultMediaPreviewView(
                 items: selection.items,
                 initialItemId: selection.initialItemId
             )
         }
-    }
-
-    @MainActor
-    private func share(_ items: [VaultItem]) async {
-        guard !isPreparingShare else { return }
-        isPreparingShare = true
-        defer { isPreparingShare = false }
-        let urls = await vaultStore.decryptedTemporaryURLs(for: items, context: modelContext, sync: sync)
-        guard !urls.isEmpty else { return }
-        sharePayload = SharePayload(items: urls)
     }
 
     private func open(_ item: VaultItem) {
@@ -659,34 +688,31 @@ struct CategoryCard: View {
 
     var body: some View {
         AppCard {
-            VStack(alignment: .leading, spacing: 9) {
-                ZStack(alignment: .topTrailing) {
+            VStack(alignment: .center, spacing: 10) {
+                ZStack {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .fill(category.previewTint.opacity(0.16))
                     Image(systemName: icon)
-                        .font(.system(size: 34, weight: .semibold))
+                        .font(.system(size: 48, weight: .semibold))
                         .foregroundStyle(category.previewTint)
-                    Image(systemName: icon)
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 26, height: 26)
-                        .background(.black.opacity(0.35))
-                        .clipShape(Circle())
-                        .padding(8)
                 }
-                .frame(height: 76)
+                .frame(height: VaultCategoryCarouselLayout.visualHeight)
                 .frame(maxWidth: .infinity)
 
                 Text(title)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(AppTheme.ink)
                     .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .multilineTextAlignment(VaultCategoryCarouselLayout.textAlignment)
                     .minimumScaleFactor(0.78)
                 Text("\(count)")
                     .font(.caption.weight(.bold))
                     .foregroundStyle(AppTheme.secondaryText)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .multilineTextAlignment(VaultCategoryCarouselLayout.textAlignment)
             }
-            .frame(maxWidth: .infinity, minHeight: 120, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: 144, alignment: .center)
         }
     }
 }
@@ -805,18 +831,6 @@ struct VaultMediaPreviewView: View {
                     }
 
                     Spacer()
-
-                    Button {
-                        Task { await exportSelectedItem() }
-                    } label: {
-                        Image(systemName: "square.and.arrow.up")
-                            .font(.headline.weight(.semibold))
-                            .foregroundStyle(.white)
-                            .frame(width: 38, height: 38)
-                            .background(.black.opacity(0.35))
-                            .clipShape(Circle())
-                    }
-                    .disabled(isPreparingShare)
 
                     Menu {
                         Button {

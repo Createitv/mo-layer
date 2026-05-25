@@ -9,6 +9,7 @@ import Testing
 import CryptoKit
 import Foundation
 import SwiftData
+import SwiftUI
 @testable import privacy
 
 struct privacyTests {
@@ -166,7 +167,16 @@ struct privacyTests {
         #expect(compactWidth == 132)
         #expect(regularWidth == 158)
         #expect(fewCategoriesWidth == 112)
-        #expect(VaultCategoryCarouselLayout.cardHeight == 150)
+        #expect(VaultCategoryCarouselLayout.cardHeight == 176)
+        #expect(VaultCategoryCarouselLayout.visualHeight == 104)
+        #expect(VaultCategoryCarouselLayout.textAlignment == .center)
+    }
+
+    @Test func mainShellUsesHeaderActionsInsteadOfBottomTabs() {
+        #expect(MainShellLayout.usesBottomTabBar == false)
+        #expect(MainShellLayout.trailingActions == [.profile, .import])
+        #expect(MainShellLayout.importPresentation == .fullScreen)
+        #expect(!MainShellAction.allCases.map(\.rawValue).contains("share"))
     }
 
     @Test func mediaPreviewBadgesUsePhotoAndVideoIcons() {
