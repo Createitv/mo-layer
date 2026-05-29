@@ -116,9 +116,9 @@ final class CloudKitSyncService: ObservableObject {
         }
 
         state = .syncing
-        let fileURL = URL(fileURLWithPath: item.encryptedFilePath)
-        let requiresFileAsset = item.kind != .link
-        guard !requiresFileAsset || FileManager.default.fileExists(atPath: fileURL.path) else {
+        let fileURL = VaultFileStore.assetURL(for: item.encryptedFilePath)
+        let requiresFileAsset = item.kind != .link && item.deletedAt == nil
+        guard !requiresFileAsset || VaultFileStore.fileExists(path: item.encryptedFilePath) else {
             return failItemSync(item, reason: L.string("Local encrypted file is missing; cannot upload to iCloud."))
         }
 
@@ -136,12 +136,13 @@ final class CloudKitSyncService: ObservableObject {
         record["deletedAt"] = item.deletedAt
         record["localRevision"] = item.localRevision
         record["assetState"] = item.assetStateRawValue
+        record["importFingerprint"] = item.importFingerprint
 
         if requiresFileAsset {
             record["fileAsset"] = CKAsset(fileURL: fileURL)
         }
-        if let thumbPath = item.encryptedThumbPath, FileManager.default.fileExists(atPath: thumbPath) {
-            record["thumbAsset"] = CKAsset(fileURL: URL(fileURLWithPath: thumbPath))
+        if let thumbPath = item.encryptedThumbPath, VaultFileStore.fileExists(path: thumbPath) {
+            record["thumbAsset"] = CKAsset(fileURL: VaultFileStore.assetURL(for: thumbPath))
         }
 
         do {
@@ -164,6 +165,16 @@ final class CloudKitSyncService: ObservableObject {
 
         state = .syncing
         let records = await fetchRecords(recordType: "VaultItem")
+        state = .synced(Date())
+        lastSyncError = nil
+        return records
+    }
+
+    func fetchRemoteFolders() async -> [CKRecord] {
+        guard await ensureCloudAvailable() else { return [] }
+
+        state = .syncing
+        let records = await fetchRecords(recordType: "VaultFolder")
         state = .synced(Date())
         lastSyncError = nil
         return records
@@ -203,23 +214,11 @@ final class CloudKitSyncService: ObservableObject {
             return false
         }
 
-        state = .syncing
-        let recordID = CKRecord.ID(recordName: item.cloudRecordName ?? item.id)
-        do {
-            _ = try await database.deleteRecord(withID: recordID)
-            state = .synced(Date())
-            lastSyncError = nil
-            return true
-        } catch let error as CKError where error.code == .unknownItem {
-            state = .synced(Date())
-            lastSyncError = nil
-            return true
-        } catch {
-            item.syncStatus = .failed
-            state = .failed(error.localizedDescription)
-            lastSyncError = error.localizedDescription
-            return false
-        }
+        item.deletedAt = item.deletedAt ?? Date()
+        item.updatedAt = Date()
+        item.localRevision += 1
+        item.syncStatus = .pending
+        return await syncItem(item)
     }
 
     func syncFolder(_ folder: VaultFolder) async -> Bool {
@@ -275,25 +274,56 @@ final class CloudKitSyncService: ObservableObject {
     }
 
     private func fetchRecords(recordType: String) async -> [CKRecord] {
+        let query = CKQuery(recordType: recordType, predicate: NSPredicate(value: true))
+        let (records, cursor) = await fetchRecords(query: query)
+        guard let cursor else { return records }
+        return await fetchRemainingRecords(cursor: cursor, accumulated: records)
+    }
+
+    private func fetchRecords(query: CKQuery) async -> ([CKRecord], CKQueryOperation.Cursor?) {
         await withCheckedContinuation { continuation in
-            let query = CKQuery(recordType: recordType, predicate: NSPredicate(value: true))
             let operation = CKQueryOperation(query: query)
-            var records: [CKRecord] = []
-            operation.recordMatchedBlock = { _, result in
-                if case .success(let record) = result {
-                    records.append(record)
-                }
-            }
-            operation.queryResultBlock = { result in
-                if case .failure(let error) = result {
-                    Task { @MainActor in
-                        self.state = .failed(error.localizedDescription)
-                        self.lastSyncError = error.localizedDescription
-                    }
-                }
-                continuation.resume(returning: records)
-            }
+            configure(operation: operation, continuation: continuation)
             database.add(operation)
+        }
+    }
+
+    private func fetchRecords(cursor: CKQueryOperation.Cursor) async -> ([CKRecord], CKQueryOperation.Cursor?) {
+        await withCheckedContinuation { continuation in
+            let operation = CKQueryOperation(cursor: cursor)
+            configure(operation: operation, continuation: continuation)
+            database.add(operation)
+        }
+    }
+
+    private func fetchRemainingRecords(cursor: CKQueryOperation.Cursor, accumulated: [CKRecord]) async -> [CKRecord] {
+        let (records, nextCursor) = await fetchRecords(cursor: cursor)
+        let combined = accumulated + records
+        guard let nextCursor else { return combined }
+        return await fetchRemainingRecords(cursor: nextCursor, accumulated: combined)
+    }
+
+    private func configure(
+        operation: CKQueryOperation,
+        continuation: CheckedContinuation<([CKRecord], CKQueryOperation.Cursor?), Never>
+    ) {
+        var records: [CKRecord] = []
+        operation.recordMatchedBlock = { _, result in
+            if case .success(let record) = result {
+                records.append(record)
+            }
+        }
+        operation.queryResultBlock = { result in
+            switch result {
+            case .success(let cursor):
+                continuation.resume(returning: (records, cursor))
+            case .failure(let error):
+                Task { @MainActor in
+                    self.state = .failed(error.localizedDescription)
+                    self.lastSyncError = error.localizedDescription
+                }
+                continuation.resume(returning: (records, nil))
+            }
         }
     }
 }

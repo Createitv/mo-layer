@@ -114,7 +114,7 @@ struct GestureResetView: View {
             ZStack {
                 AppTheme.background.ignoresSafeArea()
                 VStack(spacing: 18) {
-                    SecureField("Enter security code", text: $backupKey)
+                    SecureField(L.string("Enter security code"), text: $backupKey)
                         .textContentType(.password)
                         .keyboardType(.numberPad)
                         .textFieldStyle(.roundedBorder)
@@ -129,7 +129,7 @@ struct GestureResetView: View {
                         auth.authMessage = message
                     }
 
-                    Button("Reset Gesture") {
+                    Button(L.string("Reset Gesture")) {
                         let securityCode = normalizedSecurityCode(backupKey)
                         guard securityCode.count == backupKeyLength else {
                             auth.authMessage = L.format("Security code must be exactly %d digits.", backupKeyLength)
@@ -156,11 +156,11 @@ struct GestureResetView: View {
                 }
                 .padding(24)
             }
-            .navigationTitle("Reset Gesture")
+            .navigationTitle(L.string("Reset Gesture"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") { dismiss() }
+                    Button(L.string("Close")) { dismiss() }
                         .foregroundStyle(AppTheme.primary)
                 }
             }

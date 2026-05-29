@@ -4,18 +4,83 @@ import SwiftUI
 
 @MainActor
 final class AuthenticationManager: ObservableObject {
-    enum SessionMode {
+    enum SessionMode: CaseIterable {
         case cover
+        case gestureGate
         case realVault
         case decoyVault
+    }
+
+    enum ReauthenticationGracePeriod: Int, CaseIterable, Identifiable {
+        case disabled = 0
+        case fiveMinutes = 5
+        case tenMinutes = 10
+        case fifteenMinutes = 15
+        case thirtyMinutes = 30
+        case sixtyMinutes = 60
+
+        var id: Int { rawValue }
+
+        var title: String {
+            switch self {
+            case .disabled:
+                L.string("Always require unlock")
+            case .fiveMinutes:
+                L.string("5 minutes")
+            case .tenMinutes:
+                L.string("10 minutes")
+            case .fifteenMinutes:
+                L.string("15 minutes")
+            case .thirtyMinutes:
+                L.string("30 minutes")
+            case .sixtyMinutes:
+                L.string("60 minutes")
+            }
+        }
+
+        var detail: String {
+            switch self {
+            case .disabled:
+                L.string("Lock every time the app goes to the background.")
+            default:
+                L.format("Do not ask for Face ID or gesture again within %d minutes after a successful unlock.", rawValue)
+            }
+        }
+
+        var interval: TimeInterval {
+            TimeInterval(rawValue * 60)
+        }
     }
 
     @Published var sessionMode: SessionMode = .cover
     @Published var isConfigured = UserDefaults.standard.bool(forKey: "vault.isConfigured")
     @Published var isGestureUnlockEnabled = GestureCredentialService.hasTemplate
+    @Published var isBiometricUnlockEnabled = BiometricAuthService.availability().canEvaluate
+    @Published var requiresBiometricUnlock = UserDefaults.standard.object(forKey: biometricRequirementKey) as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(requiresBiometricUnlock, forKey: Self.biometricRequirementKey)
+            authMessage = nil
+            if !requiresBiometricUnlock && sessionMode == .cover {
+                sessionMode = .gestureGate
+            }
+        }
+    }
+    @Published var reauthenticationGracePeriod = ReauthenticationGracePeriod(
+        rawValue: UserDefaults.standard.integer(forKey: reauthenticationGracePeriodKey)
+    ) ?? .disabled {
+        didSet {
+            UserDefaults.standard.set(reauthenticationGracePeriod.rawValue, forKey: Self.reauthenticationGracePeriodKey)
+            if reauthenticationGracePeriod == .disabled {
+                lastBackgroundedAt = nil
+            }
+        }
+    }
     @Published var authMessage: String?
 
     private let configuredKey = "vault.isConfigured"
+    private static let biometricRequirementKey = "vault.requiresBiometricUnlock"
+    private static let reauthenticationGracePeriodKey = "vault.reauthenticationGracePeriodMinutes"
+    private var lastBackgroundedAt: Date?
 
     @discardableResult
     func configure(
@@ -35,9 +100,10 @@ final class AuthenticationManager: ObservableObject {
             }
             UserDefaults.standard.set(true, forKey: configuredKey)
             isConfigured = true
-            sessionMode = .cover
+            sessionMode = .realVault
             isGestureUnlockEnabled = true
-            authMessage = L.string("Vault created. Draw your gesture to enter.")
+            isBiometricUnlockEnabled = BiometricAuthService.availability().canEvaluate
+            authMessage = nil
             return true
         } catch {
             authMessage = L.format("Vault setup failed: %@", error.localizedDescription)
@@ -49,7 +115,25 @@ final class AuthenticationManager: ObservableObject {
         openFromDisguiseGesture(points)
     }
 
+    func unlockWithBiometrics() async {
+        let result = await BiometricAuthService.authenticate(reason: L.string("Authenticate with Face ID before entering your private vault."))
+        switch result {
+        case .success:
+            isBiometricUnlockEnabled = true
+            sessionMode = .gestureGate
+            authMessage = L.string("Face ID verified. Draw your gesture to continue.")
+        case .failure(let error):
+            isBiometricUnlockEnabled = BiometricAuthService.availability().canEvaluate
+            authMessage = L.format("Face ID verification failed: %@", error.localizedDescription)
+        }
+    }
+
     func openFromDisguiseGesture(_ points: [GesturePoint]) {
+        guard sessionMode == .gestureGate || !requiresBiometricUnlock else {
+            authMessage = L.string("Verify Face ID first.")
+            sessionMode = .cover
+            return
+        }
         do {
             let result = try GestureCredentialService.verify(points)
             guard result.isMatch else {
@@ -57,6 +141,7 @@ final class AuthenticationManager: ObservableObject {
                 return
             }
             sessionMode = .realVault
+            lastBackgroundedAt = nil
             authMessage = nil
         } catch {
             openDecoyVault()
@@ -65,6 +150,7 @@ final class AuthenticationManager: ObservableObject {
 
     func openDecoyVault() {
         sessionMode = .decoyVault
+        lastBackgroundedAt = nil
         authMessage = nil
     }
 
@@ -93,6 +179,33 @@ final class AuthenticationManager: ObservableObject {
 
     func lock() {
         sessionMode = .cover
+        lastBackgroundedAt = nil
+        isBiometricUnlockEnabled = BiometricAuthService.availability().canEvaluate
         VaultFileStore.clearTemporaryFiles()
+    }
+
+    func shouldLock(for scenePhase: ScenePhase, now: Date = Date()) -> Bool {
+        switch scenePhase {
+        case .background:
+            VaultFileStore.clearTemporaryFiles()
+            guard sessionMode == .realVault || sessionMode == .decoyVault else {
+                return true
+            }
+            guard reauthenticationGracePeriod != .disabled else {
+                return true
+            }
+            lastBackgroundedAt = now
+            return false
+        case .active:
+            guard let lastBackgroundedAt else { return false }
+            if now.timeIntervalSince(lastBackgroundedAt) > reauthenticationGracePeriod.interval {
+                return true
+            }
+            return false
+        case .inactive:
+            return false
+        @unknown default:
+            return false
+        }
     }
 }

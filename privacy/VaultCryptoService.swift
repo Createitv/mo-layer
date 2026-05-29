@@ -13,6 +13,7 @@ enum VaultCryptoService {
 
     static let rootKeyAccount = "vault.root.key"
     static let recoveryKeyAccount = "vault.recovery.key"
+    private static let synchronizableRootKeyAccount = "vault.root.key.icloud"
 
     static func hasRootKey() -> Bool {
         (try? KeychainService.read(account: rootKeyAccount)) != nil
@@ -20,10 +21,15 @@ enum VaultCryptoService {
 
     static func ensureRootKey() throws -> SymmetricKey {
         if let data = try? KeychainService.read(account: rootKeyAccount) {
+            try? syncRootKeyToICloudKeychain(rootKeyData: data)
             return SymmetricKey(data: data)
+        }
+        if let restored = try? restoreRootKeyFromICloudKeychain() {
+            return restored
         }
         let keyData = randomData(count: 32)
         try KeychainService.save(keyData, account: rootKeyAccount)
+        try? syncRootKeyToICloudKeychain(rootKeyData: keyData)
 
         let recoveryKey = makeRecoveryKey()
         try KeychainService.save(Data(recoveryKey.utf8), account: recoveryKeyAccount)
@@ -53,8 +59,22 @@ enum VaultCryptoService {
         let rootKeyData = try decrypt(package, using: recoveryWrappingKey(from: normalized))
         guard rootKeyData.count == 32 else { throw CryptoError.invalidRecoveryKey }
         try KeychainService.save(rootKeyData, account: rootKeyAccount)
+        try? syncRootKeyToICloudKeychain(rootKeyData: rootKeyData)
         try KeychainService.save(Data(normalized.utf8), account: recoveryKeyAccount)
         return SymmetricKey(data: rootKeyData)
+    }
+
+    @discardableResult
+    static func restoreRootKeyFromICloudKeychain() throws -> SymmetricKey {
+        let rootKeyData = try KeychainService.read(account: synchronizableRootKeyAccount, synchronizable: true)
+        guard rootKeyData.count == 32 else { throw CryptoError.invalidRecoveryKey }
+        try KeychainService.save(rootKeyData, account: rootKeyAccount)
+        return SymmetricKey(data: rootKeyData)
+    }
+
+    static func syncRootKeyToICloudKeychain() throws {
+        let rootKeyData = try KeychainService.read(account: rootKeyAccount)
+        try syncRootKeyToICloudKeychain(rootKeyData: rootKeyData)
     }
 
     static func canRestoreRootKey(from package: Data, recoveryKey: String? = nil) -> Bool {
@@ -146,6 +166,15 @@ enum VaultCryptoService {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .uppercased()
             .filter { $0.isLetter || $0.isNumber }
+    }
+
+    private static func syncRootKeyToICloudKeychain(rootKeyData: Data) throws {
+        try KeychainService.save(
+            rootKeyData,
+            account: synchronizableRootKeyAccount,
+            accessibility: kSecAttrAccessibleAfterFirstUnlock,
+            synchronizable: true
+        )
     }
 
     private static func recoveryWrappingKey(from recoveryKey: String) -> SymmetricKey {

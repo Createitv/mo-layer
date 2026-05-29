@@ -47,13 +47,14 @@ struct ImportSummary: Identifiable, Equatable {
 private extension VaultItemKind {
     func importSummaryName(count: Int) -> String {
         switch self {
-        case .image: count == 1 ? "Image" : "Images"
-        case .video: count == 1 ? "Video" : "Videos"
-        case .audio: count == 1 ? "Audio" : "Audio"
-        case .document: count == 1 ? "Document" : "Documents"
-        case .archive: count == 1 ? "Archive" : "Archives"
-        case .link: count == 1 ? "Link" : "Links"
-        case .other: count == 1 ? "File" : "Files"
+        case .image: L.string(count == 1 ? "Image" : "Images")
+        case .livePhoto: L.string(count == 1 ? "Live Photo" : "Live Photos")
+        case .video: L.string(count == 1 ? "Video" : "Videos")
+        case .audio: L.string("Audio")
+        case .document: L.string(count == 1 ? "Document" : "Documents")
+        case .archive: L.string(count == 1 ? "Archive" : "Archives")
+        case .link: L.string(count == 1 ? "Link" : "Links")
+        case .other: L.string(count == 1 ? "File" : "Files")
         }
     }
 }

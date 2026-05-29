@@ -3,6 +3,7 @@ import SwiftData
 
 enum VaultItemKind: String, Codable, CaseIterable {
     case image
+    case livePhoto
     case video
     case audio
     case document
@@ -47,6 +48,13 @@ struct VaultMetadata: Codable {
     var originalExtension: String? = nil
 }
 
+struct LivePhotoPackage: Codable {
+    var stillData: Data
+    var pairedVideoData: Data
+    var stillFilename: String
+    var pairedVideoFilename: String
+}
+
 @Model
 final class VaultItem {
     var id: String = UUID().uuidString
@@ -67,6 +75,7 @@ final class VaultItem {
     var localRevision: Int = 1
     var lastDownloadError: String?
     var downloadedAt: Date?
+    var importFingerprint: String?
 
     var kind: VaultItemKind {
         get { VaultItemKind(rawValue: kindRawValue) ?? .other }
@@ -93,7 +102,8 @@ final class VaultItem {
         byteSize: Int64,
         folderId: String? = nil,
         assetState: VaultAssetState = .local,
-        cloudRecordName: String? = nil
+        cloudRecordName: String? = nil,
+        importFingerprint: String? = nil
     ) {
         self.id = id
         self.kindRawValue = kind.rawValue
@@ -113,6 +123,7 @@ final class VaultItem {
         self.localRevision = 1
         self.lastDownloadError = nil
         self.downloadedAt = assetState == .local ? Date() : nil
+        self.importFingerprint = importFingerprint
     }
 }
 

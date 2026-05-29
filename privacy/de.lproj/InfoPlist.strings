@@ -2,3 +2,4 @@
 "NSCameraUsageDescription" = "Wird verwendet, um Fotos direkt im verschlusselten Tresor zu speichern und bei aktivierter Eindringlingserfassung fehlgeschlagene Entsperrversuche zu protokollieren.";
 "NSPhotoLibraryAddUsageDescription" = "Wird verwendet, um exportierte Inhalte auf Wunsch in deiner Fotomediathek zu speichern.";
 "NSPhotoLibraryUsageDescription" = "Wird verwendet, um Fotos und Videos auszuwahlen, die verschlusselt in den privaten Tresor importiert werden.";
+"NSFaceIDUsageDescription" = "Used as the first unlock layer before your private gesture can open the encrypted vault.";

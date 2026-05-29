@@ -1,4 +1,4 @@
-import StoreKit
+import RevenueCat
 import SwiftData
 import SwiftUI
 
@@ -20,7 +20,7 @@ struct VaultItemDetailView: View {
                         Text(vaultStore.metadata(for: item)?.originalName ?? L.string("Private Item"))
                             .font(.title3.bold())
                             .foregroundStyle(AppTheme.ink)
-                        Text("\(ByteCountFormatter.string(fromByteCount: item.byteSize, countStyle: .file)) · \(item.syncStatus.title)")
+                        Text(detailLine)
                             .foregroundStyle(AppTheme.secondaryText)
                         HStack {
                             StatusPill(title: L.string("Encrypted Storage"), systemImage: "lock.doc", tint: AppTheme.success)
@@ -62,7 +62,7 @@ struct VaultItemDetailView: View {
                     .disabled(isPreparingShare)
                 }
 
-                Picker("Move to Album", selection: Binding(
+                Picker(L.string("Move to Album"), selection: Binding(
                     get: { item.folderId ?? "" },
                     set: { newValue in
                         Task {
@@ -71,7 +71,7 @@ struct VaultItemDetailView: View {
                         }
                     }
                 )) {
-                    Text("No Album").tag("")
+                    Text(L.string("No Album")).tag("")
                     ForEach(folders.filter { $0.deletedAt == nil }) { folder in
                         Text(vaultStore.folderName(folder)).tag(folder.id)
                     }
@@ -95,7 +95,7 @@ struct VaultItemDetailView: View {
             }
             .padding()
             .background(AppTheme.background)
-            .navigationTitle("Private Item")
+            .navigationTitle(L.string("Private Item"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -128,39 +128,51 @@ struct VaultItemDetailView: View {
         guard let url = try? await vaultStore.decryptedTemporaryURL(for: item, context: modelContext, sync: sync) else { return }
         sharePayload = SharePayload(items: [url])
     }
+
+    private var detailLine: String {
+        "\(ByteCountFormatter.string(fromByteCount: item.byteSize, countStyle: .file)) · \(item.syncStatus.title)"
+    }
 }
 
 struct MembershipView: View {
     @EnvironmentObject private var subscription: SubscriptionManager
+    var isRequiredBeforeUse = false
+
+    init(isRequiredBeforeUse: Bool = false) {
+        self.isRequiredBeforeUse = isRequiredBeforeUse
+    }
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 16) {
-                    AppCard {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text(L.string("Pro Private Vault"))
-                                .font(.system(.title2, design: .rounded, weight: .bold))
-                                .foregroundStyle(AppTheme.ink)
-                            Text(L.string("The free plan keeps local encryption and iCloud encrypted sync. Pro unlocks unlimited storage, batch organization, advanced disguise, decoy passcodes, intrusion records, and advanced recovery."))
-                                .foregroundStyle(AppTheme.secondaryText)
-                            StatusPill(title: subscription.statusText, systemImage: "star.circle", tint: subscription.isPro ? AppTheme.success : AppTheme.primary)
+                    if subscription.loadState == .loading {
+                        ProgressView(L.string("Loading subscription plans..."))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                    }
+
+                    if case .failed(let message) = subscription.loadState {
+                        AppCard {
+                            Label(message, systemImage: "exclamationmark.triangle")
+                                .foregroundStyle(AppTheme.warning)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
 
-                    ForEach(subscription.products, id: \.id) { product in
+                    ForEach(subscription.packages, id: \.storeProduct.productIdentifier) { package in
                         AppCard {
                             HStack {
                                 VStack(alignment: .leading, spacing: 4) {
-                                    Text(localizedName(for: product))
+                                    Text(localizedName(for: package))
                                         .font(.headline)
-                                    Text(localizedDescription(for: product))
+                                    Text(localizedDescription(for: package))
                                         .font(.caption)
                                         .foregroundStyle(AppTheme.secondaryText)
                                 }
                                 Spacer()
-                                Button(product.displayPrice) {
-                                    Task { await subscription.purchase(product) }
+                                Button(actionTitle(for: package)) {
+                                    Task { await subscription.purchase(package) }
                                 }
                                 .buttonStyle(.borderedProminent)
                                 .tint(AppTheme.primary)
@@ -168,33 +180,58 @@ struct MembershipView: View {
                         }
                     }
 
+                    ForEach(subscription.missingProductIDs, id: \.self) { productID in
+                        AppCard {
+                            HStack(spacing: 12) {
+                                Image(systemName: "exclamationmark.icloud")
+                                    .foregroundStyle(AppTheme.warning)
+                                    .frame(width: 32, height: 32)
+                                    .background(AppTheme.warning.opacity(0.12))
+                                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(localizedName(forProductID: productID))
+                                        .font(.headline)
+                                    Text(L.string("Not returned by RevenueCat. Check the current offering and App Store Connect availability for this plan."))
+                                        .font(.caption)
+                                        .foregroundStyle(AppTheme.secondaryText)
+                                }
+                                Spacer()
+                            }
+                        }
+                    }
+
+                    AppCard {
+                        VStack(alignment: .leading, spacing: 8) {
+                            FeatureLine(L.string("Save unlimited photos, videos, and files"))
+                            FeatureLine(L.string("Batch import and advanced organization"))
+                            FeatureLine(L.string("Disguised entry and decoy passcode space"))
+                            FeatureLine(L.string("Intrusion records and advanced recovery"))
+                        }
+                    }
+
                     Button {
-                        Task { await subscription.refreshEntitlements() }
+                        Task { await subscription.restorePurchases() }
                     } label: {
                         Label(L.string("Restore Purchases"), systemImage: "arrow.clockwise")
                     }
                     .buttonStyle(SecondaryButtonStyle())
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        FeatureLine(L.string("Save unlimited photos, videos, and files"))
-                        FeatureLine(L.string("Batch import and advanced organization"))
-                        FeatureLine(L.string("Disguised entry and decoy passcode space"))
-                        FeatureLine(L.string("Intrusion records and advanced recovery"))
-                    }
-                    .padding(.top, 8)
                 }
                 .padding()
             }
             .background(AppTheme.background)
             .navigationTitle(L.string("Pro"))
+            .task {
+                await subscription.load()
+            }
         }
     }
 
-    private func localizedName(for product: Product) -> String {
-        if shouldUseStoreKitText(product.displayName) {
-            return product.displayName
+    private func localizedName(for package: Package) -> String {
+        let product = package.storeProduct
+        if shouldUseStoreKitText(product.localizedTitle) {
+            return product.localizedTitle
         }
-        switch product.id {
+        switch product.productIdentifier {
         case SubscriptionManager.monthly:
             return L.string("Monthly Pro")
         case SubscriptionManager.yearly:
@@ -202,15 +239,29 @@ struct MembershipView: View {
         case SubscriptionManager.lifetime:
             return L.string("Lifetime Pro")
         default:
-            return product.displayName
+            return product.localizedTitle
         }
     }
 
-    private func localizedDescription(for product: Product) -> String {
-        if shouldUseStoreKitText(product.description) {
-            return product.description
+    private func localizedName(forProductID productID: String) -> String {
+        switch productID {
+        case SubscriptionManager.monthly:
+            return L.string("Monthly Pro")
+        case SubscriptionManager.yearly:
+            return L.string("Yearly Pro")
+        case SubscriptionManager.lifetime:
+            return L.string("Lifetime Pro")
+        default:
+            return productID
         }
-        switch product.id {
+    }
+
+    private func localizedDescription(for package: Package) -> String {
+        let product = package.storeProduct
+        if shouldUseStoreKitText(product.localizedDescription) {
+            return product.localizedDescription
+        }
+        switch product.productIdentifier {
         case SubscriptionManager.monthly:
             return L.string("Monthly access to Pro vault features.")
         case SubscriptionManager.yearly:
@@ -218,7 +269,18 @@ struct MembershipView: View {
         case SubscriptionManager.lifetime:
             return L.string("One-time unlock for current Pro vault features.")
         default:
-            return product.description
+            return product.localizedDescription
+        }
+    }
+
+    private func actionTitle(for package: Package) -> String {
+        switch package.storeProduct.productIdentifier {
+        case SubscriptionManager.monthly, SubscriptionManager.yearly:
+            return L.string("Start 7-Day Trial")
+        case SubscriptionManager.lifetime:
+            return package.localizedPriceString
+        default:
+            return package.localizedPriceString
         }
     }
 

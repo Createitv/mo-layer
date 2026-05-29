@@ -2,3 +2,4 @@
 "NSCameraUsageDescription" = "사진을 암호화된 보관함에 직접 저장하고, 침입 캡처를 켠 경우 잠금 해제 실패를 기록하는 데 사용됩니다.";
 "NSPhotoLibraryAddUsageDescription" = "내보내기를 선택할 때 콘텐츠를 사진 보관함에 저장하는 데 사용됩니다.";
 "NSPhotoLibraryUsageDescription" = "암호화하여 개인 보관함으로 가져올 사진과 비디오를 선택하는 데 사용됩니다.";
+"NSFaceIDUsageDescription" = "Used as the first unlock layer before your private gesture can open the encrypted vault.";

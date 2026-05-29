@@ -7,7 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		FE88000B2FC9000000A00001 /* privacyLiveActivity.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = FE8800012FC9000000A00001 /* privacyLiveActivity.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		FE9900112FC43A1100A00001 /* privacyShareExtension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = FE9900012FC43A1100A00001 /* privacyShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		FEA100012FC6A00000A00001 /* RevenueCat in Frameworks */ = {isa = PBXBuildFile; productRef = FEA100032FC6A00000A00001 /* RevenueCat */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -34,6 +36,7 @@
 			dstPath = "";
 			dstSubfolderSpec = 13;
 			files = (
+				FE88000B2FC9000000A00001 /* privacyLiveActivity.appex in Embed App Extensions */,
 				FE9900112FC43A1100A00001 /* privacyShareExtension.appex in Embed App Extensions */,
 			);
 			name = "Embed App Extensions";
@@ -45,6 +48,7 @@
 		FE153F502FB9B262004FFC9E /* privacy.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = privacy.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		FE153F612FB9B264004FFC9E /* privacyTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = privacyTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		FE153F6B2FB9B264004FFC9E /* privacyUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = privacyUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		FE8800012FC9000000A00001 /* privacyLiveActivity.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = privacyLiveActivity.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		FE9900012FC43A1100A00001 /* privacyShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = privacyShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -55,6 +59,13 @@
 				Info.plist,
 			);
 			target = FE153F4F2FB9B262004FFC9E /* privacy */;
+		};
+		FE8800032FC9000000A00001 /* Exceptions for "privacyLiveActivity" folder in "privacyLiveActivity" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = FE8800072FC9000000A00001 /* privacyLiveActivity */;
 		};
 		FE9900122FC43A1100A00001 /* Exceptions for "privacyShareExtension" folder in "privacyShareExtension" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
@@ -84,6 +95,14 @@
 			path = privacyUITests;
 			sourceTree = "<group>";
 		};
+		FE8800022FC9000000A00001 /* privacyLiveActivity */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				FE8800032FC9000000A00001 /* Exceptions for "privacyLiveActivity" folder in "privacyLiveActivity" target */,
+			);
+			path = privacyLiveActivity;
+			sourceTree = "<group>";
+		};
 		FE9900022FC43A1100A00001 /* privacyShareExtension */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
@@ -99,6 +118,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				FEA100012FC6A00000A00001 /* RevenueCat in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -110,6 +130,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		FE153F682FB9B264004FFC9E /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		FE8800042FC9000000A00001 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -130,6 +157,7 @@
 			isa = PBXGroup;
 			children = (
 				FE153F522FB9B262004FFC9E /* privacy */,
+				FE8800022FC9000000A00001 /* privacyLiveActivity */,
 				FE9900022FC43A1100A00001 /* privacyShareExtension */,
 				FE153F642FB9B264004FFC9E /* privacyTests */,
 				FE153F6E2FB9B264004FFC9E /* privacyUITests */,
@@ -141,6 +169,7 @@
 			isa = PBXGroup;
 			children = (
 				FE153F502FB9B262004FFC9E /* privacy.app */,
+				FE8800012FC9000000A00001 /* privacyLiveActivity.appex */,
 				FE9900012FC43A1100A00001 /* privacyShareExtension.appex */,
 				FE153F612FB9B264004FFC9E /* privacyTests.xctest */,
 				FE153F6B2FB9B264004FFC9E /* privacyUITests.xctest */,
@@ -169,6 +198,7 @@
 			);
 			name = privacy;
 			packageProductDependencies = (
+				FEA100032FC6A00000A00001 /* RevenueCat */,
 			);
 			productName = privacy;
 			productReference = FE153F502FB9B262004FFC9E /* privacy.app */;
@@ -220,6 +250,28 @@
 			productReference = FE153F6B2FB9B264004FFC9E /* privacyUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
+		FE8800072FC9000000A00001 /* privacyLiveActivity */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = FE88000A2FC9000000A00001 /* Build configuration list for PBXNativeTarget "privacyLiveActivity" */;
+			buildPhases = (
+				FE8800052FC9000000A00001 /* Sources */,
+				FE8800042FC9000000A00001 /* Frameworks */,
+				FE8800062FC9000000A00001 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				FE8800022FC9000000A00001 /* privacyLiveActivity */,
+			);
+			name = privacyLiveActivity;
+			packageProductDependencies = (
+			);
+			productName = privacyLiveActivity;
+			productReference = FE8800012FC9000000A00001 /* privacyLiveActivity.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 		FE9900032FC43A1100A00001 /* privacyShareExtension */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = FE9900202FC43A1100A00001 /* Build configuration list for PBXNativeTarget "privacyShareExtension" */;
@@ -263,6 +315,9 @@
 						CreatedOnToolsVersion = 26.4.1;
 						TestTargetID = FE153F4F2FB9B262004FFC9E;
 					};
+					FE8800072FC9000000A00001 = {
+						CreatedOnToolsVersion = 26.4.1;
+					};
 					FE9900032FC43A1100A00001 = {
 						CreatedOnToolsVersion = 26.4.1;
 					};
@@ -283,12 +338,16 @@
 			);
 			mainGroup = FE153F472FB9B262004FFC9E;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				FEA100022FC6A00000A00001 /* XCRemoteSwiftPackageReference "purchases-ios-spm" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = FE153F512FB9B262004FFC9E /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
 				FE153F4F2FB9B262004FFC9E /* privacy */,
+				FE8800072FC9000000A00001 /* privacyLiveActivity */,
 				FE9900032FC43A1100A00001 /* privacyShareExtension */,
 				FE153F602FB9B264004FFC9E /* privacyTests */,
 				FE153F6A2FB9B264004FFC9E /* privacyUITests */,
@@ -312,6 +371,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		FE153F692FB9B264004FFC9E /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		FE8800062FC9000000A00001 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -343,6 +409,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		FE153F672FB9B264004FFC9E /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		FE8800052FC9000000A00001 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -647,6 +720,64 @@
 			};
 			name = Release;
 		};
+		FE8800082FC9000000A00001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 677U99F8TX;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = privacyLiveActivity/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = app.landlady.www.privacy.LiveActivity;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		FE8800092FC9000000A00001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 677U99F8TX;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = privacyLiveActivity/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = app.landlady.www.privacy.LiveActivity;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 		FE9900212FC43A1100A00001 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -744,6 +875,15 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		FE88000A2FC9000000A00001 /* Build configuration list for PBXNativeTarget "privacyLiveActivity" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				FE8800082FC9000000A00001 /* Debug */,
+				FE8800092FC9000000A00001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		FE9900202FC43A1100A00001 /* Build configuration list for PBXNativeTarget "privacyShareExtension" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -754,6 +894,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		FEA100022FC6A00000A00001 /* XCRemoteSwiftPackageReference "purchases-ios-spm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/RevenueCat/purchases-ios-spm.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 5.0.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		FEA100032FC6A00000A00001 /* RevenueCat */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FEA100022FC6A00000A00001 /* XCRemoteSwiftPackageReference "purchases-ios-spm" */;
+			productName = RevenueCat;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = FE153F482FB9B262004FFC9E /* Project object */;
 }

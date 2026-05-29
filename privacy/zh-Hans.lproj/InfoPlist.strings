@@ -1,4 +1,5 @@
 "CFBundleTypeName" = "加密保险箱文件";
 "NSCameraUsageDescription" = "用于拍照直存保险箱，以及你主动开启入侵拍照后记录解锁失败。";
+"NSFaceIDUsageDescription" = "用于作为第一层解锁验证，通过后才可绘制私密轨迹打开加密保险箱。";
 "NSPhotoLibraryAddUsageDescription" = "用于在你主动导出时将内容保存回系统相册。";
 "NSPhotoLibraryUsageDescription" = "用于选择照片和视频并加密导入私密保险箱。";

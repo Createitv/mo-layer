@@ -11,9 +11,10 @@ enum KeychainService {
         _ data: Data,
         account: String,
         accessGroup: String? = nil,
-        accessibility: CFString = kSecAttrAccessibleWhenUnlocked
+        accessibility: CFString = kSecAttrAccessibleWhenUnlocked,
+        synchronizable: Bool = false
     ) throws {
-        var query = baseQuery(account: account, accessGroup: accessGroup)
+        var query = baseQuery(account: account, accessGroup: accessGroup, synchronizable: synchronizable)
         SecItemDelete(query as CFDictionary)
 
         query[kSecValueData as String] = data
@@ -23,8 +24,8 @@ enum KeychainService {
         guard status == errSecSuccess else { throw KeychainError.unexpectedStatus(status) }
     }
 
-    static func read(account: String, accessGroup: String? = nil) throws -> Data {
-        var query = baseQuery(account: account, accessGroup: accessGroup)
+    static func read(account: String, accessGroup: String? = nil, synchronizable: Bool = false) throws -> Data {
+        var query = baseQuery(account: account, accessGroup: accessGroup, synchronizable: synchronizable)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
 
@@ -37,11 +38,11 @@ enum KeychainService {
         return data
     }
 
-    static func delete(account: String, accessGroup: String? = nil) {
-        SecItemDelete(baseQuery(account: account, accessGroup: accessGroup) as CFDictionary)
+    static func delete(account: String, accessGroup: String? = nil, synchronizable: Bool = false) {
+        SecItemDelete(baseQuery(account: account, accessGroup: accessGroup, synchronizable: synchronizable) as CFDictionary)
     }
 
-    private static func baseQuery(account: String, accessGroup: String?) -> [String: Any] {
+    private static func baseQuery(account: String, accessGroup: String?, synchronizable: Bool) -> [String: Any] {
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: "privacy.vault",
@@ -49,6 +50,9 @@ enum KeychainService {
         ]
         if let accessGroup {
             query[kSecAttrAccessGroup as String] = accessGroup
+        }
+        if synchronizable {
+            query[kSecAttrSynchronizable as String] = kCFBooleanTrue as Any
         }
         return query
     }

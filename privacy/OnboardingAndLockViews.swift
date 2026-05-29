@@ -4,6 +4,7 @@ import SwiftData
 struct OnboardingView: View {
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var auth: AuthenticationManager
+    @EnvironmentObject private var subscription: SubscriptionManager
     @EnvironmentObject private var sync: CloudKitSyncService
     @EnvironmentObject private var vaultStore: VaultStore
     @State private var step: SetupStep = .securityCode
@@ -35,6 +36,8 @@ struct OnboardingView: View {
 
                     SetupProgressView(step: step)
 
+                    MembershipSetupNotice()
+
                     ZStack {
                         stepContent
                             .id(step)
@@ -47,7 +50,7 @@ struct OnboardingView: View {
 
                     HStack(spacing: 12) {
                         if step != .securityCode {
-                            Button("Back") {
+                            Button(L.string("Back")) {
                                 withAnimation { step = step.previous }
                             }
                             .buttonStyle(SetupBackButtonStyle())
@@ -63,7 +66,7 @@ struct OnboardingView: View {
                         Button {
                             showCloudRestore = true
                         } label: {
-                            Label("Restore Existing iCloud Vault", systemImage: "icloud.and.arrow.down")
+                            Label(L.string("Restore Existing iCloud Vault"), systemImage: "icloud.and.arrow.down")
                         }
                         .buttonStyle(SecondaryButtonStyle())
                     }
@@ -81,6 +84,8 @@ struct OnboardingView: View {
         .onAppear { animateMark = true }
         .sheet(isPresented: $showCloudRestore) {
             CloudVaultRestoreView()
+                .environmentObject(auth)
+                .environmentObject(subscription)
                 .environmentObject(sync)
                 .environmentObject(vaultStore)
         }
@@ -116,7 +121,7 @@ struct OnboardingView: View {
             SetupCard(icon: "checkmark.seal.fill", title: L.string("Confirm Security Code"), detail: L.string("Make sure you have saved or remembered it. If you forget your gesture later, this code lets you create a new one.")) {
                 BackupKeyGridInput(value: $confirmBackupKey, length: backupKeyLength)
                 if !confirmBackupKey.isEmpty && normalizedSecurityCode(confirmBackupKey) != normalizedSecurityCode(backupKey) {
-                    Text("Security codes do not match")
+                    Text(L.string("Security codes do not match"))
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(AppTheme.warning)
                 }
@@ -215,9 +220,34 @@ struct OnboardingView: View {
     }
 }
 
+private struct MembershipSetupNotice: View {
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "star.circle.fill")
+                .font(.title3)
+                .foregroundStyle(AppTheme.primary)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(L.string("Membership required after setup"))
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(AppTheme.ink)
+                Text(L.string("After the security setup is complete, start the 7-day trial or choose a monthly, yearly, or lifetime plan before using the vault. You can cancel subscriptions anytime in your Apple ID settings."))
+                    .font(.caption)
+                    .foregroundStyle(AppTheme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppTheme.primary.opacity(0.07))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(AppTheme.primary.opacity(0.14)))
+    }
+}
+
 private struct CloudVaultRestoreView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var subscription: SubscriptionManager
     @EnvironmentObject private var sync: CloudKitSyncService
     @EnvironmentObject private var vaultStore: VaultStore
     @State private var recoveryKey = ""
@@ -228,14 +258,14 @@ private struct CloudVaultRestoreView: View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 18) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Label("Restore iCloud Vault", systemImage: "icloud.and.arrow.down")
+                    Label(L.string("Restore iCloud Vault"), systemImage: "icloud.and.arrow.down")
                         .font(.title3.bold())
-                    Text("Enter the recovery key shown on your original device. The app will restore the same encryption root key, then you can set a new local gesture for this device.")
+                    Text(L.string("Enter the recovery key shown on your original device. The app will restore the same encryption root key, then you can set a new local gesture for this device."))
                         .font(.subheadline)
                         .foregroundStyle(AppTheme.secondaryText)
                 }
 
-                SecureField("Recovery key", text: $recoveryKey)
+                SecureField(L.string("Recovery key"), text: $recoveryKey)
                     .textContentType(.password)
                     .textInputAutocapitalization(.characters)
                     .textFieldStyle(.roundedBorder)
@@ -247,7 +277,14 @@ private struct CloudVaultRestoreView: View {
                 }
 
                 if didRestore {
-                    StatusPill(title: "Root key restored. Continue setup.", systemImage: "checkmark.circle.fill", tint: AppTheme.success)
+                    StatusPill(title: L.string("Root key restored. Continue setup."), systemImage: "checkmark.circle.fill", tint: AppTheme.success)
+                }
+
+                if !subscription.canImportAndSync {
+                    Label(L.string("Active Pro is required to restore encrypted iCloud backups."), systemImage: "star.circle")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(AppTheme.warning)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 Spacer()
@@ -268,17 +305,17 @@ private struct CloudVaultRestoreView: View {
                         }
                     }
                 } label: {
-                    Label(isRestoring ? "Restoring" : "Restore from iCloud", systemImage: "key.icloud")
+                    Label(isRestoring ? L.string("Restoring") : L.string("Restore from iCloud"), systemImage: "key.icloud")
                 }
                 .buttonStyle(AppButtonStyle())
-                .disabled(isRestoring || recoveryKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(isRestoring || !subscription.canImportAndSync || recoveryKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             .padding()
-            .navigationTitle("iCloud Restore")
+            .navigationTitle(L.string("iCloud Restore"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") { dismiss() }
+                    Button(L.string("Close")) { dismiss() }
                 }
             }
         }
@@ -335,7 +372,7 @@ private struct BackupKeyGridInput: View {
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Delete one security-code digit")
+            .accessibilityLabel(L.string("Delete one security-code digit"))
         }
     }
 }
@@ -357,7 +394,7 @@ private struct GestureTutorialCard: View {
                     .animation(.easeInOut(duration: 1.8).repeatForever(autoreverses: false), value: animate)
 
                 Circle()
-                    .fill(AppTheme.primary)
+                    .fill(AppTheme.primaryFill)
                     .frame(width: 11, height: 11)
                     .offset(x: animate ? 82 : -88, y: animate ? 10 : 34)
                     .animation(.easeInOut(duration: 1.8).repeatForever(autoreverses: false), value: animate)
@@ -555,10 +592,10 @@ struct LockView: View {
                     .foregroundStyle(AppTheme.primary)
 
                 VStack(spacing: 8) {
-                    Text("Private Space Locked")
+                    Text(L.string("Private Space Locked"))
                         .font(.system(.largeTitle, design: .rounded, weight: .bold))
                         .foregroundStyle(AppTheme.ink)
-                    Text("Unlock to view the vault and security center.")
+                    Text(L.string("Unlock to view the vault and security center."))
                         .foregroundStyle(AppTheme.secondaryText)
                 }
                 .multilineTextAlignment(.center)
@@ -572,7 +609,7 @@ struct LockView: View {
                     }
                 }
 
-                Button("Forgot gesture? Reset with security code") {
+                Button(L.string("Forgot gesture? Reset with security code")) {
                     showResetGesture = true
                 }
                 .buttonStyle(SecondaryButtonStyle())
@@ -587,6 +624,113 @@ struct LockView: View {
         }
         .sheet(isPresented: $showResetGesture) {
             GestureResetView()
+        }
+    }
+}
+
+struct BiometricLockView: View {
+    @EnvironmentObject private var auth: AuthenticationManager
+    @State private var isAuthenticating = false
+
+    private var availability: BiometricAvailability {
+        BiometricAuthService.availability()
+    }
+
+    var body: some View {
+        ZStack {
+            AppTheme.background.ignoresSafeArea()
+            VStack(spacing: 24) {
+                Image(systemName: "faceid")
+                    .font(.system(size: 58, weight: .semibold))
+                    .foregroundStyle(AppTheme.primary)
+
+                VStack(spacing: 8) {
+                    Text(L.string("Face ID Required"))
+                        .font(.system(.largeTitle, design: .rounded, weight: .bold))
+                        .foregroundStyle(AppTheme.ink)
+                    Text(L.string("First verify this device with Face ID, then draw your private gesture to open the real vault."))
+                        .foregroundStyle(AppTheme.secondaryText)
+                        .multilineTextAlignment(.center)
+                }
+
+                AppCard {
+                    VStack(alignment: .leading, spacing: 12) {
+                        SecurityStageRow(
+                            number: "1",
+                            title: L.string("Device owner check"),
+                            detail: L.string("Face ID is verified by iOS. The app does not receive or store your face data."),
+                            isActive: true
+                        )
+                        SecurityStageRow(
+                            number: "2",
+                            title: L.string("Gesture check"),
+                            detail: L.string("After Face ID succeeds, draw your gesture. Only both checks together unlock private content."),
+                            isActive: false
+                        )
+                    }
+                }
+
+                Button {
+                    Task { await authenticate() }
+                } label: {
+                    Label(isAuthenticating ? L.string("Verifying Face ID") : L.string("Unlock with Face ID"), systemImage: "faceid")
+                }
+                .buttonStyle(AppButtonStyle())
+                .disabled(isAuthenticating || !availability.canEvaluate)
+
+                if !availability.canEvaluate {
+                    Text(L.string("Face ID or device authentication is not available on this device. Enable Face ID and a device passcode in iPhone Settings."))
+                        .font(.footnote)
+                        .foregroundStyle(AppTheme.warning)
+                        .multilineTextAlignment(.center)
+                }
+
+                if let message = auth.authMessage {
+                    Text(message)
+                        .font(.footnote)
+                        .foregroundStyle(AppTheme.warning)
+                        .multilineTextAlignment(.center)
+                }
+            }
+            .padding(28)
+        }
+        .task {
+            guard availability.canEvaluate, !isAuthenticating else { return }
+            await authenticate()
+        }
+    }
+
+    private func authenticate() async {
+        isAuthenticating = true
+        await auth.unlockWithBiometrics()
+        isAuthenticating = false
+    }
+}
+
+private struct SecurityStageRow: View {
+    let number: String
+    let title: String
+    let detail: String
+    let isActive: Bool
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Text(number)
+                .font(.headline.weight(.bold))
+                .foregroundStyle(isActive ? .white : AppTheme.primary)
+                .frame(width: 30, height: 30)
+                .background(isActive ? AppTheme.primary : AppTheme.primary.opacity(0.1))
+                .clipShape(Circle())
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.headline)
+                    .foregroundStyle(AppTheme.ink)
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(AppTheme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 }

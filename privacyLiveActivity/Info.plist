@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Palimpsest</string>
+	<string>Palimpsest Recording</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -22,24 +22,8 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>NSExtension</key>
 	<dict>
-		<key>NSExtensionAttributes</key>
-		<dict>
-			<key>NSExtensionActivationRule</key>
-			<dict>
-				<key>NSExtensionActivationSupportsAttachmentsWithMaxCount</key>
-				<integer>20</integer>
-				<key>NSExtensionActivationSupportsFileWithMaxCount</key>
-				<integer>20</integer>
-				<key>NSExtensionActivationSupportsImageWithMaxCount</key>
-				<integer>20</integer>
-				<key>NSExtensionActivationSupportsMovieWithMaxCount</key>
-				<integer>20</integer>
-			</dict>
-		</dict>
 		<key>NSExtensionPointIdentifier</key>
-		<string>com.apple.share-services</string>
-		<key>NSExtensionPrincipalClass</key>
-		<string>ShareViewController</string>
+		<string>com.apple.widgetkit-extension</string>
 	</dict>
 </dict>
 </plist>

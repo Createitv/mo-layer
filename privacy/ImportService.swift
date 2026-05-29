@@ -1,4 +1,5 @@
 import Foundation
+import Photos
 import PhotosUI
 import SwiftData
 import SwiftUI
@@ -7,6 +8,31 @@ import UniformTypeIdentifiers
 enum ImportService {
     static let appGroupIdentifier = "group.app.landlady.www.privacy"
     static let sharedInboxDirectoryName = "SharedImports"
+    static let sharedImportManifestName = "pending-imports.json"
+
+    struct PendingSharedImport: Identifiable, Equatable {
+        let id: String
+        let originalName: String
+        let mimeType: String
+        let typeIdentifier: String
+        let byteSize: Int64
+        let createdAt: Date
+        let fileURL: URL
+    }
+
+    private struct SharedImportManifest: Codable {
+        var items: [SharedImportManifestItem]
+    }
+
+    private struct SharedImportManifestItem: Codable {
+        var id: String
+        var originalName: String
+        var storedFileName: String
+        var typeIdentifier: String
+        var mimeType: String
+        var byteSize: Int64
+        var createdAt: Date
+    }
 
     @MainActor
     @discardableResult
@@ -18,6 +44,21 @@ enum ImportService {
     ) async -> ImportSummary {
         var summary = ImportSummary()
         for item in items {
+            if let livePhotoImport = await livePhotoImport(from: item),
+               let packageData = try? binaryPropertyListEncoder.encode(livePhotoImport.package) {
+                let success = await vaultStore.importData(
+                    packageData,
+                    originalName: livePhotoImport.originalName,
+                    mimeType: "application/vnd.apple.live-photo",
+                    source: "Photos",
+                    kind: .livePhoto,
+                    context: context,
+                    sync: sync
+                )
+                success ? summary.record(.livePhoto) : summary.recordFailure()
+                continue
+            }
+
             guard let data = try? await item.loadTransferable(type: Data.self) else { continue }
             let contentType = item.supportedContentTypes.first
             let kind: VaultItemKind = contentType?.conforms(to: UTType.movie) == true ? .video : .image
@@ -38,6 +79,68 @@ enum ImportService {
             }
         }
         return summary
+    }
+
+    private static var binaryPropertyListEncoder: PropertyListEncoder {
+        let encoder = PropertyListEncoder()
+        encoder.outputFormat = .binary
+        return encoder
+    }
+
+    private struct LivePhotoImport {
+        let package: LivePhotoPackage
+        let originalName: String
+    }
+
+    private static func livePhotoImport(from item: PhotosPickerItem) async -> LivePhotoImport? {
+        guard let identifier = item.itemIdentifier else { return nil }
+        let result = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil)
+        guard let asset = result.firstObject,
+              asset.mediaSubtypes.contains(.photoLive) else {
+            return nil
+        }
+
+        let resources = PHAssetResource.assetResources(for: asset)
+        guard let photoResource = resources.first(where: { $0.type == .photo || $0.type == .fullSizePhoto }),
+              let pairedVideoResource = resources.first(where: { $0.type == .pairedVideo }) else {
+            return nil
+        }
+
+        async let photoData = resourceData(for: photoResource)
+        async let videoData = resourceData(for: pairedVideoResource)
+        guard let stillData = await photoData,
+              let pairedVideoData = await videoData else {
+            return nil
+        }
+
+        let package = LivePhotoPackage(
+            stillData: stillData,
+            pairedVideoData: pairedVideoData,
+            stillFilename: photoResource.originalFilename,
+            pairedVideoFilename: pairedVideoResource.originalFilename
+        )
+        return LivePhotoImport(package: package, originalName: photoResource.originalFilename)
+    }
+
+    private static func resourceData(for resource: PHAssetResource) async -> Data? {
+        let fileExtension = (resource.originalFilename as NSString).pathExtension
+        let temporaryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension(fileExtension.isEmpty ? "dat" : fileExtension)
+        let options = PHAssetResourceRequestOptions()
+        options.isNetworkAccessAllowed = true
+
+        return await withCheckedContinuation { continuation in
+            PHAssetResourceManager.default().writeData(for: resource, toFile: temporaryURL, options: options) { error in
+                defer { try? FileManager.default.removeItem(at: temporaryURL) }
+                guard error == nil,
+                      let data = try? Data(contentsOf: temporaryURL) else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                continuation.resume(returning: data)
+            }
+        }
     }
 
     @MainActor
@@ -118,26 +221,128 @@ enum ImportService {
         vaultStore: VaultStore,
         sync: CloudKitSyncService
     ) async {
-        guard let directory = sharedInboxDirectory() else { return }
+        _ = await importPendingSharedImports(context: context, vaultStore: vaultStore, sync: sync)
+    }
+
+    @MainActor
+    static func pendingSharedImports() -> [PendingSharedImport] {
+        guard let directory = sharedInboxDirectory() else { return [] }
+        if let manifest = readManifest(in: directory) {
+            return manifest.items.compactMap { item in
+                let fileURL = directory.appendingPathComponent(item.storedFileName)
+                guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
+                return PendingSharedImport(
+                    id: item.id,
+                    originalName: item.originalName,
+                    mimeType: item.mimeType,
+                    typeIdentifier: item.typeIdentifier,
+                    byteSize: item.byteSize,
+                    createdAt: item.createdAt,
+                    fileURL: fileURL
+                )
+            }
+            .sorted { $0.createdAt < $1.createdAt }
+        }
+
         guard let urls = try? FileManager.default.contentsOfDirectory(
             at: directory,
             includingPropertiesForKeys: nil
         ) else {
-            return
+            return []
         }
 
-        for url in urls {
-            if url.pathExtension == "urlimport",
-               let value = try? String(contentsOf: url, encoding: .utf8),
-               let sharedURL = URL(string: value.trimmingCharacters(in: .whitespacesAndNewlines)) {
-                await importLink(sharedURL, source: "Share Extension", context: context, vaultStore: vaultStore, sync: sync)
-                try? FileManager.default.removeItem(at: url)
-                continue
+        return urls
+            .filter { $0.lastPathComponent != sharedImportManifestName && $0.pathExtension != "urlimport" }
+            .compactMap { url in
+                let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentTypeKey, .creationDateKey])
+                let type = values?.contentType ?? UTType(filenameExtension: url.pathExtension) ?? .data
+                return PendingSharedImport(
+                    id: url.lastPathComponent,
+                    originalName: url.lastPathComponent,
+                    mimeType: type.preferredMIMEType ?? "application/octet-stream",
+                    typeIdentifier: type.identifier,
+                    byteSize: Int64(values?.fileSize ?? 0),
+                    createdAt: values?.creationDate ?? Date(),
+                    fileURL: url
+                )
             }
+            .sorted { $0.createdAt < $1.createdAt }
+    }
 
-            await importFile(url: url, context: context, vaultStore: vaultStore, sync: sync, source: "Share Extension")
-            try? FileManager.default.removeItem(at: url)
+    @MainActor
+    static func importPendingSharedImports(
+        context: ModelContext,
+        vaultStore: VaultStore,
+        sync: CloudKitSyncService
+    ) async -> ImportSummary {
+        let pending = pendingSharedImports()
+        var summary = ImportSummary()
+        var failedItems: [PendingSharedImport] = []
+
+        for item in pending {
+            let type = UTType(item.typeIdentifier) ?? UTType(filenameExtension: item.fileURL.pathExtension)
+            let kind = kind(for: type, fileExtension: item.fileURL.pathExtension)
+            let success = await importFile(
+                url: item.fileURL,
+                context: context,
+                vaultStore: vaultStore,
+                sync: sync,
+                source: "Share Extension"
+            )
+            if success {
+                summary.record(kind)
+                try? FileManager.default.removeItem(at: item.fileURL)
+            } else {
+                summary.recordFailure()
+                failedItems.append(item)
+            }
         }
+
+        rewriteManifest(for: failedItems)
+        return summary
+    }
+
+    @MainActor
+    static func stageFileForReview(url: URL) -> Bool {
+        guard let directory = sharedInboxDirectory() else { return false }
+        let didAccess = url.startAccessingSecurityScopedResource()
+        defer {
+            if didAccess { url.stopAccessingSecurityScopedResource() }
+        }
+        guard FileManager.default.fileExists(atPath: url.path) else { return false }
+
+        let originalName = sanitizedFileName(url.lastPathComponent.isEmpty ? "\(UUID().uuidString).dat" : url.lastPathComponent)
+        let storedFileName = "\(UUID().uuidString)-\(originalName)"
+        let destination = directory.appendingPathComponent(storedFileName)
+
+        do {
+            try? FileManager.default.removeItem(at: destination)
+            try FileManager.default.copyItem(at: url, to: destination)
+            try? FileManager.default.setAttributes([.protectionKey: FileProtectionType.complete], ofItemAtPath: destination.path)
+            let values = try? destination.resourceValues(forKeys: [.fileSizeKey, .contentTypeKey])
+            let type = values?.contentType ?? UTType(filenameExtension: destination.pathExtension) ?? .data
+            appendManifestItem(
+                SharedImportManifestItem(
+                    id: UUID().uuidString,
+                    originalName: originalName,
+                    storedFileName: storedFileName,
+                    typeIdentifier: type.identifier,
+                    mimeType: type.preferredMIMEType ?? "application/octet-stream",
+                    byteSize: Int64(values?.fileSize ?? 0),
+                    createdAt: Date()
+                ),
+                in: directory
+            )
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    static func discardSharedImports() {
+        guard let directory = sharedInboxDirectory() else { return }
+        try? FileManager.default.removeItem(at: directory)
+        _ = sharedInboxDirectory()
     }
 
     static func sharedInboxDirectory() -> URL? {
@@ -151,6 +356,7 @@ enum ImportService {
 
     static func kind(for type: UTType?, fileExtension: String) -> VaultItemKind {
         let lowerExtension = fileExtension.lowercased()
+        if lowerExtension == "livephoto" { return .livePhoto }
         if type?.conforms(to: .image) == true { return .image }
         if type?.conforms(to: .movie) == true { return .video }
         if type?.conforms(to: .audio) == true { return .audio }
@@ -158,5 +364,54 @@ enum ImportService {
         if ["zip", "rar", "7z", "tar", "gz"].contains(lowerExtension) { return .archive }
         if type != nil { return .document }
         return .other
+    }
+
+    private static func readManifest(in directory: URL) -> SharedImportManifest? {
+        let url = directory.appendingPathComponent(sharedImportManifestName)
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(SharedImportManifest.self, from: data)
+    }
+
+    private static func rewriteManifest(for imports: [PendingSharedImport]) {
+        guard let directory = sharedInboxDirectory() else { return }
+        let url = directory.appendingPathComponent(sharedImportManifestName)
+        guard !imports.isEmpty else {
+            try? FileManager.default.removeItem(at: url)
+            return
+        }
+        let manifest = SharedImportManifest(
+            items: imports.map {
+                SharedImportManifestItem(
+                    id: $0.id,
+                    originalName: $0.originalName,
+                    storedFileName: $0.fileURL.lastPathComponent,
+                    typeIdentifier: $0.typeIdentifier,
+                    mimeType: $0.mimeType,
+                    byteSize: $0.byteSize,
+                    createdAt: $0.createdAt
+                )
+            }
+        )
+        if let data = try? JSONEncoder().encode(manifest) {
+            try? data.write(to: url, options: .atomic)
+        }
+    }
+
+    private static func appendManifestItem(_ item: SharedImportManifestItem, in directory: URL) {
+        var manifest = readManifest(in: directory) ?? SharedImportManifest(items: [])
+        manifest.items.append(item)
+        let url = directory.appendingPathComponent(sharedImportManifestName)
+        if let data = try? JSONEncoder().encode(manifest) {
+            try? data.write(to: url, options: .atomic)
+            try? FileManager.default.setAttributes([.protectionKey: FileProtectionType.complete], ofItemAtPath: url.path)
+        }
+    }
+
+    private static func sanitizedFileName(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "\(UUID().uuidString).dat" }
+        return trimmed
+            .components(separatedBy: CharacterSet(charactersIn: "/:"))
+            .joined(separator: "-")
     }
 }

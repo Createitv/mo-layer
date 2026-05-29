@@ -69,6 +69,47 @@ struct privacyTests {
         #expect(didFail)
     }
 
+    @Test func importFingerprintIsStableForIdenticalPhotoOrVideoData() {
+        let first = Data([0x01, 0x02, 0x03, 0x04])
+        let second = Data([0x01, 0x02, 0x03, 0x04])
+        let different = Data([0x01, 0x02, 0x03, 0x05])
+
+        #expect(VaultImportFingerprint.digest(for: first) == VaultImportFingerprint.digest(for: second))
+        #expect(VaultImportFingerprint.digest(for: first) != VaultImportFingerprint.digest(for: different))
+    }
+
+    @Test func vaultItemStoresImportFingerprintInSchema() throws {
+        let digest = "sha256:test-digest"
+        let item = VaultItem(
+            kind: .image,
+            encryptedMetadata: Data(),
+            encryptedFileKey: Data(),
+            byteSize: 4,
+            importFingerprint: digest
+        )
+
+        #expect(item.importFingerprint == digest)
+    }
+
+    @Test func vaultFileStoreUsesRelativePathsAndReadsLegacyAbsolutePaths() throws {
+        let itemId = "test-\(UUID().uuidString)"
+        let payload = Data("encrypted payload".utf8)
+        let storedPath = try VaultFileStore.writeEncryptedObject(payload, itemId: itemId)
+
+        #expect(storedPath == "objects/\(itemId).enc")
+        #expect(VaultFileStore.fileExists(path: storedPath))
+        #expect(try VaultFileStore.read(path: storedPath) == payload)
+
+        let legacyAbsolutePath = VaultFileStore.vaultDirectory
+            .appendingPathComponent(storedPath)
+            .path
+
+        #expect(VaultFileStore.normalizedStoredPath(legacyAbsolutePath) == storedPath)
+        #expect(try VaultFileStore.read(path: legacyAbsolutePath) == payload)
+
+        VaultFileStore.remove(path: storedPath)
+    }
+
     @Test func gestureEnrollmentAcceptsSameRouteWithScaleOffsetAndTimingChanges() throws {
         let primary = TestGestureFactory.sCurve()
         let confirmation = TestGestureFactory.sCurve(
@@ -166,9 +207,10 @@ struct privacyTests {
 
         #expect(compactWidth == 132)
         #expect(regularWidth == 158)
-        #expect(fewCategoriesWidth == 112)
-        #expect(VaultCategoryCarouselLayout.cardHeight == 176)
-        #expect(VaultCategoryCarouselLayout.visualHeight == 104)
+        #expect(fewCategoriesWidth == 113)
+        #expect(VaultCategoryCarouselLayout.cardHeight == 132)
+        #expect(VaultCategoryCarouselLayout.iconContainerSize == 48)
+        #expect(VaultCategoryCarouselLayout.contentMinHeight == 100)
         #expect(VaultCategoryCarouselLayout.textAlignment == .center)
     }
 
@@ -187,6 +229,11 @@ struct privacyTests {
         #expect(VaultItemKind.video.isPreviewableMedia)
         #expect(VaultItemKind.audio.isPreviewableMedia)
         #expect(!VaultItemKind.document.isPreviewableMedia)
+        #expect(VaultItemKind.document.isPreviewableContent)
+        #expect(VaultItemKind.archive.isPreviewableContent)
+        #expect(VaultItemKind.other.isPreviewableContent)
+        #expect(!VaultItemKind.link.isPreviewableContent)
+        #expect(VaultItemKind.document.previewBadgeSystemImage == "doc.richtext")
     }
 
     @Test func importSummaryFormatsCountsByMediaKind() {
@@ -205,17 +252,103 @@ struct privacyTests {
 
     @Test func mediaGridLayoutSupportsReusablePinchSizing() {
         #expect(MediaGridLayout.defaultScale == 1)
-        #expect(MediaGridLayout.clampedScale(0.25) == MediaGridLayout.minimumScale)
-        #expect(MediaGridLayout.clampedScale(3) == MediaGridLayout.maximumScale)
-        #expect(MediaGridLayout.tileMinimum(for: 390, scale: 0.8) == 88)
-        #expect(MediaGridLayout.tileMinimum(for: 390, scale: 1.4) == 154)
-        #expect(MediaGridLayout.spacing == 10)
+        #expect(MediaGridLayout.clampedScale(0.2) == MediaGridLayout.minimumScale)
+        #expect(MediaGridLayout.clampedScale(4) == MediaGridLayout.maximumScale)
+        #expect(MediaGridLayout.tileMinimum(for: 390, scale: 0.8) == 86)
+        #expect(MediaGridLayout.tileMinimum(for: 390, scale: 1.4) == 151)
+        #expect(MediaGridLayout.columnCount(for: 390, scale: MediaGridLayout.minimumScale) == 9)
+        #expect(MediaGridLayout.columnCount(for: 390, scale: MediaGridLayout.defaultScale) == 3)
+        #expect(MediaGridLayout.columnCount(for: 390, scale: MediaGridLayout.maximumScale) == 1)
+        #expect(MediaGridLayout.spacing == 6)
+        #expect(MediaGridLayout.emptyInteractionMinHeight == 420)
+        #expect(MediaGridLayout.persistedScale(0.01) == MediaGridLayout.minimumScale)
+        #expect(MediaGridLayout.storedScale(10) == Double(MediaGridLayout.maximumScale))
+    }
+
+    @Test func mediaGridScaleStorageSeparatesHomeCategories() {
+        #expect(MediaGridScaleStorage.imagesKey == "vault.mediaGridScale.images")
+        #expect(MediaGridScaleStorage.videosKey == "vault.mediaGridScale.videos")
+        #expect(MediaGridScaleStorage.audioKey == "vault.mediaGridScale.audio")
+        #expect(MediaGridScaleStorage.documentsKey == "vault.mediaGridScale.documents")
+        #expect(MediaGridScaleStorage.defaultStoredScale == Double(MediaGridLayout.defaultScale))
     }
 
     @Test func homeIconLayoutsStayCompact() {
         #expect(VaultHomeHeaderLayout.actionSize == 34)
         #expect(VaultHomeHeaderLayout.iconFontSize == 17)
-        #expect(VaultCategoryCarouselLayout.iconFontSize == 40)
+        #expect(VaultCategoryCarouselLayout.iconFontSize == 22)
+    }
+
+    @Test func photoLibraryExportSupportsOnlyImagesAndVideos() {
+        #expect(PhotoLibraryExportService.canSaveToPhotoLibrary(kind: .image))
+        #expect(PhotoLibraryExportService.canSaveToPhotoLibrary(kind: .video))
+        #expect(!PhotoLibraryExportService.canSaveToPhotoLibrary(kind: .audio))
+        #expect(!PhotoLibraryExportService.canSaveToPhotoLibrary(kind: .document))
+        #expect(!PhotoLibraryExportService.canSaveToPhotoLibrary(kind: .archive))
+        #expect(!PhotoLibraryExportService.canSaveToPhotoLibrary(kind: .link))
+        #expect(!PhotoLibraryExportService.canSaveToPhotoLibrary(kind: .other))
+    }
+
+    @Test func settingsChangesDoNotRebuildTheRootPresentation() {
+        #expect(AppRootPresentation.rebuildsRootWhenSettingsChange == false)
+        #expect(AppRootPresentation.requiresActiveMembershipBeforeVaultAccess == true)
+    }
+
+    @Test func subscriptionManagerUsesRevenueCatSubscriptionIdentifiers() {
+        #expect(SubscriptionManager.revenueCatEntitlementID == "pro")
+        #expect(SubscriptionManager.revenueCatAPIKeyInfoPlistKey == "REVENUECAT_API_KEY")
+        #expect(SubscriptionManager.expectedProductIDs == [
+            SubscriptionManager.monthly,
+            SubscriptionManager.yearly,
+            SubscriptionManager.lifetime
+        ])
+        #expect(SubscriptionManager.missingProductIDs(from: [SubscriptionManager.monthly]) == [
+            SubscriptionManager.yearly,
+            SubscriptionManager.lifetime
+        ])
+        #expect(SubscriptionManager.displayOrder(forStoreProductID: SubscriptionManager.monthly) == 0)
+        #expect(SubscriptionManager.displayOrder(forStoreProductID: SubscriptionManager.yearly) == 1)
+        #expect(SubscriptionManager.displayOrder(forStoreProductID: SubscriptionManager.lifetime) == 2)
+        #expect(SubscriptionManager.displayOrder(forStoreProductID: "unknown") == Int.max)
+    }
+
+    @Test func membershipAccessSeparatesActiveExpiredAndLockedStates() {
+        #expect(SubscriptionManager.accessLevel(isPro: true, hasActivatedPro: false) == .activePro)
+        #expect(SubscriptionManager.accessLevel(isPro: false, hasActivatedPro: true) == .expiredReadOnly)
+        #expect(SubscriptionManager.accessLevel(isPro: false, hasActivatedPro: false) == .lockedUntilPro)
+        #expect(MembershipAccessLevel.activePro.allowsVaultEntry)
+        #expect(MembershipAccessLevel.activePro.allowsImportAndCloudSync)
+        #expect(MembershipAccessLevel.expiredReadOnly.allowsVaultEntry)
+        #expect(!MembershipAccessLevel.expiredReadOnly.allowsImportAndCloudSync)
+        #expect(!MembershipAccessLevel.lockedUntilPro.allowsVaultEntry)
+        #expect(!MembershipAccessLevel.lockedUntilPro.allowsImportAndCloudSync)
+    }
+
+    @MainActor
+    @Test func subscriptionManagerGrantsDeveloperAccessOnlyInDebugBuilds() {
+        let manager = SubscriptionManager()
+        #if DEBUG
+        #expect(SubscriptionManager.grantsDeveloperAccessInDebug)
+        #expect(manager.isPro)
+        #expect(manager.statusText == L.string("Developer Access"))
+        #else
+        #expect(!SubscriptionManager.grantsDeveloperAccessInDebug)
+        #expect(!manager.isPro)
+        #expect(manager.statusText == L.string("Free Plan"))
+        #endif
+    }
+
+    @Test func subscriptionManagerRejectsMissingRevenueCatAPIKey() {
+        #expect(!SubscriptionManager.isRevenueCatAPIKeyConfigured(nil))
+        #expect(!SubscriptionManager.isRevenueCatAPIKeyConfigured(""))
+        #expect(!SubscriptionManager.isRevenueCatAPIKeyConfigured("   "))
+        #expect(!SubscriptionManager.isRevenueCatAPIKeyConfigured("REPLACE_WITH_REVENUECAT_PUBLIC_IOS_KEY"))
+        #expect(SubscriptionManager.isRevenueCatAPIKeyConfigured("appl_1234567890"))
+    }
+
+    @Test func profileSettingsExposeMembershipWithoutLocationSection() {
+        #expect(!ProfileSettingsRoute.allCases.contains { $0.rawValue == "location" })
+        #expect(ProfileSettingsRoute.allCases.contains(.membership))
     }
 
     @Test func onboardingSetupStartsWithSecurityCodeThenConfirmsGestureLast() {
@@ -224,6 +357,42 @@ struct privacyTests {
         #expect(SetupStep.confirmSecurityCode.next == .drawGesture)
         #expect(SetupStep.drawGesture.next == .confirmGesture)
         #expect(SetupStep.confirmGesture.primaryActionTitle == L.string("Create Vault"))
+    }
+
+    @Test func lockFlowRequiresBiometricGateBeforeGestureGate() {
+        #expect(AuthenticationManager.SessionMode.allCases == [.cover, .gestureGate, .realVault, .decoyVault])
+    }
+
+    @MainActor
+    @Test func appOnlyLocksWhenSceneMovesToBackground() {
+        let auth = AuthenticationManager()
+        auth.reauthenticationGracePeriod = .disabled
+        #expect(!auth.shouldLock(for: .active))
+        #expect(!auth.shouldLock(for: .inactive))
+        #expect(auth.shouldLock(for: .background))
+    }
+
+    @MainActor
+    @Test func reauthenticationGracePeriodSkipsLockWithinWindow() {
+        let auth = AuthenticationManager()
+        auth.sessionMode = .realVault
+        auth.reauthenticationGracePeriod = .fifteenMinutes
+        let backgroundedAt = Date(timeIntervalSince1970: 1_000)
+
+        #expect(!auth.shouldLock(for: .background, now: backgroundedAt))
+        #expect(!auth.shouldLock(for: .active, now: backgroundedAt.addingTimeInterval(14 * 60)))
+        #expect(auth.sessionMode == .realVault)
+    }
+
+    @MainActor
+    @Test func reauthenticationGracePeriodLocksAfterWindowExpires() {
+        let auth = AuthenticationManager()
+        auth.sessionMode = .realVault
+        auth.reauthenticationGracePeriod = .fifteenMinutes
+        let backgroundedAt = Date(timeIntervalSince1970: 1_000)
+
+        #expect(!auth.shouldLock(for: .background, now: backgroundedAt))
+        #expect(auth.shouldLock(for: .active, now: backgroundedAt.addingTimeInterval(16 * 60)))
     }
 
 }
