@@ -1,0 +1,93 @@
+DEFINE SCHEMA
+
+    RECORD TYPE DecoyNote (
+        "___createTime"  TIMESTAMP,
+        "___createdBy"   REFERENCE,
+        "___etag"        STRING,
+        "___modTime"     TIMESTAMP,
+        "___modifiedBy"  REFERENCE,
+        "___recordID"    REFERENCE QUERYABLE,
+        createdAt        TIMESTAMP QUERYABLE SORTABLE,
+        encryptedPayload BYTES QUERYABLE SORTABLE,
+        isPinned         INT64 QUERYABLE SORTABLE,
+        localRevision    INT64 QUERYABLE SORTABLE,
+        noteId           STRING QUERYABLE SEARCHABLE SORTABLE,
+        sortOrder        DOUBLE QUERYABLE SORTABLE,
+        updatedAt        TIMESTAMP QUERYABLE SORTABLE,
+        GRANT WRITE TO "_creator",
+        GRANT CREATE TO "_icloud",
+        GRANT READ TO "_world"
+    );
+
+    RECORD TYPE Users (
+        "___createTime" TIMESTAMP,
+        "___createdBy"  REFERENCE,
+        "___etag"       STRING,
+        "___modTime"    TIMESTAMP,
+        "___modifiedBy" REFERENCE,
+        "___recordID"   REFERENCE QUERYABLE,
+        roles           LIST<INT64>,
+        GRANT WRITE TO "_creator",
+        GRANT READ TO "_world"
+    );
+
+    RECORD TYPE VaultFolder (
+        "___createTime" TIMESTAMP,
+        "___createdBy"  REFERENCE,
+        "___etag"       STRING,
+        "___modTime"    TIMESTAMP,
+        "___modifiedBy" REFERENCE,
+        "___recordID"   REFERENCE QUERYABLE,
+        deletedAt       TIMESTAMP QUERYABLE SORTABLE,
+        encryptedName   BYTES QUERYABLE SORTABLE,
+        folderId        STRING QUERYABLE SEARCHABLE SORTABLE,
+        localRevision   INT64 QUERYABLE SORTABLE,
+        sortOrder       INT64 QUERYABLE SORTABLE,
+        updatedAt       TIMESTAMP QUERYABLE SORTABLE,
+        GRANT WRITE TO "_creator",
+        GRANT CREATE TO "_icloud",
+        GRANT READ TO "_world"
+    );
+
+    RECORD TYPE VaultItem (
+        "___createTime"   TIMESTAMP,
+        "___createdBy"    REFERENCE,
+        "___etag"         STRING,
+        "___modTime"      TIMESTAMP,
+        "___modifiedBy"   REFERENCE,
+        "___recordID"     REFERENCE QUERYABLE,
+        assetState        STRING QUERYABLE SEARCHABLE SORTABLE,
+        byteSize          INT64 QUERYABLE SORTABLE,
+        createdAt         TIMESTAMP QUERYABLE SORTABLE,
+        deletedAt         TIMESTAMP QUERYABLE SORTABLE,
+        encryptedFileKey  BYTES QUERYABLE SORTABLE,
+        encryptedMetadata BYTES QUERYABLE SORTABLE,
+        favorite          INT64 QUERYABLE SORTABLE,
+        fileAsset         ASSET,
+        importFingerprint STRING QUERYABLE SEARCHABLE SORTABLE,
+        itemId            STRING QUERYABLE SEARCHABLE SORTABLE,
+        localRevision     INT64 QUERYABLE SORTABLE,
+        thumbAsset        ASSET,
+        type              STRING QUERYABLE SEARCHABLE SORTABLE,
+        updatedAt         TIMESTAMP QUERYABLE SORTABLE,
+        GRANT WRITE TO "_creator",
+        GRANT CREATE TO "_icloud",
+        GRANT READ TO "_world"
+    );
+
+    RECORD TYPE VaultManifest (
+        "___createTime"         TIMESTAMP,
+        "___createdBy"          REFERENCE,
+        "___etag"               STRING,
+        "___modTime"            TIMESTAMP,
+        "___modifiedBy"         REFERENCE,
+        "___recordID"           REFERENCE QUERYABLE,
+        encryptedRootKeyPackage BYTES QUERYABLE SORTABLE,
+        encryptedVaultName      BYTES QUERYABLE SORTABLE,
+        schemaVersion           INT64 QUERYABLE SORTABLE,
+        updatedAt               TIMESTAMP QUERYABLE SORTABLE,
+        vaultId                 STRING QUERYABLE SEARCHABLE SORTABLE,
+        GRANT WRITE TO "_creator",
+        GRANT CREATE TO "_icloud",
+        GRANT READ TO "_world"
+    );

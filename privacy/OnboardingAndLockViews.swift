@@ -230,7 +230,7 @@ private struct MembershipSetupNotice: View {
                 Text(L.string("Membership required after setup"))
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(AppTheme.ink)
-                Text(L.string("After the security setup is complete, start the 7-day trial or choose a monthly, yearly, or lifetime plan before using the vault. You can cancel subscriptions anytime in your Apple ID settings."))
+                Text(L.string("After the security setup is complete, start the 3-day trial or choose a monthly, yearly, or lifetime plan before using the vault. You can cancel subscriptions anytime in your Apple ID settings."))
                     .font(.caption)
                     .foregroundStyle(AppTheme.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
@@ -244,15 +244,22 @@ private struct MembershipSetupNotice: View {
     }
 }
 
-private struct CloudVaultRestoreView: View {
+struct CloudVaultRestoreView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var auth: AuthenticationManager
     @EnvironmentObject private var subscription: SubscriptionManager
     @EnvironmentObject private var sync: CloudKitSyncService
     @EnvironmentObject private var vaultStore: VaultStore
+    var onRestored: () -> Void = {}
     @State private var recoveryKey = ""
     @State private var isRestoring = false
     @State private var didRestore = false
+    @State private var restoreMessage: String?
+
+    init(onRestored: @escaping () -> Void = {}) {
+        self.onRestored = onRestored
+    }
 
     var body: some View {
         NavigationStack {
@@ -280,10 +287,10 @@ private struct CloudVaultRestoreView: View {
                     StatusPill(title: L.string("Root key restored. Continue setup."), systemImage: "checkmark.circle.fill", tint: AppTheme.success)
                 }
 
-                if !subscription.canImportAndSync {
-                    Label(L.string("Active Pro is required to restore encrypted iCloud backups."), systemImage: "star.circle")
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(AppTheme.warning)
+                if let restoreMessage {
+                    Text(restoreMessage)
+                        .font(.footnote)
+                        .foregroundStyle(didRestore ? AppTheme.success : AppTheme.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
@@ -292,6 +299,7 @@ private struct CloudVaultRestoreView: View {
                 Button {
                     Task {
                         isRestoring = true
+                        restoreMessage = L.string("Restoring encryption key and downloading iCloud files...")
                         didRestore = await vaultStore.restoreRootKeyFromCloud(
                             recoveryKey: recoveryKey,
                             context: modelContext,
@@ -299,16 +307,21 @@ private struct CloudVaultRestoreView: View {
                         )
                         isRestoring = false
                         if didRestore {
+                            auth.refreshConfigurationFromSecureStorage()
+                            restoreMessage = vaultStore.restoreStatusMessage ?? L.string("iCloud vault restored.")
+                            onRestored()
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
                                 dismiss()
                             }
+                        } else {
+                            restoreMessage = vaultStore.lastError
                         }
                     }
                 } label: {
                     Label(isRestoring ? L.string("Restoring") : L.string("Restore from iCloud"), systemImage: "key.icloud")
                 }
                 .buttonStyle(AppButtonStyle())
-                .disabled(isRestoring || !subscription.canImportAndSync || recoveryKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(isRestoring || recoveryKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             .padding()
             .navigationTitle(L.string("iCloud Restore"))

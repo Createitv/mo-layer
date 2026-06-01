@@ -1,0 +1,20 @@
+{
+  "name": "inklayer-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "postinstall": "node scripts/generate-qr.mjs",
+    "dev": "astro dev --host 0.0.0.0",
+    "build": "astro check && astro build",
+    "preview": "astro preview --host 0.0.0.0"
+  },
+  "dependencies": {
+    "astro": "^6.4.2"
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.5",
+    "qrcode": "^1.5.4",
+    "typescript": "^5.9.3"
+  }
+}

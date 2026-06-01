@@ -1,0 +1,61 @@
+---
+import DownloadPanel from "@/components/DownloadPanel.astro";
+import PhoneFrame from "@/components/PhoneFrame.astro";
+import BaseLayout from "@/layouts/BaseLayout.astro";
+import { getFeature, localePath, locales, pages, screenshots, siteUrl, type Locale } from "@/data/site";
+
+export function getStaticPaths() {
+  return locales.flatMap((locale) =>
+    pages[locale].features.map((feature) => ({
+      params: { locale, feature: feature.slug }
+    }))
+  );
+}
+
+const locale = Astro.params.locale as Locale;
+const slug = Astro.params.feature as string;
+const copy = pages[locale];
+const feature = getFeature(locale, slug);
+
+if (!feature) {
+  return Astro.redirect(localePath(locale));
+}
+
+const title = `${feature.title} | ${copy.appName}`;
+const description = feature.short;
+const path = `features/${feature.slug}`;
+const shot = screenshots[Math.max(0, copy.features.findIndex((item) => item.slug === feature.slug))] || screenshots[0];
+const structuredData = [
+  {
+    "@context": "https://schema.org",
+    "@type": "WebPage",
+    name: title,
+    description,
+    url: `${siteUrl}${localePath(locale, path)}`
+  }
+];
+---
+
+<BaseLayout locale={locale} title={title} description={description} path={path} structuredData={structuredData}>
+  <main class="subpage feature-detail-page">
+    <section class="feature-detail">
+      <div>
+        <p class="eyebrow">{feature.eyebrow}</p>
+        <h1>{feature.title}</h1>
+        <p>{feature.detail}</p>
+        <a class="primary-button" href={`${localePath(locale)}#download`}>{copy.nav.download}</a>
+      </div>
+      <PhoneFrame src={shot.src} alt={shot.alt} />
+    </section>
+    <section class="detail-grid">
+      {copy.features.filter((item) => item.slug !== feature.slug).map((item) => (
+        <a class="detail-card link-card" href={localePath(locale, `features/${item.slug}`)}>
+          <span>{item.eyebrow}</span>
+          <h2>{item.title}</h2>
+          <p>{item.short}</p>
+        </a>
+      ))}
+    </section>
+    <DownloadPanel copy={copy} />
+  </main>
+</BaseLayout>

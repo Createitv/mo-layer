@@ -58,7 +58,7 @@ struct RecordingLiveActivityWidget: Widget {
                 }
                 .foregroundStyle(.white)
             } minimal: {
-                RecordingDot(phase: context.state.phase)
+                RecordingIconView(size: 16)
             }
             .widgetURL(URL(string: "privacy://quick-recording"))
             .keylineTint(.red)

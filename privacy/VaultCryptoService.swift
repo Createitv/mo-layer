@@ -19,6 +19,16 @@ enum VaultCryptoService {
         (try? KeychainService.read(account: rootKeyAccount)) != nil
     }
 
+    static func hasRecoverableRootKey() -> Bool {
+        if hasRootKey() {
+            return true
+        }
+        guard let data = try? KeychainService.read(account: synchronizableRootKeyAccount, synchronizable: true) else {
+            return false
+        }
+        return data.count == 32
+    }
+
     static func ensureRootKey() throws -> SymmetricKey {
         if let data = try? KeychainService.read(account: rootKeyAccount) {
             try? syncRootKeyToICloudKeychain(rootKeyData: data)

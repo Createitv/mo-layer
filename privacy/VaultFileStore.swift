@@ -3,6 +3,11 @@ import OSLog
 
 enum VaultFileStore {
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "app.landlady.www.privacy", category: "VaultFileStore")
+    static let encryptedFileProtection: FileProtectionType = .completeUntilFirstUserAuthentication
+    static let encryptedDataWritingOptions: Data.WritingOptions = [
+        .atomic,
+        .completeFileProtectionUntilFirstUserAuthentication
+    ]
 
     static var vaultDirectory: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -30,7 +35,8 @@ enum VaultFileStore {
     static func writeEncryptedObject(_ data: Data, itemId: String) throws -> String {
         try prepareDirectories()
         let url = objectsDirectory.appendingPathComponent("\(itemId).enc")
-        try data.write(to: url, options: [.atomic, .completeFileProtection])
+        try data.write(to: url, options: encryptedDataWritingOptions)
+        try setEncryptedFileProtection(at: url)
         logger.debug("Wrote encrypted object for item \(itemId, privacy: .public)")
         return relativePath(for: url)
     }
@@ -38,7 +44,8 @@ enum VaultFileStore {
     static func writeEncryptedThumb(_ data: Data, itemId: String) throws -> String {
         try prepareDirectories()
         let url = thumbsDirectory.appendingPathComponent("\(itemId).thumb.enc")
-        try data.write(to: url, options: [.atomic, .completeFileProtection])
+        try data.write(to: url, options: encryptedDataWritingOptions)
+        try setEncryptedFileProtection(at: url)
         logger.debug("Wrote encrypted thumbnail for item \(itemId, privacy: .public)")
         return relativePath(for: url)
     }
@@ -76,6 +83,20 @@ enum VaultFileStore {
 
     static func assetURL(for path: String) -> URL {
         resolvedURL(for: path)
+    }
+
+    static func prepareForCloudAssetUpload(path: String?) throws {
+        guard let path, !path.isEmpty else { return }
+        try setEncryptedFileProtection(at: resolvedURL(for: path))
+    }
+
+    static func encryptedFileAttributesForLog(path: String?) -> String {
+        guard let path, !path.isEmpty else { return "none" }
+        let url = resolvedURL(for: path)
+        let attributes = (try? FileManager.default.attributesOfItem(atPath: url.path)) ?? [:]
+        let size = attributes[.size] as? NSNumber
+        let protection = attributes[.protectionKey] as? FileProtectionType
+        return "exists=\(FileManager.default.fileExists(atPath: url.path)) size=\(size?.int64Value ?? -1) protection=\(protection?.rawValue ?? "unknown") path=\(storedPathForLog(path))"
     }
 
     static func normalizedStoredPath(_ path: String?) -> String? {
@@ -119,7 +140,11 @@ enum VaultFileStore {
     private static func replaceItem(at destination: URL, with sourceURL: URL) {
         try? FileManager.default.removeItem(at: destination)
         try? FileManager.default.copyItem(at: sourceURL, to: destination)
-        try? FileManager.default.setAttributes([.protectionKey: FileProtectionType.complete], ofItemAtPath: destination.path)
+        try? setEncryptedFileProtection(at: destination)
+    }
+
+    private static func setEncryptedFileProtection(at url: URL) throws {
+        try FileManager.default.setAttributes([.protectionKey: encryptedFileProtection], ofItemAtPath: url.path)
     }
 
     private static func resolvedURL(for storedPath: String) -> URL {

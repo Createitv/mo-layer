@@ -4,15 +4,93 @@ import CloudKit
 import CryptoKit
 import Foundation
 import OSLog
+import SwiftUI
 import SwiftData
 import UIKit
 import UniformTypeIdentifiers
 
+enum RemoteVaultRestoreCheck: Equatable {
+    case noRemoteVault
+    case needsRecoveryKey
+    case restoredAutomatically(CloudAssetDownloadSummary)
+    case failed(String)
+}
+
+struct CloudAssetDownloadSummary: Equatable {
+    var indexedItems = 0
+    var total = 0
+    var succeeded = 0
+    var failed = 0
+    var failureMessages: [String] = []
+
+    var displayText: String {
+        if total == 0 {
+            if indexedItems > 0 {
+                return L.format("%d encrypted item(s) restored from iCloud. Originals download when opened.", indexedItems)
+            }
+            return L.string("iCloud backup restored. No encrypted files needed downloading.")
+        }
+        if failed == 0 {
+            return L.format("%d encrypted file(s) downloaded from iCloud.", succeeded)
+        }
+        return L.format("%d encrypted file(s) downloaded, %d failed.", succeeded, failed)
+    }
+}
+
+enum VaultCloudToLocalSyncPolicy {
+    static let automaticDownloadsOriginals = true
+    static let pullToRefreshDownloadsOriginals = true
+    static let syncedHomeCategories: [VaultCategory] = [.images, .videos, .audio, .documents]
+}
+
+enum VaultCloudAssetDownloadPolicy {
+    static func shouldDownload(_ item: VaultItem) -> Bool {
+        item.deletedAt == nil
+            && item.kind != .link
+            && (item.assetState != .local || !VaultFileStore.fileExists(path: item.encryptedFilePath))
+    }
+}
+
 @MainActor
 final class VaultStore: ObservableObject {
+    static let innerVaultFolderId = "system.innerVault"
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "app.landlady.www.privacy", category: "VaultStore")
     private var thumbnailCache: [String: UIImage] = [:]
     @Published var lastError: String?
+    @Published var restoreStatusMessage: String?
+    @Published private(set) var allowsVaultWrites = false
+
+    func setWriteAccess(_ isAllowed: Bool) {
+        allowsVaultWrites = isAllowed
+    }
+
+    func hasLocalVaultData(context: ModelContext) -> Bool {
+        do {
+            var manifestDescriptor = FetchDescriptor<VaultManifest>()
+            manifestDescriptor.fetchLimit = 1
+            if try !context.fetch(manifestDescriptor).isEmpty {
+                return true
+            }
+
+            var itemDescriptor = FetchDescriptor<VaultItem>()
+            itemDescriptor.fetchLimit = 1
+            if try !context.fetch(itemDescriptor).isEmpty {
+                return true
+            }
+            return false
+        } catch {
+            lastError = error.localizedDescription
+            return false
+        }
+    }
+
+    private func requireWriteAccess() -> Bool {
+        guard allowsVaultWrites else {
+            lastError = L.string("Renew Pro to add, edit, delete, or sync vault content.")
+            return false
+        }
+        return true
+    }
 
     func bootstrap(context: ModelContext, sync: CloudKitSyncService, allowsCloudSync: Bool = true) async {
         do {
@@ -25,7 +103,9 @@ final class VaultStore: ObservableObject {
             if try context.fetch(descriptor).isEmpty {
                 if allowsCloudSync, let remoteManifest = await sync.fetchRemoteManifest() {
                     if try restoreRemoteManifestUsingAvailableKey(remoteManifest, context: context) {
-                        await pullCloudIndex(context: context, sync: sync, allowsCloudSync: allowsCloudSync)
+                        await pullCloudDecoyNotes(context: context, sync: sync)
+                        let summary = await downloadAllCloudAssets(context: context, sync: sync)
+                        restoreStatusMessage = summary.displayText
                     } else {
                         lastError = L.string("An existing iCloud vault was found. Restore it with iCloud Keychain or your recovery key before creating a new vault.")
                     }
@@ -69,11 +149,43 @@ final class VaultStore: ObservableObject {
             context.insert(manifest)
             try context.save()
             try? VaultCryptoService.syncRootKeyToICloudKeychain()
-            await pullCloudIndex(context: context, sync: sync)
+            await pullCloudDecoyNotes(context: context, sync: sync)
+            let summary = await downloadAllCloudAssets(context: context, sync: sync)
+            restoreStatusMessage = summary.displayText
             return true
         } catch {
             lastError = L.string("Recovery key is incorrect or the iCloud package cannot be opened.")
             return false
+        }
+    }
+
+    func checkForRemoteVaultRestore(context: ModelContext, sync: CloudKitSyncService) async -> RemoteVaultRestoreCheck {
+        do {
+            var descriptor = FetchDescriptor<VaultManifest>()
+            descriptor.fetchLimit = 1
+            guard try context.fetch(descriptor).isEmpty else {
+                return .noRemoteVault
+            }
+
+            guard let remoteManifest = await sync.fetchRemoteManifest() else {
+                return .noRemoteVault
+            }
+
+            if try restoreRemoteManifestUsingAvailableKey(remoteManifest, context: context) {
+                restoreStatusMessage = L.string("Existing iCloud vault found. Restoring encrypted index...")
+                await pullCloudDecoyNotes(context: context, sync: sync)
+                let summary = await downloadAllCloudAssets(context: context, sync: sync)
+                restoreStatusMessage = summary.displayText
+                return .restoredAutomatically(summary)
+            }
+
+            lastError = L.string("An existing iCloud vault was found. Restore it with iCloud Keychain or your recovery key before creating a new vault.")
+            restoreStatusMessage = lastError
+            return .needsRecoveryKey
+        } catch {
+            lastError = error.localizedDescription
+            restoreStatusMessage = error.localizedDescription
+            return .failed(error.localizedDescription)
         }
     }
 
@@ -85,8 +197,11 @@ final class VaultStore: ObservableObject {
         source: String,
         kind: VaultItemKind,
         context: ModelContext,
-        sync: CloudKitSyncService
+        sync: CloudKitSyncService,
+        folderId: String? = nil,
+        syncAfterImport: Bool = true
     ) async -> Bool {
+        guard requireWriteAccess() else { return false }
         do {
             let importFingerprint = fingerprintIfNeeded(for: data, kind: kind)
             if try isDuplicateImport(importFingerprint, kind: kind, context: context) {
@@ -134,13 +249,16 @@ final class VaultStore: ObservableObject {
                 encryptedMetadata: encryptedMetadata,
                 encryptedFileKey: encryptedFileKey,
                 byteSize: Int64(data.count),
+                folderId: folderId,
                 importFingerprint: importFingerprint
             )
             context.insert(item)
             try context.save()
             logger.info("Imported item \(itemId, privacy: .public), kind \(kind.rawValue, privacy: .public), file \(encryptedFilePath, privacy: .public), thumb \(encryptedThumbPath ?? "none", privacy: .public)")
-            _ = await sync.syncItem(item)
-            try? context.save()
+            if syncAfterImport {
+                _ = await sync.syncItem(item)
+                try? context.save()
+            }
             return true
         } catch {
             lastError = error.localizedDescription
@@ -174,6 +292,7 @@ final class VaultStore: ObservableObject {
         context: ModelContext,
         sync: CloudKitSyncService
     ) async {
+        guard requireWriteAccess() else { return }
         do {
             let rootKey = try VaultCryptoService.ensureRootKey()
             let displayName = title?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? title! : url.host() ?? url.absoluteString
@@ -291,6 +410,7 @@ final class VaultStore: ObservableObject {
     }
 
     func toggleFavorite(_ item: VaultItem, context: ModelContext, sync: CloudKitSyncService) async {
+        guard requireWriteAccess() else { return }
         item.isFavorite.toggle()
         item.updatedAt = Date()
         item.localRevision += 1
@@ -300,7 +420,39 @@ final class VaultStore: ObservableObject {
         try? context.save()
     }
 
+    func rename(_ item: VaultItem, to name: String, context: ModelContext, sync: CloudKitSyncService) async {
+        guard requireWriteAccess() else { return }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        do {
+            let rootKey = try VaultCryptoService.ensureRootKey()
+            guard var metadata = metadata(for: item) else { return }
+            let existingExtension = metadata.originalExtension?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let submittedExtension = (trimmed as NSString).pathExtension
+            let displayName: String
+            if submittedExtension.isEmpty, !existingExtension.isEmpty {
+                displayName = (trimmed as NSString).appendingPathExtension(existingExtension) ?? trimmed
+            } else {
+                displayName = trimmed
+            }
+
+            metadata.originalName = displayName
+            metadata.originalExtension = (displayName as NSString).pathExtension
+            item.encryptedMetadata = try VaultCryptoService.encryptCodable(metadata, using: rootKey)
+            item.updatedAt = Date()
+            item.localRevision += 1
+            item.syncStatus = .pending
+            try context.save()
+            _ = await sync.syncItem(item)
+            try? context.save()
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
     func permanentlyDelete(_ item: VaultItem, context: ModelContext, sync: CloudKitSyncService) async {
+        guard requireWriteAccess() else { return }
         guard await sync.deleteItem(item) else {
             item.syncStatus = .failed
             try? context.save()
@@ -315,14 +467,70 @@ final class VaultStore: ObservableObject {
     }
 
     func deleteImmediately(_ item: VaultItem, context: ModelContext, sync: CloudKitSyncService) async {
-        _ = await sync.deleteItem(item)
+        guard requireWriteAccess() else { return }
+        item.deletedAt = item.deletedAt ?? Date()
+        item.updatedAt = Date()
+        item.localRevision += 1
+        item.syncStatus = .pending
+        let encryptedFilePath = item.encryptedFilePath
+        let encryptedThumbPath = item.encryptedThumbPath
+        try? context.save()
         VaultFileStore.remove(path: item.encryptedFilePath)
         VaultFileStore.remove(path: item.encryptedThumbPath)
-        context.delete(item)
+
+        // 删除体验必须先本地生效；iCloud 墓碑记录放到后台同步，避免 CloudKit 慢时卡住界面。
+        Task { @MainActor in
+            let success = await sync.syncItem(item)
+            if !success {
+                item.syncStatus = .pending
+                item.lastSyncError = sync.lastSyncError
+            }
+            try? context.save()
+            VaultFileStore.remove(path: encryptedFilePath)
+            VaultFileStore.remove(path: encryptedThumbPath)
+        }
+    }
+
+    func deleteImmediately(_ items: [VaultItem], context: ModelContext, sync: CloudKitSyncService) async {
+        guard requireWriteAccess(), !items.isEmpty else { return }
+        let deletionTargets = items
+            .filter { $0.deletedAt == nil }
+            .map { item in
+                (item: item, encryptedFilePath: item.encryptedFilePath, encryptedThumbPath: item.encryptedThumbPath)
+            }
+        guard !deletionTargets.isEmpty else { return }
+
+        let now = Date()
+        for target in deletionTargets {
+            target.item.deletedAt = now
+            target.item.updatedAt = now
+            target.item.localRevision += 1
+            target.item.syncStatus = .pending
+        }
         try? context.save()
+
+        for target in deletionTargets {
+            VaultFileStore.remove(path: target.encryptedFilePath)
+            VaultFileStore.remove(path: target.encryptedThumbPath)
+        }
+
+        // 批量删除只启动一个后台同步任务，避免大量照片删除时同时创建很多 CloudKit 请求。
+        Task { @MainActor in
+            for target in deletionTargets {
+                let success = await sync.syncItem(target.item)
+                if !success {
+                    target.item.syncStatus = .pending
+                    target.item.lastSyncError = sync.lastSyncError
+                }
+                VaultFileStore.remove(path: target.encryptedFilePath)
+                VaultFileStore.remove(path: target.encryptedThumbPath)
+            }
+            try? context.save()
+        }
     }
 
     func createFolder(named name: String, context: ModelContext, sync: CloudKitSyncService) async {
+        guard requireWriteAccess() else { return }
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
@@ -348,6 +556,7 @@ final class VaultStore: ObservableObject {
     }
 
     func move(_ item: VaultItem, to folder: VaultFolder?, context: ModelContext, sync: CloudKitSyncService) async {
+        guard requireWriteAccess() else { return }
         item.folderId = folder?.id
         item.updatedAt = Date()
         item.localRevision += 1
@@ -357,7 +566,72 @@ final class VaultStore: ObservableObject {
         try? context.save()
     }
 
+    func ensureInnerVaultFolder(context: ModelContext, sync: CloudKitSyncService) async -> VaultFolder? {
+        guard requireWriteAccess() else { return nil }
+        do {
+            let innerVaultFolderId = Self.innerVaultFolderId
+            let descriptor = FetchDescriptor<VaultFolder>(
+                predicate: #Predicate<VaultFolder> { folder in
+                    folder.id == innerVaultFolderId
+                }
+            )
+            if let existing = try context.fetch(descriptor).first {
+                if existing.deletedAt != nil {
+                    existing.deletedAt = nil
+                    existing.updatedAt = Date()
+                    existing.localRevision += 1
+                    existing.syncStatus = .pending
+                    try context.save()
+                    _ = await sync.syncFolder(existing)
+                    try? context.save()
+                }
+                return existing
+            }
+
+            let rootKey = try VaultCryptoService.ensureRootKey()
+            let encryptedName = try VaultCryptoService.encryptString("Inner Vault", using: rootKey)
+            let folder = VaultFolder(
+                id: Self.innerVaultFolderId,
+                encryptedName: encryptedName,
+                sortOrder: Int.max
+            )
+            context.insert(folder)
+            try context.save()
+            _ = await sync.syncFolder(folder)
+            try? context.save()
+            return folder
+        } catch {
+            lastError = error.localizedDescription
+            return nil
+        }
+    }
+
+    func moveToInnerVault(_ items: [VaultItem], context: ModelContext, sync: CloudKitSyncService) async {
+        guard await ensureInnerVaultFolder(context: context, sync: sync) != nil else { return }
+        await move(items, toFolderId: Self.innerVaultFolderId, context: context, sync: sync)
+    }
+
+    func moveOutOfInnerVault(_ items: [VaultItem], context: ModelContext, sync: CloudKitSyncService) async {
+        await move(items, toFolderId: nil, context: context, sync: sync)
+    }
+
+    func move(_ items: [VaultItem], toFolderId folderId: String?, context: ModelContext, sync: CloudKitSyncService) async {
+        guard requireWriteAccess(), !items.isEmpty else { return }
+        for item in items where item.deletedAt == nil {
+            item.folderId = folderId
+            item.updatedAt = Date()
+            item.localRevision += 1
+            item.syncStatus = .pending
+        }
+        try? context.save()
+        for item in items where item.deletedAt == nil {
+            _ = await sync.syncItem(item)
+        }
+        try? context.save()
+    }
+
     func renameFolder(_ folder: VaultFolder, to name: String, context: ModelContext, sync: CloudKitSyncService) async {
+        guard requireWriteAccess() else { return }
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
@@ -376,6 +650,7 @@ final class VaultStore: ObservableObject {
     }
 
     func deleteFolder(_ folder: VaultFolder, items: [VaultItem], context: ModelContext, sync: CloudKitSyncService) async {
+        guard requireWriteAccess() else { return }
         for item in items where item.folderId == folder.id {
             item.folderId = nil
             item.updatedAt = Date()
@@ -395,27 +670,245 @@ final class VaultStore: ObservableObject {
         try? context.save()
     }
 
+    func decoyNotePayload(for note: DecoyNoteRecord) -> DecoyNotePayload? {
+        guard let rootKey = try? VaultCryptoService.ensureRootKey() else { return nil }
+        return try? VaultCryptoService.decryptCodable(DecoyNotePayload.self, from: note.encryptedPayload, using: rootKey)
+    }
+
+    func createDecoyNote(
+        id: String = UUID().uuidString,
+        payload: DecoyNotePayload,
+        isPinned: Bool = false,
+        sortOrder: Double = Date().timeIntervalSince1970,
+        context: ModelContext,
+        sync: CloudKitSyncService
+    ) async {
+        guard requireWriteAccess() else { return }
+        do {
+            let rootKey = try VaultCryptoService.ensureRootKey()
+            let encryptedPayload = try VaultCryptoService.encryptCodable(payload, using: rootKey)
+            let note = DecoyNoteRecord(id: id, encryptedPayload: encryptedPayload, isPinned: isPinned, sortOrder: sortOrder)
+            context.insert(note)
+            try context.save()
+            _ = await sync.syncDecoyNote(note)
+            try? context.save()
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    func updateDecoyNote(
+        _ note: DecoyNoteRecord,
+        payload: DecoyNotePayload,
+        isPinned: Bool,
+        context: ModelContext,
+        sync: CloudKitSyncService
+    ) async {
+        guard requireWriteAccess() else { return }
+        do {
+            let rootKey = try VaultCryptoService.ensureRootKey()
+            note.encryptedPayload = try VaultCryptoService.encryptCodable(payload, using: rootKey)
+            note.isPinned = isPinned
+            note.updatedAt = Date()
+            note.localRevision += 1
+            note.syncStatus = .pending
+            note.lastSyncError = nil
+            try context.save()
+            _ = await sync.syncDecoyNote(note)
+            try? context.save()
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    func toggleDecoyTodo(
+        _ note: DecoyNoteRecord,
+        todoId: String,
+        context: ModelContext,
+        sync: CloudKitSyncService
+    ) async {
+        guard requireWriteAccess() else { return }
+        guard var payload = decoyNotePayload(for: note),
+              let index = payload.todos.firstIndex(where: { $0.id == todoId }) else {
+            return
+        }
+        payload.todos[index].done.toggle()
+        await updateDecoyNote(note, payload: payload, isPinned: note.isPinned, context: context, sync: sync)
+    }
+
+    func toggleDecoyPin(_ note: DecoyNoteRecord, context: ModelContext, sync: CloudKitSyncService) async {
+        guard requireWriteAccess() else { return }
+        guard let payload = decoyNotePayload(for: note) else { return }
+        await updateDecoyNote(note, payload: payload, isPinned: !note.isPinned, context: context, sync: sync)
+    }
+
+    func deleteDecoyNote(_ note: DecoyNoteRecord, context: ModelContext, sync: CloudKitSyncService) async {
+        guard requireWriteAccess() else { return }
+        note.deletedAt = Date()
+        note.updatedAt = Date()
+        note.localRevision += 1
+        note.syncStatus = .pending
+        note.lastSyncError = nil
+        try? context.save()
+        _ = await sync.syncDecoyNote(note)
+        try? context.save()
+    }
+
+    func reorderDecoyNotes(_ notes: [DecoyNoteRecord], from source: IndexSet, to destination: Int, context: ModelContext, sync: CloudKitSyncService) async {
+        guard requireWriteAccess() else { return }
+        var reordered = notes
+        reordered.move(fromOffsets: source, toOffset: destination)
+        let now = Date()
+        for (index, note) in reordered.enumerated() {
+            note.sortOrder = Double(reordered.count - index)
+            note.updatedAt = now
+            note.localRevision += 1
+            note.syncStatus = .pending
+        }
+        try? context.save()
+        for note in reordered {
+            _ = await sync.syncDecoyNote(note)
+        }
+        try? context.save()
+    }
+
+    func ensureDefaultDecoyNotes(_ defaults: [(id: String, payload: DecoyNotePayload, isPinned: Bool)], context: ModelContext, sync: CloudKitSyncService) async {
+        guard allowsVaultWrites else { return }
+        do {
+            var descriptor = FetchDescriptor<DecoyNoteRecord>()
+            descriptor.fetchLimit = 1
+            guard try context.fetch(descriptor).isEmpty else { return }
+
+            let baseSort = Date().timeIntervalSince1970
+            for (index, item) in defaults.enumerated() {
+                await createDecoyNote(
+                    id: item.id,
+                    payload: item.payload,
+                    isPinned: item.isPinned,
+                    sortOrder: baseSort - Double(index),
+                    context: context,
+                    sync: sync
+                )
+            }
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    func pullCloudDecoyNotes(context: ModelContext, sync: CloudKitSyncService) async {
+        do {
+            let rootKey = try VaultCryptoService.ensureRootKey()
+            let remoteRecords = await sync.fetchRemoteDecoyNotes()
+            let existing = try context.fetch(FetchDescriptor<DecoyNoteRecord>())
+            var notesById = Dictionary(uniqueKeysWithValues: existing.map { ($0.id, $0) })
+
+            for record in remoteRecords {
+                guard let noteId = record["noteId"] as? String else { continue }
+                let encryptedPayload = record["encryptedPayload"] as? Data ?? Data()
+                guard (try? VaultCryptoService.decryptCodable(DecoyNotePayload.self, from: encryptedPayload, using: rootKey)) != nil else {
+                    continue
+                }
+                let remoteUpdatedAt = record["updatedAt"] as? Date ?? .distantPast
+
+                if let note = notesById[noteId] {
+                    guard remoteUpdatedAt >= note.updatedAt || note.syncStatus == .synced else { continue }
+                    note.encryptedPayload = encryptedPayload
+                    note.isPinned = (record["isPinned"] as? Int ?? (note.isPinned ? 1 : 0)) == 1
+                    note.sortOrder = record["sortOrder"] as? Double ?? note.sortOrder
+                    note.createdAt = record["createdAt"] as? Date ?? note.createdAt
+                    note.updatedAt = remoteUpdatedAt
+                    note.deletedAt = record["deletedAt"] as? Date
+                    note.localRevision = record["localRevision"] as? Int ?? note.localRevision
+                    note.cloudRecordName = record.recordID.recordName
+                    note.syncStatus = .synced
+                    note.lastSyncError = nil
+                } else {
+                    let note = DecoyNoteRecord(
+                        id: noteId,
+                        encryptedPayload: encryptedPayload,
+                        isPinned: (record["isPinned"] as? Int ?? 0) == 1,
+                        sortOrder: record["sortOrder"] as? Double ?? remoteUpdatedAt.timeIntervalSince1970
+                    )
+                    note.createdAt = record["createdAt"] as? Date ?? Date()
+                    note.updatedAt = remoteUpdatedAt
+                    note.deletedAt = record["deletedAt"] as? Date
+                    note.localRevision = record["localRevision"] as? Int ?? note.localRevision
+                    note.cloudRecordName = record.recordID.recordName
+                    note.syncStatus = .synced
+                    note.lastSyncError = nil
+                    context.insert(note)
+                    notesById[noteId] = note
+                }
+            }
+            try context.save()
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    func syncPendingDecoyNotes(context: ModelContext, sync: CloudKitSyncService) async {
+        guard allowsVaultWrites else { return }
+        do {
+            let notes = try context.fetch(FetchDescriptor<DecoyNoteRecord>())
+            for note in notes where note.syncStatus != .synced {
+                _ = await sync.syncDecoyNote(note)
+            }
+            try context.save()
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
     func syncPendingChanges(context: ModelContext, sync: CloudKitSyncService, allowsCloudSync: Bool = true) async {
-        guard allowsCloudSync else { return }
+        guard allowsCloudSync, allowsVaultWrites else { return }
         await syncChanges(context: context, sync: sync, forceItems: false)
     }
 
-    func backupAllFilesToCloud(context: ModelContext, sync: CloudKitSyncService, allowsCloudSync: Bool = true) async {
-        guard allowsCloudSync else {
-            lastError = L.string("Renew Pro to use encrypted iCloud backup and multi-device sync.")
-            return
+    @discardableResult
+    func syncCloudToLocal(
+        context: ModelContext,
+        sync: CloudKitSyncService,
+        allowsCloudSync: Bool = true,
+        downloadsOriginals: Bool = true
+    ) async -> CloudAssetDownloadSummary {
+        guard allowsCloudSync else { return CloudAssetDownloadSummary() }
+
+        let indexedCount = await pullCloudIndex(context: context, sync: sync, allowsCloudSync: allowsCloudSync)
+        await pullCloudDecoyNotes(context: context, sync: sync)
+        await syncPendingChanges(context: context, sync: sync, allowsCloudSync: allowsCloudSync)
+
+        guard downloadsOriginals else {
+            let summary = CloudAssetDownloadSummary(indexedItems: indexedCount)
+            restoreStatusMessage = summary.displayText
+            return summary
         }
-        await syncChanges(context: context, sync: sync, forceItems: true)
+
+        return await downloadMissingCloudAssets(context: context, sync: sync, indexedItems: indexedCount)
     }
 
-    func pullCloudIndex(context: ModelContext, sync: CloudKitSyncService, allowsCloudSync: Bool = true) async {
-        guard allowsCloudSync else { return }
+    @discardableResult
+    func backupAllFilesToCloud(context: ModelContext, sync: CloudKitSyncService, allowsCloudSync: Bool = true) async -> CloudSyncRunSummary? {
+        guard allowsCloudSync, allowsVaultWrites else {
+            lastError = L.string("Renew Pro to use encrypted iCloud backup and multi-device sync.")
+            sync.clearLogs()
+            sync.beginSyncRun(itemCount: 0, folderCount: 0, decoyNoteCount: 0, manifestCount: 0)
+            sync.recordItemSync(success: false, failure: lastError)
+            sync.finishSyncRun()
+            return sync.lastRunSummary
+        }
+        await syncChanges(context: context, sync: sync, forceItems: true, manualRun: true)
+        return sync.lastRunSummary
+    }
+
+    @discardableResult
+    func pullCloudIndex(context: ModelContext, sync: CloudKitSyncService, allowsCloudSync: Bool = true) async -> Int {
         do {
             let rootKey = try VaultCryptoService.ensureRootKey()
             await pullCloudFolders(context: context, sync: sync)
             let remoteRecords = await sync.fetchRemoteItems()
             let existingItems = try context.fetch(FetchDescriptor<VaultItem>())
             var itemsById = Dictionary(uniqueKeysWithValues: existingItems.map { ($0.id, $0) })
+            var indexedCount = 0
 
             for record in remoteRecords {
                 guard let itemId = record["itemId"] as? String else {
@@ -427,6 +920,7 @@ final class VaultStore: ObservableObject {
                 guard (try? VaultCryptoService.decryptCodable(VaultMetadata.self, from: encryptedMetadata, using: rootKey)) != nil else {
                     continue
                 }
+                indexedCount += 1
                 let encryptedFileKey = record["encryptedFileKey"] as? Data ?? Data()
                 let byteSize = record["byteSize"] as? Int64 ?? 0
                 let folderId = record["folderId"] as? String
@@ -443,6 +937,8 @@ final class VaultStore: ObservableObject {
                     existing.localRevision = record["localRevision"] as? Int ?? existing.localRevision
                     existing.importFingerprint = record["importFingerprint"] as? String
                     existing.cloudRecordName = record.recordID.recordName
+                    existing.syncStatus = .synced
+                    existing.lastSyncError = nil
                     existing.updatedAt = record["updatedAt"] as? Date ?? existing.updatedAt
                     if !VaultFileStore.fileExists(path: existing.encryptedFilePath), kind != .link {
                         existing.assetState = .cloudOnly
@@ -467,14 +963,17 @@ final class VaultStore: ObservableObject {
                     item.isFavorite = (record["favorite"] as? Int ?? 0) == 1
                     item.localRevision = record["localRevision"] as? Int ?? item.localRevision
                     item.syncStatus = .synced
+                    item.lastSyncError = nil
                     context.insert(item)
                     itemsById[itemId] = item
                 }
             }
             _ = rootKey
             try context.save()
+            return indexedCount
         } catch {
             lastError = error.localizedDescription
+            return 0
         }
     }
 
@@ -496,6 +995,52 @@ final class VaultStore: ObservableObject {
         item.downloadedAt = Date()
         item.lastDownloadError = nil
         try context.save()
+    }
+
+    @discardableResult
+    func downloadAllCloudAssets(context: ModelContext, sync: CloudKitSyncService) async -> CloudAssetDownloadSummary {
+        let indexedItems = await pullCloudIndex(context: context, sync: sync)
+        return await downloadMissingCloudAssets(context: context, sync: sync, indexedItems: indexedItems)
+    }
+
+    @discardableResult
+    private func downloadMissingCloudAssets(
+        context: ModelContext,
+        sync: CloudKitSyncService,
+        indexedItems: Int
+    ) async -> CloudAssetDownloadSummary {
+        var summary = CloudAssetDownloadSummary(indexedItems: indexedItems)
+        do {
+            let descriptor = FetchDescriptor<VaultItem>()
+            let items = try context.fetch(descriptor)
+            let candidates = items.filter { VaultCloudAssetDownloadPolicy.shouldDownload($0) }
+            summary.total = candidates.count
+            sync.appendLog("Starting full iCloud asset download count=\(candidates.count)")
+
+            for item in candidates {
+                do {
+                    try await downloadOriginalIfNeeded(for: item, context: context, sync: sync)
+                    summary.succeeded += 1
+                } catch {
+                    item.assetState = .failed
+                    item.lastDownloadError = error.localizedDescription
+                    summary.failed += 1
+                    summary.failureMessages.append(error.localizedDescription)
+                    sync.appendLog("Full asset download failed id=\(item.id) error=\(error.localizedDescription)")
+                }
+            }
+
+            try context.save()
+            sync.appendLog("Finished full iCloud asset download success=\(summary.succeeded) failed=\(summary.failed) total=\(summary.total)")
+        } catch {
+            summary.failed += 1
+            summary.failureMessages.append(error.localizedDescription)
+            lastError = error.localizedDescription
+            sync.appendLog("Full iCloud asset download failed: \(error.localizedDescription)")
+        }
+
+        restoreStatusMessage = summary.displayText
+        return summary
     }
 
     private func repairStoredFileReferences(context: ModelContext) throws {
@@ -586,31 +1131,77 @@ final class VaultStore: ObservableObject {
         }
     }
 
-    private func syncChanges(context: ModelContext, sync: CloudKitSyncService, forceItems: Bool) async {
+    private func syncChanges(context: ModelContext, sync: CloudKitSyncService, forceItems: Bool, manualRun: Bool = false) async {
         do {
             let manifests = try context.fetch(FetchDescriptor<VaultManifest>())
+            let folders = try context.fetch(FetchDescriptor<VaultFolder>())
+            let decoyNotes = try context.fetch(FetchDescriptor<DecoyNoteRecord>())
+            let items = try context.fetch(FetchDescriptor<VaultItem>())
+
+            let manifestsToSync = manifests.filter { forceItems || $0.syncStatus != .synced || !VaultCryptoService.canRestoreRootKey(from: $0.encryptedRootKeyPackage) }
+            let foldersToSync = folders.filter { forceItems || $0.syncStatus != .synced }
+            let decoyNotesToSync = decoyNotes.filter { forceItems || $0.syncStatus != .synced }
+            let itemsToSync = items.filter { forceItems || $0.syncStatus != .synced }
+
+            if manualRun {
+                sync.clearLogs()
+                sync.beginSyncRun(
+                    itemCount: itemsToSync.count,
+                    folderCount: foldersToSync.count,
+                    decoyNoteCount: decoyNotesToSync.count,
+                    manifestCount: manifestsToSync.count
+                )
+
+                guard await sync.runWritableProbe() else {
+                    sync.recordItemSync(success: false, failure: sync.lastSyncError)
+                    sync.finishSyncRun()
+                    return
+                }
+            }
+
             for manifest in manifests {
                 if !VaultCryptoService.canRestoreRootKey(from: manifest.encryptedRootKeyPackage) {
                     manifest.encryptedRootKeyPackage = try VaultCryptoService.makeRootKeyPackage()
                     manifest.updatedAt = Date()
                     manifest.syncStatus = .pending
                 }
-                guard manifest.syncStatus != .synced else { continue }
-                _ = await sync.syncManifest(manifest)
+                guard forceItems || manifest.syncStatus != .synced else { continue }
+                let success = await sync.syncManifest(manifest)
+                if manualRun {
+                    sync.recordManifestSync(success: success, failure: success ? nil : sync.lastSyncError)
+                }
             }
 
-            let folders = try context.fetch(FetchDescriptor<VaultFolder>())
-            for folder in folders where folder.syncStatus != .synced {
-                _ = await sync.syncFolder(folder)
+            for folder in foldersToSync {
+                let success = await sync.syncFolder(folder)
+                if manualRun {
+                    sync.recordFolderSync(success: success, failure: success ? nil : sync.lastSyncError)
+                }
             }
 
-            let items = try context.fetch(FetchDescriptor<VaultItem>())
-            for item in items where forceItems || item.syncStatus != .synced {
-                _ = await sync.syncItem(item)
+            for note in decoyNotesToSync {
+                let success = await sync.syncDecoyNote(note)
+                if manualRun {
+                    sync.recordDecoyNoteSync(success: success, failure: success ? nil : note.lastSyncError ?? sync.lastSyncError)
+                }
+            }
+
+            for item in itemsToSync {
+                let success = await sync.syncItem(item)
+                if manualRun {
+                    sync.recordItemSync(success: success, failure: success ? nil : item.lastSyncError ?? sync.lastSyncError)
+                }
             }
             try context.save()
+            if manualRun {
+                sync.finishSyncRun()
+            }
         } catch {
             lastError = error.localizedDescription
+            if manualRun {
+                sync.recordItemSync(success: false, failure: lastError)
+                sync.finishSyncRun()
+            }
         }
     }
 

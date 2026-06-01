@@ -10,6 +10,7 @@
 		FE88000B2FC9000000A00001 /* privacyLiveActivity.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = FE8800012FC9000000A00001 /* privacyLiveActivity.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		FE9900112FC43A1100A00001 /* privacyShareExtension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = FE9900012FC43A1100A00001 /* privacyShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		FEA100012FC6A00000A00001 /* RevenueCat in Frameworks */ = {isa = PBXBuildFile; productRef = FEA100032FC6A00000A00001 /* RevenueCat */; };
+		FEB400012FD0000000B00001 /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = FEB400032FD0000000B00001 /* MarkdownUI */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -118,6 +119,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				FEB400012FD0000000B00001 /* MarkdownUI in Frameworks */,
 				FEA100012FC6A00000A00001 /* RevenueCat in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -198,6 +200,7 @@
 			);
 			name = privacy;
 			packageProductDependencies = (
+				FEB400032FD0000000B00001 /* MarkdownUI */,
 				FEA100032FC6A00000A00001 /* RevenueCat */,
 			);
 			productName = privacy;
@@ -330,6 +333,7 @@
 				en,
 				Base,
 				"zh-Hans",
+				"zh-Hant",
 				ja,
 				de,
 				fr,
@@ -339,6 +343,7 @@
 			mainGroup = FE153F472FB9B262004FFC9E;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				FEB400022FD0000000B00001 /* XCRemoteSwiftPackageReference "swift-markdown-ui" */,
 				FEA100022FC6A00000A00001 /* XCRemoteSwiftPackageReference "purchases-ios-spm" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -904,6 +909,14 @@
 				minimumVersion = 5.0.0;
 			};
 		};
+		FEB400022FD0000000B00001 /* XCRemoteSwiftPackageReference "swift-markdown-ui" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/gonzalezreal/swift-markdown-ui.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.4.1;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -911,6 +924,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = FEA100022FC6A00000A00001 /* XCRemoteSwiftPackageReference "purchases-ios-spm" */;
 			productName = RevenueCat;
+		};
+		FEB400032FD0000000B00001 /* MarkdownUI */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FEB400022FD0000000B00001 /* XCRemoteSwiftPackageReference "swift-markdown-ui" */;
+			productName = MarkdownUI;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

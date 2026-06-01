@@ -1,0 +1,16 @@
+---
+import { defaultLocale, localePath } from "@/data/site";
+---
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="refresh" content={`0; url=${localePath(defaultLocale)}`} />
+    <link rel="canonical" href={localePath(defaultLocale)} />
+    <title>Aegis Vault Safe</title>
+  </head>
+  <body>
+    <a href={localePath(defaultLocale)}>Continue to Aegis Vault Safe</a>
+  </body>
+</html>

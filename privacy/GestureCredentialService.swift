@@ -13,6 +13,16 @@ struct GestureMatchResult {
     let score: Double
 }
 
+enum SecureCredentialStorageScope: Equatable {
+    case localDevice
+    case iCloudKeychain
+}
+
+struct SecureCredentialStoragePolicy: Equatable {
+    let scope: SecureCredentialStorageScope
+    let accessibilityName: String
+}
+
 enum GestureCredentialService {
     private static let templateAccount = "vault.gesture.template"
     private static let backupKeyHashAccount = "vault.gesture.backup.hash"
@@ -26,7 +36,24 @@ enum GestureCredentialService {
     private static let minimumRawSpan = 0.16
 
     static var hasTemplate: Bool {
-        (try? KeychainService.read(account: templateAccount)) != nil
+        (try? readCredential(account: templateAccount)) != nil
+    }
+
+    static let credentialStoragePlan: [SecureCredentialStoragePolicy] = [
+        SecureCredentialStoragePolicy(
+            scope: .localDevice,
+            accessibilityName: "kSecAttrAccessibleWhenUnlockedThisDeviceOnly"
+        ),
+        SecureCredentialStoragePolicy(
+            scope: .iCloudKeychain,
+            accessibilityName: "kSecAttrAccessibleAfterFirstUnlock"
+        )
+    ]
+
+    static func restoreSyncedCredentialsToLocalKeychainIfAvailable() {
+        _ = try? readCredential(account: templateAccount)
+        _ = try? readCredential(account: backupKeySaltAccount)
+        _ = try? readCredential(account: backupKeyHashAccount)
     }
 
     static func validateCandidate(_ points: [GesturePoint]) throws {
@@ -56,14 +83,14 @@ enum GestureCredentialService {
         let salt = VaultCryptoService.randomData(count: 24)
         let hash = backupKeyHash(backupKey, salt: salt)
         let data = try JSONEncoder().encode(first)
-        try KeychainService.save(data, account: templateAccount, accessibility: kSecAttrAccessibleWhenUnlockedThisDeviceOnly)
-        try KeychainService.save(salt, account: backupKeySaltAccount, accessibility: kSecAttrAccessibleWhenUnlockedThisDeviceOnly)
-        try KeychainService.save(hash, account: backupKeyHashAccount, accessibility: kSecAttrAccessibleWhenUnlockedThisDeviceOnly)
+        try saveCredential(data, account: templateAccount)
+        try saveCredential(salt, account: backupKeySaltAccount)
+        try saveCredential(hash, account: backupKeyHashAccount)
         return result
     }
 
     static func verify(_ points: [GesturePoint]) throws -> GestureMatchResult {
-        let storedData = try KeychainService.read(account: templateAccount)
+        let storedData = try readCredential(account: templateAccount)
         let stored = try JSONDecoder().decode(GestureTemplate.self, from: storedData)
         let candidate = try makeTemplate(from: points)
         return match(stored, candidate, threshold: unlockThreshold)
@@ -90,11 +117,39 @@ enum GestureCredentialService {
     }
 
     private static func verifyBackupKey(_ key: String, saltAccount: String, hashAccount: String) -> Bool {
-        guard let salt = try? KeychainService.read(account: saltAccount),
-              let expected = try? KeychainService.read(account: hashAccount) else {
+        guard let salt = try? readCredential(account: saltAccount),
+              let expected = try? readCredential(account: hashAccount) else {
             return false
         }
         return backupKeyHash(key, salt: salt) == expected
+    }
+
+    private static func saveCredential(_ data: Data, account: String) throws {
+        try KeychainService.save(
+            data,
+            account: account,
+            accessibility: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        )
+        try KeychainService.save(
+            data,
+            account: account,
+            accessibility: kSecAttrAccessibleAfterFirstUnlock,
+            synchronizable: true
+        )
+    }
+
+    private static func readCredential(account: String) throws -> Data {
+        if let data = try? KeychainService.read(account: account) {
+            return data
+        }
+
+        let synced = try KeychainService.read(account: account, synchronizable: true)
+        try? KeychainService.save(
+            synced,
+            account: account,
+            accessibility: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        )
+        return synced
     }
 
     private static func backupKeyHash(_ key: String, salt: Data) -> Data {

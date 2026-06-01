@@ -1,0 +1,25 @@
+---
+import { appStoreUrl, type PageCopy } from "@/data/site";
+
+type Props = {
+  copy: PageCopy;
+};
+
+const { copy } = Astro.props;
+---
+
+<aside class="download-panel" id="download">
+  <div>
+    <p class="eyebrow">{copy.sections.qrLabel}</p>
+    <h2>{copy.sections.downloadTitle}</h2>
+    <p>{copy.sections.downloadLead}</p>
+    <a class="store-button" href={appStoreUrl} aria-label={copy.hero.primary}>
+      <span class="store-icon" aria-hidden="true">A</span>
+      <span>{copy.hero.primary}</span>
+    </a>
+  </div>
+  <div class="qr-card">
+    <img src="/assets/app-store-qr.svg" alt={copy.sections.qrLabel} width="320" height="320" loading="lazy" />
+    <span>{copy.hero.note}</span>
+  </div>
+</aside>

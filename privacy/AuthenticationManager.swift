@@ -11,6 +11,12 @@ final class AuthenticationManager: ObservableObject {
         case decoyVault
     }
 
+    enum ConfigurationSource: Equatable {
+        case none
+        case userDefaults
+        case secureCredentials
+    }
+
     enum ReauthenticationGracePeriod: Int, CaseIterable, Identifiable {
         case disabled = 0
         case fiveMinutes = 5
@@ -77,10 +83,42 @@ final class AuthenticationManager: ObservableObject {
     }
     @Published var authMessage: String?
 
-    private let configuredKey = "vault.isConfigured"
+    private static let configuredKey = "vault.isConfigured"
     private static let biometricRequirementKey = "vault.requiresBiometricUnlock"
     private static let reauthenticationGracePeriodKey = "vault.reauthenticationGracePeriodMinutes"
     private var lastBackgroundedAt: Date?
+
+    init() {
+        refreshConfigurationFromSecureStorage()
+    }
+
+    nonisolated static func resolvedConfigurationSource(
+        hasConfiguredFlag: Bool,
+        hasGestureTemplate: Bool,
+        hasRecoverableRootKey: Bool
+    ) -> ConfigurationSource {
+        guard hasGestureTemplate, hasRecoverableRootKey else {
+            return .none
+        }
+        return hasConfiguredFlag ? .userDefaults : .secureCredentials
+    }
+
+    func refreshConfigurationFromSecureStorage() {
+        _ = try? VaultCryptoService.restoreRootKeyFromICloudKeychain()
+        GestureCredentialService.restoreSyncedCredentialsToLocalKeychainIfAvailable()
+
+        let source = Self.resolvedConfigurationSource(
+            hasConfiguredFlag: UserDefaults.standard.bool(forKey: Self.configuredKey),
+            hasGestureTemplate: GestureCredentialService.hasTemplate,
+            hasRecoverableRootKey: VaultCryptoService.hasRecoverableRootKey()
+        )
+        isConfigured = source != .none
+        isGestureUnlockEnabled = GestureCredentialService.hasTemplate
+        isBiometricUnlockEnabled = BiometricAuthService.availability().canEvaluate
+        if source == .secureCredentials {
+            UserDefaults.standard.set(true, forKey: Self.configuredKey)
+        }
+    }
 
     @discardableResult
     func configure(
@@ -98,7 +136,7 @@ final class AuthenticationManager: ObservableObject {
                 authMessage = L.string("The two gestures are not similar enough. Please set them again.")
                 return false
             }
-            UserDefaults.standard.set(true, forKey: configuredKey)
+            UserDefaults.standard.set(true, forKey: Self.configuredKey)
             isConfigured = true
             sessionMode = .realVault
             isGestureUnlockEnabled = true

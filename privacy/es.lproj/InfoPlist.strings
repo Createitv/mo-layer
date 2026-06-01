@@ -1,5 +1,6 @@
+"CFBundleDisplayName" = "Caja Aegis";
 "CFBundleTypeName" = "Archivo de caja cifrada";
 "NSCameraUsageDescription" = "Se usa para capturar fotos directamente en la caja cifrada y registrar fallos de desbloqueo si activas la captura de intrusion.";
 "NSPhotoLibraryAddUsageDescription" = "Se usa para guardar contenido exportado en tu fototeca cuando eliges exportar.";
 "NSPhotoLibraryUsageDescription" = "Se usa para seleccionar fotos y videos que quieras cifrar e importar en tu caja privada.";
-"NSFaceIDUsageDescription" = "Used as the first unlock layer before your private gesture can open the encrypted vault.";
+"NSFaceIDUsageDescription" = "Se usa como primera capa de desbloqueo antes de que tu gesto privado abra la caja cifrada.";

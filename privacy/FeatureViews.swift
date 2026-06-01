@@ -17,7 +17,9 @@ struct ImportHubView: View {
     @EnvironmentObject private var subscription: SubscriptionManager
     @EnvironmentObject private var sync: CloudKitSyncService
     @EnvironmentObject private var vaultStore: VaultStore
+    @EnvironmentObject private var importQueue: VaultImportQueue
     var showsCloseButton = false
+    var destinationFolderId: String? = nil
     var onImported: (ImportSummary) -> Void = { _ in }
     @State private var pickerItems: [PhotosPickerItem] = []
     @State private var showFileImporter = false
@@ -80,6 +82,12 @@ struct ImportHubView: View {
             .background(AppTheme.background)
             .navigationTitle(L.string("Import"))
             .navigationBarTitleDisplayMode(.inline)
+            .onAppear {
+                vaultStore.setWriteAccess(subscription.canImportAndSync)
+            }
+            .onChange(of: subscription.canImportAndSync) { _, canWrite in
+                vaultStore.setWriteAccess(canWrite)
+            }
             .toolbar {
                 if showsCloseButton {
                     ToolbarItem(placement: .topBarTrailing) {
@@ -92,18 +100,23 @@ struct ImportHubView: View {
                     pickerItems = []
                     return
                 }
-                Task {
-                    let summary = await ImportService.importPickerItems(newItems, context: modelContext, vaultStore: vaultStore, sync: sync)
-                    pickerItems = []
+                guard !newItems.isEmpty else { return }
+                importQueue.importPickerItems(newItems, context: modelContext, vaultStore: vaultStore, sync: sync, folderId: destinationFolderId) { summary in
                     handleImported(summary)
+                }
+                pickerItems = []
+                if showsCloseButton {
+                    dismiss()
                 }
             }
             .fileImporter(isPresented: $showFileImporter, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
                 guard subscription.canImportAndSync else { return }
                 if case .success(let urls) = result {
-                    Task {
-                        let summary = await ImportService.importFiles(urls: urls, context: modelContext, vaultStore: vaultStore, sync: sync)
+                    importQueue.importFiles(urls: urls, context: modelContext, vaultStore: vaultStore, sync: sync, folderId: destinationFolderId) { summary in
                         handleImported(summary)
+                    }
+                    if showsCloseButton {
+                        dismiss()
                     }
                 }
             }
@@ -111,7 +124,7 @@ struct ImportHubView: View {
                 NativeCameraCaptureView { media in
                     guard subscription.canImportAndSync else { return }
                     Task {
-                        let summary = await media.importSummary(context: modelContext, vaultStore: vaultStore, sync: sync)
+                        let summary = await media.importSummary(context: modelContext, vaultStore: vaultStore, sync: sync, folderId: destinationFolderId)
                         handleImported(summary)
                     }
                 }
@@ -128,7 +141,8 @@ struct ImportHubView: View {
                             context: modelContext,
                             vaultStore: vaultStore,
                             sync: sync,
-                            source: "Recorder"
+                            source: "Recorder",
+                            folderId: destinationFolderId
                         )
                         try? FileManager.default.removeItem(at: url)
                         handleImported(summary)
@@ -172,7 +186,8 @@ struct ImportHubView: View {
                         source: "Scanner",
                         kind: .image,
                         context: modelContext,
-                        sync: sync
+                        sync: sync,
+                        folderId: destinationFolderId
                     )
                     if success {
                         summary.record(.image)
@@ -199,7 +214,8 @@ enum CapturedVaultMedia {
         context: ModelContext,
         vaultStore: VaultStore,
         sync: CloudKitSyncService,
-        source: String = "Camera"
+        source: String = "Camera",
+        folderId: String? = nil
     ) async -> ImportSummary {
         var summary = ImportSummary()
         switch self {
@@ -215,7 +231,8 @@ enum CapturedVaultMedia {
                 source: source,
                 kind: .image,
                 context: context,
-                sync: sync
+                sync: sync,
+                folderId: folderId
             )
             success ? summary.record(.image) : summary.recordFailure()
         case .video(let url):
@@ -224,7 +241,8 @@ enum CapturedVaultMedia {
                 context: context,
                 vaultStore: vaultStore,
                 sync: sync,
-                source: source
+                source: source,
+                folderId: folderId
             )
             try? FileManager.default.removeItem(at: url)
         case .livePhoto(let package, let originalName):
@@ -241,7 +259,8 @@ enum CapturedVaultMedia {
                 source: source,
                 kind: .livePhoto,
                 context: context,
-                sync: sync
+                sync: sync,
+                folderId: folderId
             )
             success ? summary.record(.livePhoto) : summary.recordFailure()
         }
@@ -285,9 +304,11 @@ struct SecurityCenterView: View {
     @EnvironmentObject private var subscription: SubscriptionManager
     @EnvironmentObject private var sync: CloudKitSyncService
     @EnvironmentObject private var vaultStore: VaultStore
+    @EnvironmentObject private var remoteChanges: CloudSyncRemoteChangeRouter
     @State private var isBackingUp = false
 
     var body: some View {
+        let diagnostics = sync.diagnosticSnapshot(lastRemoteChange: remoteChanges.lastReason)
         NavigationStack {
             ScrollView {
                 VStack(spacing: 14) {
@@ -344,14 +365,39 @@ struct SecurityCenterView: View {
                     SecurityRow(icon: "faceid", title: L.string("Face ID Gate"), detail: L.string("The first unlock layer uses iOS device authentication before the gesture screen appears."), status: auth.requiresBiometricUnlock ? L.string("Enabled") : L.string("Off"))
                     SecurityRow(icon: "scribble.variable", title: L.string("Gesture Unlock"), detail: L.string("Verified from the on-device gesture template. Never uploaded to a server."), status: auth.isGestureUnlockEnabled ? L.string("Enabled") : L.string("Not Set"))
                     SecurityRow(icon: "icloud", title: L.string("CloudKit Encrypted Sync"), detail: sync.state.detail, status: sync.state.title)
+                    AppCard {
+                        HStack(alignment: .top, spacing: 12) {
+                            Image(systemName: "checkmark.icloud.fill")
+                                .font(.title3)
+                                .foregroundStyle(AppTheme.success)
+                                .frame(width: 34, height: 34)
+                                .background(AppTheme.success.opacity(0.12))
+                                .clipShape(Circle())
+
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text(L.string("Encrypted iCloud Sync is always on"))
+                                    .font(.headline)
+                                    .foregroundStyle(AppTheme.ink)
+                                Text(L.string("Vault items are encrypted on this device and backed up to your private iCloud when available. This uses your iCloud storage and can restore data on your own devices signed in with the same iCloud account."))
+                                    .font(.caption)
+                                    .foregroundStyle(AppTheme.secondaryText)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
                     SecurityRow(icon: "eye.slash", title: L.string("Background Shield"), detail: L.string("Locks and clears temporary files when the app leaves the foreground."), status: L.string("On"))
-                    SecurityRow(icon: "rectangle.on.rectangle.slash", title: L.string("Screenshot/Recording Detection"), detail: L.string("Logs security events. iOS screenshots cannot be fully blocked."), status: L.string("On"))
                     SecurityRow(icon: "note.text", title: L.string("Decoy Notes"), detail: L.string("Wrong gestures open a realistic notes space with todos and conversation notes."), status: L.string("Enabled"))
                     SecurityRow(icon: "camera.viewfinder", title: L.string("Intrusion Capture"), detail: L.string("Camera permission is requested only after you enable it."), status: L.string("Off"))
-
-                    AppCard {
-                        LanguageSettingsContent()
-                    }
+                    SecurityRow(
+                        icon: "antenna.radiowaves.left.and.right",
+                        title: L.string("Multi-Device Push"),
+                        detail: diagnostics.subscriptionDetail,
+                        status: diagnostics.subscriptionStatus
+                    )
+                    CloudSyncDiagnosticsCard(
+                        snapshot: diagnostics,
+                        remoteNotificationStatus: remoteChanges.registrationStatus
+                    )
 
                     Button {
                         Task { await sync.checkAccountStatus() }
@@ -360,17 +406,67 @@ struct SecurityCenterView: View {
                     }
                     .buttonStyle(SecondaryButtonStyle())
 
-                    Button {
-                        Task {
-                            isBackingUp = true
-                            await vaultStore.backupAllFilesToCloud(context: modelContext, sync: sync, allowsCloudSync: subscription.canImportAndSync)
-                            isBackingUp = false
+                    if !subscription.canImportAndSync {
+                        AppCard {
+                            Label(L.string("Active Pro is required to upload encrypted files to iCloud."), systemImage: "star.circle")
+                                .font(.caption)
+                                .foregroundStyle(AppTheme.warning)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
+                    }
+
+                    Button {
+                        Task { await runManualBackup() }
                     } label: {
-                        Label(isBackingUp ? L.string("Backing Up All Files") : L.string("Back Up All Files to iCloud"), systemImage: "icloud.and.arrow.up")
+                        Label(backupButtonTitle, systemImage: "icloud.and.arrow.up")
                     }
                     .buttonStyle(AppButtonStyle())
                     .disabled(isBackingUp || !subscription.canImportAndSync)
+
+                    if let summary = sync.lastRunSummary {
+                        AppCard {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text(L.string("Last iCloud Backup"))
+                                    .font(.headline)
+                                    .foregroundStyle(AppTheme.ink)
+                                Text(summary.statusText)
+                                    .font(.caption)
+                                    .foregroundStyle(summary.totalFailed == 0 ? AppTheme.success : AppTheme.warning)
+                                ForEach(summary.failureMessages, id: \.self) { message in
+                                    Text(message)
+                                        .font(.caption2.monospaced())
+                                        .foregroundStyle(AppTheme.secondaryText)
+                                        .textSelection(.enabled)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+
+                    NavigationLink {
+                        CloudSyncLogFileView()
+                    } label: {
+                        AppCard {
+                            HStack(spacing: 12) {
+                                Image(systemName: "doc.text.magnifyingglass")
+                                    .foregroundStyle(AppTheme.primary)
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(L.string("View iCloud Sync Log File"))
+                                        .font(.headline)
+                                        .foregroundStyle(AppTheme.ink)
+                                    Text(L.string("Detailed technical logs are saved locally in the app and are not shown on this page."))
+                                        .font(.caption)
+                                        .foregroundStyle(AppTheme.secondaryText)
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(AppTheme.secondaryText)
+                            }
+                        }
+                    }
+                    .buttonStyle(.plain)
                 }
                 .padding()
             }
@@ -378,36 +474,172 @@ struct SecurityCenterView: View {
             .navigationTitle(L.string("Security Center"))
         }
     }
+
+    private var backupButtonTitle: String {
+        if isBackingUp {
+            return L.string("Backing Up All Files")
+        }
+        return L.string("Back Up All Files to iCloud")
+    }
+
+    @MainActor
+    private func runManualBackup() async {
+        isBackingUp = true
+        defer { isBackingUp = false }
+        vaultStore.setWriteAccess(subscription.canImportAndSync)
+        _ = await vaultStore.backupAllFilesToCloud(
+            context: modelContext,
+            sync: sync,
+            allowsCloudSync: subscription.canImportAndSync
+        )
+    }
 }
 
-private struct LanguageSettingsContent: View {
-    @AppStorage(AppLanguage.storageKey) private var language = AppLanguage.english.rawValue
+private struct CloudSyncDiagnosticsCard: View {
+    let snapshot: CloudSyncDiagnosticSnapshot
+    let remoteNotificationStatus: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(L.string("Language"))
-                .font(.headline)
-                .foregroundStyle(AppTheme.ink)
-            Picker(L.string("App Language"), selection: $language) {
-                ForEach(AppLanguage.allCases) { option in
-                    Text(option.title).tag(option.rawValue)
+        AppCard {
+            VStack(alignment: .leading, spacing: 10) {
+                Label(L.string("iCloud Development Diagnostics"), systemImage: "stethoscope")
+                    .font(.headline)
+                    .foregroundStyle(AppTheme.ink)
+                diagnosticRow(L.string("Container"), snapshot.containerIdentifier)
+                diagnosticRow(L.string("Environment"), snapshot.environment)
+                diagnosticRow(L.string("Database"), snapshot.databaseScope)
+                diagnosticRow(L.string("Sync Trigger"), snapshot.remoteTriggerMode)
+                diagnosticRow(L.string("Record Types"), snapshot.subscriptionRecordTypes.joined(separator: ", "))
+                diagnosticRow(L.string("Schema Status"), snapshot.schemaStatus)
+                diagnosticRow(L.string("Schema Detail"), snapshot.schemaDetail)
+                if !snapshot.missingRecordTypes.isEmpty {
+                    diagnosticRow(L.string("Missing Record Types"), snapshot.missingRecordTypes.joined(separator: ", "))
+                }
+                if !snapshot.missingQueryableIndexes.isEmpty {
+                    diagnosticRow(L.string("Missing Queryable Indexes"), snapshot.missingQueryableIndexes.joined(separator: ", "))
+                }
+                diagnosticRow(L.string("APNs Registration"), remoteNotificationStatus)
+                diagnosticRow(L.string("iCloud Status"), snapshot.iCloudStatus)
+                diagnosticRow(L.string("Last Successful Sync"), snapshot.lastSuccessfulSync)
+                diagnosticRow(L.string("Last Remote Change"), snapshot.lastRemoteChange)
+                if let lastSchemaError = snapshot.lastSchemaError, !lastSchemaError.isEmpty {
+                    diagnosticRow(L.string("Last CloudKit Schema Error"), lastSchemaError)
+                }
+                if let lastError = snapshot.lastError, !lastError.isEmpty {
+                    diagnosticRow(L.string("Last Sync Error"), lastError)
                 }
             }
-            .pickerStyle(.menu)
-            Text(L.string("Default follows your iPhone language and region. Choose a language here to override it inside the app."))
-                .font(.caption)
-                .foregroundStyle(AppTheme.secondaryText)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func diagnosticRow(_ title: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.caption.bold())
+                .foregroundStyle(AppTheme.ink)
+            Text(value)
+                .font(.caption2.monospaced())
+                .foregroundStyle(AppTheme.secondaryText)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+struct CloudSyncLogFileView: View {
+    @EnvironmentObject private var sync: CloudKitSyncService
+    @State private var logText = ""
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                AppCard {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(L.string("Local Log File"))
+                            .font(.headline)
+                            .foregroundStyle(AppTheme.ink)
+                        Text(sync.logFileURL.path)
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(AppTheme.secondaryText)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                Text(logText.isEmpty ? L.string("No iCloud sync log has been written yet.") : logText)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(AppTheme.secondaryText)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(14)
+                    .background(AppTheme.card)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(AppTheme.line))
+            }
+            .padding()
+        }
+        .background(AppTheme.background)
+        .navigationTitle(L.string("iCloud Sync Log"))
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    UIPasteboard.general.string = logText
+                } label: {
+                    Label(L.string("Copy"), systemImage: "doc.on.doc")
+                }
+                .disabled(logText.isEmpty)
+            }
+        }
+        .task {
+            reload()
+        }
+    }
+
+    private func reload() {
+        logText = sync.readLogFile()
     }
 }
 
 struct GeneralSettingsView: View {
+    @EnvironmentObject private var auth: AuthenticationManager
+    @EnvironmentObject private var sync: CloudKitSyncService
+    @EnvironmentObject private var subscription: SubscriptionManager
+    @AppStorage(AppLanguage.storageKey) private var language = AppLanguage.english.rawValue
+    @AppStorage(AppAppearance.storageKey) private var appearance = AppAppearance.system.rawValue
+
+    private var preferenceRefreshToken: SettingsPreferenceRefreshToken {
+        SettingsPreferenceRefreshToken(language: language, appearance: appearance)
+    }
+
     var body: some View {
         List {
             Section {
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: "checkmark.icloud.fill")
+                        .foregroundStyle(AppTheme.success)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(L.string("Encrypted iCloud Sync"))
+                            .foregroundStyle(AppTheme.ink)
+                        Text(L.string("Always on. Existing vault content continues syncing even when adding new files requires Pro."))
+                            .font(.caption)
+                            .foregroundStyle(AppTheme.secondaryText)
+                    }
+                    Spacer()
+                    Text(sync.state.title)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(AppTheme.secondaryText)
+                }
+            } header: {
+                Text(L.string("iCloud"))
+            }
+
+            Section {
                 NavigationLink {
                     MembershipView()
+                        .environmentObject(subscription)
                 } label: {
                     SettingsNavigationRow(
                         icon: "star.circle",
@@ -438,6 +670,7 @@ struct GeneralSettingsView: View {
 
                 NavigationLink {
                     UnlockGracePeriodSettingsView()
+                        .environmentObject(auth)
                 } label: {
                     SettingsNavigationRow(
                         icon: "timer",
@@ -449,6 +682,7 @@ struct GeneralSettingsView: View {
                 Text(L.string("General Settings"))
             }
         }
+        .id(preferenceRefreshToken)
         .navigationTitle(L.string("General Settings"))
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -494,6 +728,11 @@ struct UnlockGracePeriodSettingsView: View {
 
 struct AppearanceSettingsView: View {
     @AppStorage(AppAppearance.storageKey) private var appearance = AppAppearance.system.rawValue
+    @AppStorage(AppLanguage.storageKey) private var language = AppLanguage.english.rawValue
+
+    private var preferenceRefreshToken: SettingsPreferenceRefreshToken {
+        SettingsPreferenceRefreshToken(language: language, appearance: appearance)
+    }
 
     var body: some View {
         List {
@@ -501,6 +740,9 @@ struct AppearanceSettingsView: View {
                 ForEach(AppAppearance.allCases) { option in
                     Button {
                         appearance = option.rawValue
+                        Task { @MainActor in
+                            option.applyToConnectedWindows()
+                        }
                     } label: {
                         HStack {
                             Text(option.title)
@@ -517,6 +759,7 @@ struct AppearanceSettingsView: View {
                 Text(L.string("Choose how the app should appear on this device."))
             }
         }
+        .id(preferenceRefreshToken)
         .navigationTitle(L.string("Appearance"))
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -524,6 +767,11 @@ struct AppearanceSettingsView: View {
 
 struct AppLanguageSettingsView: View {
     @AppStorage(AppLanguage.storageKey) private var language = AppLanguage.english.rawValue
+    @AppStorage(AppAppearance.storageKey) private var appearance = AppAppearance.system.rawValue
+
+    private var preferenceRefreshToken: SettingsPreferenceRefreshToken {
+        SettingsPreferenceRefreshToken(language: language, appearance: appearance)
+    }
 
     var body: some View {
         List {
@@ -547,6 +795,7 @@ struct AppLanguageSettingsView: View {
                 Text(L.string("Default follows your iPhone language and region. Choose a language here to override it inside the app."))
             }
         }
+        .id(preferenceRefreshToken)
         .navigationTitle(L.string("App Language"))
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -1685,7 +1934,10 @@ final class CameraGridOverlayView: UIView {
 
 struct AudioRecorderView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var recorder = VaultAudioRecorder()
+    @State private var didAttemptAutoStart = false
+    @State private var autoStartTask: Task<Void, Never>?
     var autoStart = false
     let onRecording: (URL, @escaping (Bool) -> Void) -> Void
 
@@ -1791,10 +2043,40 @@ struct AudioRecorderView: View {
             .padding(22)
         }
         .onDisappear {
+            autoStartTask?.cancel()
             recorder.cancelActiveRecording()
         }
+        .onAppear {
+            scheduleAutoStartIfNeeded()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            scheduleAutoStartIfNeeded()
+        }
         .task {
-            guard autoStart, !recorder.isRecording, !recorder.hasRecording else { return }
+            scheduleAutoStartIfNeeded()
+        }
+    }
+
+    private func scheduleAutoStartIfNeeded() {
+        guard autoStart,
+              scenePhase == .active,
+              !didAttemptAutoStart,
+              !recorder.isRecording,
+              !recorder.hasRecording,
+              !recorder.isSaving else {
+            return
+        }
+        didAttemptAutoStart = true
+        autoStartTask?.cancel()
+        autoStartTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 180_000_000)
+            guard !Task.isCancelled,
+                  !recorder.isRecording,
+                  !recorder.hasRecording,
+                  !recorder.isSaving else {
+                return
+            }
             recorder.start()
         }
     }
@@ -1820,14 +2102,24 @@ final class VaultAudioRecorder: NSObject, ObservableObject, AVAudioRecorderDeleg
 
     func start() {
         errorMessage = nil
-        AVAudioSession.sharedInstance().requestRecordPermission { [weak self] granted in
-            Task { @MainActor in
-                guard let self else { return }
-                if granted {
-                    self.beginRecording()
-                } else {
-                    self.errorMessage = L.string("Microphone permission is required to record audio.")
-                }
+        requestRecordPermission { [weak self] granted in
+            guard let self else { return }
+            if granted {
+                self.beginRecording()
+            } else {
+                self.errorMessage = L.string("Microphone permission is required to record audio.")
+            }
+        }
+    }
+
+    private func requestRecordPermission(completion: @escaping @MainActor (Bool) -> Void) {
+        if #available(iOS 17.0, *) {
+            AVAudioApplication.requestRecordPermission { granted in
+                Task { @MainActor in completion(granted) }
+            }
+        } else {
+            AVAudioSession.sharedInstance().requestRecordPermission { granted in
+                Task { @MainActor in completion(granted) }
             }
         }
     }

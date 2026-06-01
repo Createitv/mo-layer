@@ -24,6 +24,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
     case system
     case english
     case simplifiedChinese
+    case traditionalChinese
     case japanese
     case german
     case french
@@ -54,6 +55,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         case .system: L.string("Follow System")
         case .english: "English"
         case .simplifiedChinese: "Chinese (Simplified)"
+        case .traditionalChinese: "繁體中文"
         case .japanese: "Japanese"
         case .german: "Deutsch"
         case .french: "French"
@@ -67,6 +69,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         case .system: nil
         case .english: "en"
         case .simplifiedChinese: "zh-Hans"
+        case .traditionalChinese: "zh-Hant"
         case .japanese: "ja"
         case .german: "de"
         case .french: "fr"
@@ -80,6 +83,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         case .system: Locale.autoupdatingCurrent.identifier
         case .english: "en"
         case .simplifiedChinese: "zh-Hans"
+        case .traditionalChinese: "zh-Hant"
         case .japanese: "ja"
         case .german: "de"
         case .french: "fr"
@@ -119,17 +123,22 @@ enum AppAppearance: String, CaseIterable, Identifiable {
     }
 }
 
+struct SettingsPreferenceRefreshToken: Hashable {
+    let language: String
+    let appearance: String
+}
+
 struct LanguagePickerSection: View {
     @AppStorage(AppLanguage.storageKey) private var language = AppLanguage.english.rawValue
 
     var body: some View {
-        Section("Language") {
-            Picker("App Language", selection: $language) {
+        Section(L.string("Language")) {
+            Picker(L.string("App Language"), selection: $language) {
                 ForEach(AppLanguage.allCases) { option in
                     Text(option.title).tag(option.rawValue)
                 }
             }
-            Text("Default follows your iPhone language and region. Choose a language here to override it inside the app.")
+            Text(L.string("Default follows your iPhone language and region. Choose a language here to override it inside the app."))
                 .font(.caption)
                 .foregroundStyle(AppTheme.secondaryText)
         }

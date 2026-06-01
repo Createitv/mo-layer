@@ -1,5 +1,6 @@
+"CFBundleDisplayName" = "Coffre Aegis";
 "CFBundleTypeName" = "Fichier coffre chiffre";
 "NSCameraUsageDescription" = "Utilise pour capturer des photos directement dans le coffre chiffre et enregistrer les echecs de deverrouillage si vous activez la capture d'intrusion.";
 "NSPhotoLibraryAddUsageDescription" = "Utilise pour enregistrer le contenu exporte dans votre phototheque lorsque vous choisissez d'exporter.";
 "NSPhotoLibraryUsageDescription" = "Utilise pour selectionner les photos et videos a chiffrer puis importer dans votre coffre prive.";
-"NSFaceIDUsageDescription" = "Used as the first unlock layer before your private gesture can open the encrypted vault.";
+"NSFaceIDUsageDescription" = "Utilise comme premier niveau de deverrouillage avant que votre geste prive ouvre le coffre chiffre.";

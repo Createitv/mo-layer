@@ -1,0 +1,43 @@
+---
+import DownloadPanel from "@/components/DownloadPanel.astro";
+import BaseLayout from "@/layouts/BaseLayout.astro";
+import { localePath, locales, pages, siteUrl, type Locale } from "@/data/site";
+
+export function getStaticPaths() {
+  return locales.map((locale) => ({ params: { locale } }));
+}
+
+const locale = Astro.params.locale as Locale;
+const copy = pages[locale];
+const title = `${copy.sections.securityTitle} | ${copy.appName}`;
+const description = copy.sections.securityLead;
+const structuredData = [
+  {
+    "@context": "https://schema.org",
+    "@type": "WebPage",
+    name: title,
+    description,
+    url: `${siteUrl}${localePath(locale, "security")}`
+  }
+];
+---
+
+<BaseLayout locale={locale} title={title} description={description} path="security" structuredData={structuredData}>
+  <main class="subpage">
+    <section class="subpage-hero">
+      <p class="eyebrow">{copy.nav.security}</p>
+      <h1>{copy.sections.securityTitle}</h1>
+      <p>{copy.sections.securityLead}</p>
+    </section>
+    <section class="detail-grid">
+      {copy.securityPoints.map((point) => (
+        <article class="detail-card">
+          <span>{point.eyebrow}</span>
+          <h2>{point.title}</h2>
+          <p>{point.detail}</p>
+        </article>
+      ))}
+    </section>
+    <DownloadPanel copy={copy} />
+  </main>
+</BaseLayout>

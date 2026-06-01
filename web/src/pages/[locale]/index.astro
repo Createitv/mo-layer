@@ -1,0 +1,124 @@
+---
+import DownloadPanel from "@/components/DownloadPanel.astro";
+import PhoneFrame from "@/components/PhoneFrame.astro";
+import BaseLayout from "@/layouts/BaseLayout.astro";
+import { appStoreUrl, localePath, locales, pages, screenshots, siteUrl, type Locale } from "@/data/site";
+
+export function getStaticPaths() {
+  return locales.map((locale) => ({ params: { locale } }));
+}
+
+const locale = Astro.params.locale as Locale;
+const copy = pages[locale];
+const structuredData = [
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    name: copy.appName,
+    operatingSystem: "iOS",
+    applicationCategory: "UtilitiesApplication",
+    description: copy.seo.description,
+    url: `${siteUrl}${localePath(locale)}`,
+    downloadUrl: appStoreUrl,
+    offers: {
+      "@type": "Offer",
+      price: "0",
+      priceCurrency: "USD"
+    }
+  },
+  {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    mainEntity: copy.faq.map((item) => ({
+      "@type": "Question",
+      name: item.question,
+      acceptedAnswer: {
+        "@type": "Answer",
+        text: item.answer
+      }
+    }))
+  }
+];
+---
+
+<BaseLayout locale={locale} title={copy.seo.title} description={copy.seo.description} structuredData={structuredData}>
+  <main>
+    <section class="hero-section">
+      <div class="hero-copy">
+        <p class="eyebrow">{copy.hero.eyebrow}</p>
+        <h1>{copy.hero.title}</h1>
+        <p class="hero-lead">{copy.hero.lead}</p>
+        <div class="hero-actions">
+          <a class="primary-button" href={appStoreUrl}>{copy.hero.primary}</a>
+          <a class="secondary-button" href="#features">{copy.hero.secondary}</a>
+        </div>
+        <div class="proof-row" aria-label="Product highlights">
+          {copy.proof.map((item) => <span>{item}</span>)}
+        </div>
+      </div>
+      <div class="hero-visual" aria-label={copy.sections.screenshotsTitle}>
+        <PhoneFrame src={screenshots[0].src} alt={screenshots[0].alt} class="hero-phone primary-phone" />
+        <PhoneFrame src={screenshots[1].src} alt={screenshots[1].alt} class="hero-phone secondary-phone" />
+        <div class="floating-status">
+          <span></span>
+          <strong>iCloud</strong>
+          <small>Encrypted sync ready</small>
+        </div>
+      </div>
+    </section>
+
+    <section class="feature-intro" id="features">
+      <p class="eyebrow">{copy.nav.features}</p>
+      <h2>{copy.sections.featuresTitle}</h2>
+      <p>{copy.sections.featuresLead}</p>
+    </section>
+
+    <section class="feature-grid">
+      {copy.features.map((feature, index) => (
+        <a class={`feature-card feature-card-${index + 1}`} href={localePath(locale, `features/${feature.slug}`)}>
+          <span>{feature.eyebrow}</span>
+          <h3>{feature.title}</h3>
+          <p>{feature.short}</p>
+        </a>
+      ))}
+    </section>
+
+    <section class="screenshots-section" aria-labelledby="screenshots-title">
+      <div class="section-heading">
+        <p class="eyebrow">{copy.sections.screenshotsTitle}</p>
+        <h2 id="screenshots-title">{copy.sections.securityTitle}</h2>
+        <p>{copy.sections.securityLead}</p>
+      </div>
+      <div class="screenshot-rail">
+        {screenshots.map((shot) => <PhoneFrame src={shot.src} alt={shot.alt} />)}
+      </div>
+    </section>
+
+    <section class="security-band">
+      {copy.securityPoints.map((point) => (
+        <article>
+          <span>{point.eyebrow}</span>
+          <h3>{point.title}</h3>
+          <p>{point.short}</p>
+        </article>
+      ))}
+    </section>
+
+    <DownloadPanel copy={copy} />
+
+    <section class="faq-preview">
+      <div>
+        <p class="eyebrow">{copy.nav.faq}</p>
+        <h2>{copy.sections.faqTitle}</h2>
+      </div>
+      <div class="faq-list">
+        {copy.faq.slice(0, 3).map((item) => (
+          <details>
+            <summary>{item.question}</summary>
+            <p>{item.answer}</p>
+          </details>
+        ))}
+      </div>
+    </section>
+  </main>
+</BaseLayout>

@@ -15,7 +15,7 @@ final class RecordingLiveActivityController {
         guard activity == nil else { return }
 
         let now = Date()
-        let attributes = RecordingActivityAttributes(title: "Recording")
+        let attributes = RecordingActivityAttributes(title: L.string("Recording"))
         let state = RecordingActivityAttributes.ContentState(
             startedAt: now,
             elapsedTime: 0,

@@ -29,6 +29,19 @@ enum KeychainService {
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
 
+        return try read(query: query)
+    }
+
+    static func readAny(account: String, accessGroup: String? = nil) throws -> Data {
+        var query = baseQuery(account: account, accessGroup: accessGroup, synchronizable: false)
+        query[kSecAttrSynchronizable as String] = kSecAttrSynchronizableAny
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+
+        return try read(query: query)
+    }
+
+    private static func read(query: [String: Any]) throws -> Data {
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
         if status == errSecItemNotFound { throw KeychainError.itemNotFound }

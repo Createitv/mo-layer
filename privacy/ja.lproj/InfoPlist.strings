@@ -1,5 +1,6 @@
+"CFBundleDisplayName" = "Aegis保管庫";
 "CFBundleTypeName" = "暗号化保管庫ファイル";
 "NSCameraUsageDescription" = "写真を暗号化保管庫へ直接保存し、侵入記録を有効にした場合は解除失敗を記録するために使用します。";
 "NSPhotoLibraryAddUsageDescription" = "選択した内容を書き出すときに写真ライブラリへ保存するために使用します。";
 "NSPhotoLibraryUsageDescription" = "暗号化して読み込む写真や動画を選択するために使用します。";
-"NSFaceIDUsageDescription" = "Used as the first unlock layer before your private gesture can open the encrypted vault.";
+"NSFaceIDUsageDescription" = "プライベートジェスチャーで暗号化保管庫を開く前の最初の認証に使用します。";

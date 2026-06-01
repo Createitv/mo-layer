@@ -15,6 +15,7 @@ final class ShareViewController: UIViewController {
     private let fileListLabel = UILabel()
     private let saveButton = UIButton(type: .system)
     private let cancelButton = UIButton(type: .system)
+    private var didRequestHostOpen = false
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -131,6 +132,7 @@ final class ShareViewController: UIViewController {
             }
             self.writeManifest(directory: directory)
             self.showReadyState()
+            self.openHostAppAfterStaging()
         }
     }
 
@@ -261,12 +263,13 @@ final class ShareViewController: UIViewController {
     }
 
     private func showReadyState() {
-        statusLabel.text = "已接收 \(stagedItems.count) 个文件，打开 App 后自动加密保存。"
+        statusLabel.text = "已接收 \(stagedItems.count) 个文件，正在打开 App..."
         fileListLabel.text = stagedItems
             .prefix(5)
             .map { "• \($0.originalName)" }
             .joined(separator: "\n")
-        saveButton.isHidden = false
+        saveButton.configuration?.title = "打开 App 保存"
+        saveButton.isHidden = true
         cancelButton.isHidden = false
     }
 
@@ -321,13 +324,56 @@ final class ShareViewController: UIViewController {
     }
 
     @objc private func saveTapped() {
+        openHostAppAfterStaging()
+    }
+
+    private func openHostAppAfterStaging() {
+        guard !didRequestHostOpen else { return }
         guard let url = URL(string: "privacy://shared-imports") else {
             complete()
             return
         }
-        extensionContext?.open(url) { [weak self] _ in
-            self?.complete()
+
+        didRequestHostOpen = true
+        statusLabel.text = "已接收 \(stagedItems.count) 个文件，正在打开 Palimpsest..."
+        openHostApp(url) { [weak self] didOpen in
+            guard let self else { return }
+            if didOpen {
+                self.complete()
+            } else {
+                self.didRequestHostOpen = false
+                self.statusLabel.text = "已接收 \(self.stagedItems.count) 个文件。如果没有自动打开，请点下方按钮进入 App 保存。"
+                self.saveButton.isHidden = false
+                self.cancelButton.isHidden = false
+            }
         }
+    }
+
+    private func openHostApp(_ url: URL, completion: @escaping (Bool) -> Void) {
+        extensionContext?.open(url) { [weak self] didOpen in
+            guard let self else {
+                completion(didOpen)
+                return
+            }
+            if didOpen {
+                completion(true)
+            } else {
+                completion(self.openURLThroughResponderChain(url))
+            }
+        }
+    }
+
+    private func openURLThroughResponderChain(_ url: URL) -> Bool {
+        let selector = NSSelectorFromString("openURL:")
+        var responder: UIResponder? = self
+        while let currentResponder = responder {
+            if currentResponder.responds(to: selector) {
+                _ = currentResponder.perform(selector, with: url)
+                return true
+            }
+            responder = currentResponder.next
+        }
+        return false
     }
 
     @objc private func cancelTapped() {

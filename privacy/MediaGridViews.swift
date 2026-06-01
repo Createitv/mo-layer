@@ -8,6 +8,7 @@ enum MediaGridLayout {
     static let minimumTileSize: CGFloat = 24
     static let interactionMinHeight: CGFloat = 560
     static let spacing: CGFloat = 6
+    static let coordinateSpaceName = "vault.mediaGrid"
     static let liveZoomAnimation: Animation = .smooth(duration: 0.16, extraBounce: 0.02)
     static let settledZoomAnimation: Animation = .interactiveSpring(response: 0.28, dampingFraction: 0.84, blendDuration: 0.08)
 
@@ -73,7 +74,7 @@ enum MediaGridScaleStorage {
     static let defaultStoredScale = Double(MediaGridLayout.defaultScale)
 }
 
-struct ZoomableMediaGrid<Data: RandomAccessCollection, Content: View>: View where Data.Element: Identifiable {
+struct ZoomableMediaGrid<Data: RandomAccessCollection, Content: View>: View where Data.Element: Identifiable, Data.Element.ID: Hashable {
     let items: Data
     @Binding var scale: CGFloat
     let content: (Data.Element) -> Content
@@ -82,6 +83,16 @@ struct ZoomableMediaGrid<Data: RandomAccessCollection, Content: View>: View wher
     @State private var containerWidth: CGFloat = UIScreen.main.bounds.width - 32
     @State private var isPinching = false
     @Namespace private var zoomNamespace
+
+    init(
+        items: Data,
+        scale: Binding<CGFloat>,
+        @ViewBuilder content: @escaping (Data.Element) -> Content
+    ) {
+        self.items = items
+        self._scale = scale
+        self.content = content
+    }
 
     var body: some View {
         let effectiveScale = MediaGridLayout.clampedScale(scale * pinchScale)
@@ -105,6 +116,14 @@ struct ZoomableMediaGrid<Data: RandomAccessCollection, Content: View>: View wher
                 ForEach(items) { item in
                     content(item)
                         .matchedGeometryEffect(id: item.id, in: zoomNamespace)
+                        .background(
+                            GeometryReader { proxy in
+                                Color.clear.preference(
+                                    key: MediaGridItemFramePreferenceKey.self,
+                                    value: [AnyHashable(item.id): proxy.frame(in: .named(MediaGridLayout.coordinateSpaceName))]
+                                )
+                            }
+                        )
                         .scaleEffect(interactionScale)
                         .shadow(
                             color: .black.opacity(MediaGridLayout.shadowOpacity(lift: lift)),
@@ -118,6 +137,7 @@ struct ZoomableMediaGrid<Data: RandomAccessCollection, Content: View>: View wher
                 }
             }
         }
+        .coordinateSpace(name: MediaGridLayout.coordinateSpaceName)
         .frame(maxWidth: .infinity, minHeight: MediaGridLayout.interactionMinHeight, alignment: .top)
         .contentShape(Rectangle())
         .animation(MediaGridLayout.settledZoomAnimation, value: columnCount)
@@ -159,5 +179,13 @@ private struct MediaGridWidthPreferenceKey: PreferenceKey {
 
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = nextValue()
+    }
+}
+
+struct MediaGridItemFramePreferenceKey: PreferenceKey {
+    static let defaultValue: [AnyHashable: CGRect] = [:]
+
+    static func reduce(value: inout [AnyHashable: CGRect], nextValue: () -> [AnyHashable: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
     }
 }

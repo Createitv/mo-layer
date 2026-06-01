@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import Photos
 import PhotosUI
@@ -40,7 +41,10 @@ enum ImportService {
         _ items: [PhotosPickerItem],
         context: ModelContext,
         vaultStore: VaultStore,
-        sync: CloudKitSyncService
+        sync: CloudKitSyncService,
+        folderId: String? = nil,
+        syncAfterImport: Bool = true,
+        progress: ((Bool) -> Void)? = nil
     ) async -> ImportSummary {
         var summary = ImportSummary()
         for item in items {
@@ -53,13 +57,20 @@ enum ImportService {
                     source: "Photos",
                     kind: .livePhoto,
                     context: context,
-                    sync: sync
+                    sync: sync,
+                    folderId: folderId,
+                    syncAfterImport: syncAfterImport
                 )
                 success ? summary.record(.livePhoto) : summary.recordFailure()
+                progress?(success)
                 continue
             }
 
-            guard let data = try? await item.loadTransferable(type: Data.self) else { continue }
+            guard let data = try? await item.loadTransferable(type: Data.self) else {
+                summary.recordFailure()
+                progress?(false)
+                continue
+            }
             let contentType = item.supportedContentTypes.first
             let kind: VaultItemKind = contentType?.conforms(to: UTType.movie) == true ? .video : .image
             let name = "Photo-\(Date().timeIntervalSince1970).\(contentType?.preferredFilenameExtension ?? "dat")"
@@ -70,13 +81,16 @@ enum ImportService {
                 source: "Photos",
                 kind: kind,
                 context: context,
-                sync: sync
+                sync: sync,
+                folderId: folderId,
+                syncAfterImport: syncAfterImport
             )
             if success {
                 summary.record(kind)
             } else {
                 summary.recordFailure()
             }
+            progress?(success)
         }
         return summary
     }
@@ -150,13 +164,11 @@ enum ImportService {
         context: ModelContext,
         vaultStore: VaultStore,
         sync: CloudKitSyncService,
-        source: String = "Files"
+        source: String = "Files",
+        folderId: String? = nil,
+        syncAfterImport: Bool = true
     ) async -> Bool {
-        let didAccess = url.startAccessingSecurityScopedResource()
-        defer {
-            if didAccess { url.stopAccessingSecurityScopedResource() }
-        }
-        guard let data = try? Data(contentsOf: url) else { return false }
+        guard let data = await loadFileData(from: url) else { return false }
         let type = UTType(filenameExtension: url.pathExtension)
         return await vaultStore.importData(
             data,
@@ -165,7 +177,9 @@ enum ImportService {
             source: source,
             kind: kind(for: type, fileExtension: url.pathExtension),
             context: context,
-            sync: sync
+            sync: sync,
+            folderId: folderId,
+            syncAfterImport: syncAfterImport
         )
     }
 
@@ -175,7 +189,10 @@ enum ImportService {
         context: ModelContext,
         vaultStore: VaultStore,
         sync: CloudKitSyncService,
-        source: String = "Files"
+        source: String = "Files",
+        folderId: String? = nil,
+        syncAfterImport: Bool = true,
+        progress: ((Bool) -> Void)? = nil
     ) async -> ImportSummary {
         var summary = ImportSummary()
         for url in urls {
@@ -186,15 +203,28 @@ enum ImportService {
                 context: context,
                 vaultStore: vaultStore,
                 sync: sync,
-                source: source
+                source: source,
+                folderId: folderId,
+                syncAfterImport: syncAfterImport
             )
             if success {
                 summary.record(kind)
             } else {
                 summary.recordFailure()
             }
+            progress?(success)
         }
         return summary
+    }
+
+    private static func loadFileData(from url: URL) async -> Data? {
+        await Task.detached(priority: .userInitiated) {
+            let didAccess = url.startAccessingSecurityScopedResource()
+            defer {
+                if didAccess { url.stopAccessingSecurityScopedResource() }
+            }
+            return try? Data(contentsOf: url)
+        }.value
     }
 
     @MainActor
@@ -361,7 +391,16 @@ enum ImportService {
         if type?.conforms(to: .movie) == true { return .video }
         if type?.conforms(to: .audio) == true { return .audio }
         if type?.conforms(to: .pdf) == true || type?.conforms(to: .text) == true { return .document }
-        if ["zip", "rar", "7z", "tar", "gz"].contains(lowerExtension) { return .archive }
+        if [
+            "doc", "docx", "pages", "rtf", "odt",
+            "xls", "xlsx", "numbers", "csv", "ods",
+            "ppt", "pptx", "key", "odp",
+            "txt", "md", "markdown", "json", "xml", "yaml", "yml", "log",
+            "swift", "js", "ts", "tsx", "jsx", "html", "css", "py", "java", "kt", "c", "cpp", "h", "m", "mm", "php", "rb", "go", "rs", "sh", "sql",
+            "psd", "ai", "indd", "xd", "fig", "sketch",
+            "epub", "mobi", "azw", "azw3", "ics", "vcf"
+        ].contains(lowerExtension) { return .document }
+        if ["zip", "rar", "7z", "tar", "gz", "tgz", "bz2", "xz", "jar", "ipa", "apk"].contains(lowerExtension) { return .archive }
         if type != nil { return .document }
         return .other
     }
@@ -413,5 +452,113 @@ enum ImportService {
         return trimmed
             .components(separatedBy: CharacterSet(charactersIn: "/:"))
             .joined(separator: "-")
+    }
+}
+
+@MainActor
+final class VaultImportQueue: ObservableObject {
+    private static let completedProgressDisplayDuration: UInt64 = 1_200_000_000
+
+    @Published private(set) var progress: VaultImportProgress?
+    private var autoDismissTask: Task<Void, Never>?
+
+    var isImporting: Bool {
+        progress?.isActive == true
+    }
+
+    func importFiles(
+        urls: [URL],
+        context: ModelContext,
+        vaultStore: VaultStore,
+        sync: CloudKitSyncService,
+        source: String = "Files",
+        folderId: String? = nil,
+        onComplete: @escaping (ImportSummary) -> Void
+    ) {
+        guard !urls.isEmpty, !isImporting else { return }
+        autoDismissTask?.cancel()
+        progress = VaultImportProgress(totalCount: urls.count)
+
+        Task { @MainActor in
+            let summary = await ImportService.importFiles(
+                urls: urls,
+                context: context,
+                vaultStore: vaultStore,
+                sync: sync,
+                source: source,
+                folderId: folderId,
+                syncAfterImport: false,
+                progress: { [weak self] success in
+                    self?.recordProgress(success: success)
+                }
+            )
+            finishImport(summary: summary, context: context, vaultStore: vaultStore, sync: sync, onComplete: onComplete)
+        }
+    }
+
+    func importPickerItems(
+        _ items: [PhotosPickerItem],
+        context: ModelContext,
+        vaultStore: VaultStore,
+        sync: CloudKitSyncService,
+        folderId: String? = nil,
+        onComplete: @escaping (ImportSummary) -> Void
+    ) {
+        guard !items.isEmpty, !isImporting else { return }
+        autoDismissTask?.cancel()
+        progress = VaultImportProgress(totalCount: items.count)
+
+        Task { @MainActor in
+            let summary = await ImportService.importPickerItems(
+                items,
+                context: context,
+                vaultStore: vaultStore,
+                sync: sync,
+                folderId: folderId,
+                syncAfterImport: false,
+                progress: { [weak self] success in
+                    self?.recordProgress(success: success)
+                }
+            )
+            finishImport(summary: summary, context: context, vaultStore: vaultStore, sync: sync, onComplete: onComplete)
+        }
+    }
+
+    private func recordProgress(success: Bool) {
+        guard var current = progress else { return }
+        if success {
+            current.recordImported()
+        } else {
+            current.recordFailure()
+        }
+        progress = current
+    }
+
+    private func finishImport(
+        summary: ImportSummary,
+        context: ModelContext,
+        vaultStore: VaultStore,
+        sync: CloudKitSyncService,
+        onComplete: @escaping (ImportSummary) -> Void
+    ) {
+        if var current = progress {
+            current.finish()
+            progress = current
+        }
+        scheduleAutoDismissIfNeeded()
+        onComplete(summary)
+        Task { @MainActor in
+            await vaultStore.syncPendingChanges(context: context, sync: sync)
+        }
+    }
+
+    private func scheduleAutoDismissIfNeeded() {
+        guard progress?.isReadyForAutoDismissal == true else { return }
+        autoDismissTask?.cancel()
+        autoDismissTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: Self.completedProgressDisplayDuration)
+            guard !Task.isCancelled, progress?.isReadyForAutoDismissal == true else { return }
+            progress = nil
+        }
     }
 }

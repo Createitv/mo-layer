@@ -1,0 +1,6 @@
+{
+  "description": "Archivo Aegis es un organizador seguro de fotos y archivos para iPhone. Importe fotos, videos, documentos de identidad, contratos, capturas, enlaces y archivos importantes, y guárdelos en un espacio privado que se abre con la seguridad del dispositivo y su propio gesto.\n\nFunciones principales:\n• Proteger fotos, videos y archivos en este dispositivo\n• Importar desde Fotos, Cámara, Archivos y extensiones para compartir\n• Organizar contenido con álbumes, importaciones recientes y papelera\n• Sincronización cifrada opcional con iCloud para cambio de dispositivo y recuperación\n• Entrada discreta tipo archivador y espacio alternativo realista\n• Pro desbloquea almacenamiento ilimitado, organización por lotes, disfraz avanzado, códigos alternativos, registros de intrusión y recuperación avanzada\n\nSu contenido privado permanece protegido. Si activa la sincronización con iCloud, el contenido se cifra antes de subirse y el desarrollador no conserva su clave de descifrado.\n\nTérminos de uso: https://www.apple.com/legal/internet-services/itunes/dev/stdeula/",
+  "keywords": "ocultar fotos,album secreto,bloqueo fotos,videos privados,contraseña,documentos,archivos,iCloud",
+  "promotionalText": "Proteja fotos, videos, documentos y archivos importantes en un organizador discreto.",
+  "supportUrl": "https://github.com/nicemicro"
+}

@@ -1,3 +1,4 @@
+"CFBundleDisplayName" = "Aegis Vault";
 "CFBundleTypeName" = "Encrypted Vault File";
 "NSCameraUsageDescription" = "Used to capture photos directly into the encrypted vault and, if you enable intrusion capture, record failed unlock attempts.";
 "NSFaceIDUsageDescription" = "Used as the first unlock layer before your private gesture can open the encrypted vault.";

@@ -55,6 +55,19 @@ struct LivePhotoPackage: Codable {
     var pairedVideoFilename: String
 }
 
+struct DecoyTodoPayload: Codable, Equatable, Identifiable {
+    var id: String = UUID().uuidString
+    var text: String
+    var done: Bool
+}
+
+struct DecoyNotePayload: Codable, Equatable {
+    var title: String
+    var body: String
+    var folder: String
+    var todos: [DecoyTodoPayload]
+}
+
 @Model
 final class VaultItem {
     var id: String = UUID().uuidString
@@ -73,6 +86,7 @@ final class VaultItem {
     var assetStateRawValue: String = VaultAssetState.local.rawValue
     var cloudRecordName: String?
     var localRevision: Int = 1
+    var lastSyncError: String?
     var lastDownloadError: String?
     var downloadedAt: Date?
     var importFingerprint: String?
@@ -121,6 +135,7 @@ final class VaultItem {
         self.assetStateRawValue = assetState.rawValue
         self.cloudRecordName = cloudRecordName
         self.localRevision = 1
+        self.lastSyncError = nil
         self.lastDownloadError = nil
         self.downloadedAt = assetState == .local ? Date() : nil
         self.importFingerprint = importFingerprint
@@ -167,6 +182,45 @@ final class VaultTag {
         self.id = id
         self.encryptedName = encryptedName
         self.createdAt = Date()
+    }
+}
+
+@Model
+final class DecoyNoteRecord {
+    var id: String = UUID().uuidString
+    @Attribute(.externalStorage) var encryptedPayload: Data = Data()
+    var isPinned: Bool = false
+    var sortOrder: Double = 0
+    var createdAt: Date = Date()
+    var updatedAt: Date = Date()
+    var deletedAt: Date?
+    var syncStatusRawValue: String = VaultSyncStatus.pending.rawValue
+    var cloudRecordName: String?
+    var localRevision: Int = 1
+    var lastSyncError: String?
+
+    var syncStatus: VaultSyncStatus {
+        get { VaultSyncStatus(rawValue: syncStatusRawValue) ?? .pending }
+        set { syncStatusRawValue = newValue.rawValue }
+    }
+
+    init(
+        id: String = UUID().uuidString,
+        encryptedPayload: Data,
+        isPinned: Bool = false,
+        sortOrder: Double = Date().timeIntervalSince1970
+    ) {
+        self.id = id
+        self.encryptedPayload = encryptedPayload
+        self.isPinned = isPinned
+        self.sortOrder = sortOrder
+        self.createdAt = Date()
+        self.updatedAt = Date()
+        self.deletedAt = nil
+        self.syncStatusRawValue = VaultSyncStatus.pending.rawValue
+        self.cloudRecordName = nil
+        self.localRevision = 1
+        self.lastSyncError = nil
     }
 }
 

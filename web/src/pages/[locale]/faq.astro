@@ -1,0 +1,47 @@
+---
+import DownloadPanel from "@/components/DownloadPanel.astro";
+import BaseLayout from "@/layouts/BaseLayout.astro";
+import { locales, pages, type Locale } from "@/data/site";
+
+export function getStaticPaths() {
+  return locales.map((locale) => ({ params: { locale } }));
+}
+
+const locale = Astro.params.locale as Locale;
+const copy = pages[locale];
+const title = `${copy.sections.faqTitle} | ${copy.appName}`;
+const description = copy.faq.map((item) => item.question).join(" ");
+const structuredData = [
+  {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    mainEntity: copy.faq.map((item) => ({
+      "@type": "Question",
+      name: item.question,
+      acceptedAnswer: {
+        "@type": "Answer",
+        text: item.answer
+      }
+    }))
+  }
+];
+---
+
+<BaseLayout locale={locale} title={title} description={description} path="faq" structuredData={structuredData}>
+  <main class="subpage">
+    <section class="subpage-hero">
+      <p class="eyebrow">{copy.nav.faq}</p>
+      <h1>{copy.sections.faqTitle}</h1>
+      <p>{copy.hero.lead}</p>
+    </section>
+    <section class="faq-list faq-page-list">
+      {copy.faq.map((item) => (
+        <details open>
+          <summary>{item.question}</summary>
+          <p>{item.answer}</p>
+        </details>
+      ))}
+    </section>
+    <DownloadPanel copy={copy} />
+  </main>
+</BaseLayout>

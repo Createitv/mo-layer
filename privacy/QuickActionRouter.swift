@@ -43,6 +43,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        application.registerForRemoteNotifications()
         if let shortcut = launchOptions?[.shortcutItem] as? UIApplicationShortcutItem {
             Task { @MainActor in
                 QuickActionRouter.shared.handleShortcut(type: shortcut.type)
@@ -60,6 +61,35 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         Task { @MainActor in
             QuickActionRouter.shared.handleShortcut(type: shortcutItem.type)
             completionHandler(QuickAction(rawValue: shortcutItem.type) != nil)
+        }
+    }
+
+    func application(
+        _ application: UIApplication,
+        didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
+    ) {
+        Task { @MainActor in
+            CloudSyncRemoteChangeRouter.shared.markRemoteNotificationsRegistered()
+        }
+    }
+
+    func application(
+        _ application: UIApplication,
+        didFailToRegisterForRemoteNotificationsWithError error: Error
+    ) {
+        Task { @MainActor in
+            CloudSyncRemoteChangeRouter.shared.markRemoteNotificationsFailed(error.localizedDescription)
+        }
+    }
+
+    func application(
+        _ application: UIApplication,
+        didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+        fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
+    ) {
+        Task { @MainActor in
+            let handled = CloudSyncRemoteChangeRouter.shared.receive(userInfo: userInfo)
+            completionHandler(handled ? .newData : .noData)
         }
     }
 }

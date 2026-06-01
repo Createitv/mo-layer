@@ -1,0 +1,14 @@
+---
+type Props = {
+  src: string;
+  alt: string;
+  class?: string;
+};
+
+const { src, alt, class: className = "" } = Astro.props;
+---
+
+<figure class={`phone-frame ${className}`}>
+  <div class="phone-notch" aria-hidden="true"></div>
+  <img src={src} alt={alt} loading="lazy" width="853" height="1844" />
+</figure>
