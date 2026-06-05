@@ -1,0 +1,12 @@
+---
+import BaseLayout from '../components/BaseLayout.astro';
+import LandingPage from '../components/LandingPage.astro';
+import { getCopy } from '../i18n/copy';
+
+const locale = 'en-US';
+const copy = getCopy(locale);
+---
+
+<BaseLayout locale={locale} title={copy.seo.title} description={copy.seo.description} path="/">
+  <LandingPage locale={locale} />
+</BaseLayout>

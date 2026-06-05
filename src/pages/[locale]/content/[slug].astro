@@ -1,0 +1,100 @@
+---
+import { getCollection, render } from 'astro:content';
+import BaseLayout from '../../../components/BaseLayout.astro';
+import { contentIndex } from '../../../content-index';
+import { getCopy } from '../../../i18n/copy';
+import { defaultLocale, localeCodes, type LocaleCode } from '../../../i18n/locales';
+import { canonicalUrl, siteBase } from '../../../lib/seo';
+
+export async function getStaticPaths() {
+  const articles = await getCollection('articles');
+  return articles.map((article) => ({
+    params: { locale: article.data.locale, slug: article.data.pageSlug },
+    props: { article }
+  }));
+}
+
+const { article } = Astro.props;
+const locale = Astro.params.locale as LocaleCode;
+if (!localeCodes.includes(locale)) {
+  return Astro.redirect('/en-US/');
+}
+const { Content } = await render(article);
+const path = `/content/${article.data.pageSlug}`;
+const site = siteBase(Astro.site);
+const copy = getCopy(locale);
+const author = {
+  '@type': 'Person',
+  '@id': 'https://lingxiaoyao.cn/#person',
+  name: '林逍遥',
+  url: 'https://lingxiaoyao.cn',
+  email: 'xfy150150@gmail.com'
+};
+const publisher = {
+  '@type': 'Organization',
+  '@id': `${site}/#organization`,
+  name: locale === 'zh-Hans' ? '墨层' : locale === 'zh-Hant' ? '墨層' : 'Mo Layer',
+  url: `${site}/${locale}/`
+};
+const translatedArticles = contentIndex.filter((entry) => entry.translationKey === article.data.translationKey);
+const hreflangLinks = translatedArticles.map((entry) => ({
+  hrefLang: entry.locale,
+  href: canonicalUrl(site, entry.locale, `/content/${entry.slug}`)
+}));
+const defaultArticle = translatedArticles.find((entry) => entry.locale === defaultLocale) ?? translatedArticles[0];
+if (defaultArticle) {
+  hreflangLinks.push({
+    hrefLang: 'x-default',
+    href: canonicalUrl(site, defaultArticle.locale, `/content/${defaultArticle.slug}`)
+  });
+}
+const structuredData = [
+  {
+    '@context': 'https://schema.org',
+    '@type': 'Article',
+    headline: article.data.title,
+    description: article.data.description,
+    inLanguage: locale,
+    keywords: article.data.keywords,
+    author,
+    publisher,
+    datePublished: article.data.updatedAt,
+    dateModified: article.data.updatedAt,
+    url: `${site}/${locale}/content/${article.data.pageSlug}/`,
+    mainEntityOfPage: {
+      '@type': 'WebPage',
+      '@id': `${site}/${locale}/content/${article.data.pageSlug}/`
+    }
+  },
+  {
+    '@context': 'https://schema.org',
+    '@type': 'BreadcrumbList',
+    itemListElement: [
+      { '@type': 'ListItem', position: 1, name: 'Mo Layer', item: `${site}/${locale}/` },
+      { '@type': 'ListItem', position: 2, name: copy.nav.content, item: `${site}/${locale}/content/${article.data.pageSlug}/` }
+    ]
+  }
+];
+---
+
+<BaseLayout
+  locale={locale}
+  title={article.data.title}
+  description={article.data.description}
+  path={path}
+  hreflangLinks={hreflangLinks}
+  structuredData={structuredData}
+>
+  <section class="container article-shell">
+    <article class="article-body">
+      <Content />
+    </article>
+    <aside class="article-aside">
+      <div class="privacy-panel">
+        <strong>{copy.labels.contentTitle}</strong>
+        <p>{article.data.description}</p>
+        <a class="button secondary" href={`/${locale}/feedback/`}>{copy.feedback.title}</a>
+      </div>
+    </aside>
+  </section>
+</BaseLayout>

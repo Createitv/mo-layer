@@ -1,0 +1,26 @@
+{
+  "name": "mo-layer-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "postinstall": "node scripts/generate-qr.mjs",
+    "qr": "node scripts/generate-qr.mjs",
+    "dev": "astro dev --host 0.0.0.0",
+    "build": "astro build",
+    "preview": "astro preview --host 0.0.0.0",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@astrojs/sitemap": "^3.2.1",
+    "@supabase/supabase-js": "^2.45.4",
+    "astro": "^4.15.12"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.4",
+    "@types/qrcode": "^1.5.6",
+    "qrcode": "^1.5.4",
+    "typescript": "^5.6.2",
+    "vitest": "^2.1.1"
+  }
+}

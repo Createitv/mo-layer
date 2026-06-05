@@ -1,0 +1,109 @@
+---
+import '../styles/global.css';
+import { buildHreflangLinks, canonicalUrl, siteBase, type HreflangLink } from '../lib/seo';
+import { getCopy } from '../i18n/copy';
+import { localeInfo, locales, type LocaleCode } from '../i18n/locales';
+
+type Props = {
+  locale: LocaleCode;
+  title: string;
+  description: string;
+  path: string;
+  image?: string;
+  robots?: string;
+  hreflangLinks?: HreflangLink[];
+  structuredData?: Record<string, unknown> | Record<string, unknown>[];
+};
+
+const {
+  locale,
+  title,
+  description,
+  path,
+  image = '/app-screens/smart-classify.png',
+  robots,
+  hreflangLinks: customHreflangLinks,
+  structuredData
+} = Astro.props;
+const site = siteBase(Astro.site);
+const copy = getCopy(locale);
+const info = localeInfo(locale);
+const canonical = canonicalUrl(site, locale, path);
+const hreflangLinks = customHreflangLinks ?? buildHreflangLinks(site, path);
+const imageUrl = new URL(image, site).toString();
+const author = {
+  name: '林逍遥',
+  url: 'https://lingxiaoyao.cn',
+  email: 'xfy150150@gmail.com',
+  wechat: '林逍遥'
+};
+---
+
+<!doctype html>
+<html lang={info.lang} dir={locale === 'ar' ? 'rtl' : 'ltr'}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    {robots && <meta name="robots" content={robots} />}
+    <link rel="canonical" href={canonical} />
+    {hreflangLinks.map((link) => <link rel="alternate" hreflang={link.hrefLang} href={link.href} />)}
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:image" content={imageUrl} />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="author" content={author.name} />
+    <meta name="apple-itunes-app" content="app-id=6772853639" />
+    <link rel="author" href={author.url} />
+    <link rel="icon" href="/favicon.png" />
+    {structuredData && <script type="application/ld+json" set:html={JSON.stringify(structuredData)} />}
+  </head>
+  <body>
+    <div class="site-shell">
+      <header class="topbar">
+        <nav class="nav container" aria-label="Main navigation">
+          <a class="brand" href={`/${locale}/`} aria-label={`${info.name} home`}>
+            <img class="brand-icon" src="/images/app-icon.png" width="34" height="34" alt="" />
+            <span>{info.name}</span>
+          </a>
+          <div class="nav-links">
+            <a href={`/${locale}/#features`}>{copy.nav.features}</a>
+            <a href={`/${locale}/#privacy`}>{copy.nav.privacy}</a>
+            <a href={`/${locale}/content/`}>{copy.nav.content}</a>
+            <a href={`/${locale}/feedback/`}>{copy.nav.feedback}</a>
+            <select class="language-select" aria-label="Language" onchange="if (this.value) window.location.href = this.value">
+              {locales.map((item) => <option value={`/${item.code}/`} selected={item.code === locale}>{item.label}</option>)}
+            </select>
+            <a class="nav-cta" href={`/${locale}/#download`}>{copy.nav.download}</a>
+          </div>
+        </nav>
+      </header>
+      <main>
+        <slot />
+      </main>
+      <footer class="footer">
+        <div class="container">
+          <div class="footer-author">
+            <p>© 2026 {info.name}. {copy.seo.description}</p>
+            <p>
+              Author:
+              <a href={author.url} target="_blank" rel="author noopener noreferrer">{author.name}</a>
+              · WeChat: {author.wechat}
+              · <a href={`mailto:${author.email}`}>{author.email}</a>
+            </p>
+          </div>
+          <p>
+            <a href={`/${locale}/content/`}>{copy.nav.content}</a>
+            ·
+            <a href={`/${locale}/feedback/`}>{copy.nav.feedback}</a>
+            ·
+            <a href="/llms.txt">llms.txt</a>
+          </p>
+        </div>
+      </footer>
+    </div>
+  </body>
+</html>

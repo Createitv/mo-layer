@@ -1,0 +1,320 @@
+---
+import { feedbackTypes } from '../lib/feedback';
+import { getCopy } from '../i18n/copy';
+import type { LocaleCode } from '../i18n/locales';
+
+const { locale } = Astro.props as { locale: LocaleCode };
+const copy = getCopy(locale);
+
+type FeedbackLabels = {
+  type: string;
+  itemTitle: string;
+  details: string;
+  email: string;
+  version: string;
+  button: string;
+  titlePlaceholder: string;
+  detailsPlaceholder: string;
+  notConfigured: string;
+  sent: string;
+};
+
+const feedbackLabels: Record<LocaleCode, FeedbackLabels> = {
+  'en-US': {
+    type: 'Type',
+    itemTitle: 'Title',
+    details: 'Details',
+    email: 'Email optional',
+    version: 'App version optional',
+    button: 'Send feedback',
+    titlePlaceholder: 'Encrypted sync for large videos',
+    detailsPlaceholder: 'Tell us what you need and why it matters.',
+    notConfigured: 'Feedback is not configured yet. Add Supabase environment variables before launch.',
+    sent: 'Thanks. Your feedback was sent.'
+  },
+  'de-DE': {
+    type: 'Art',
+    itemTitle: 'Titel',
+    details: 'Details',
+    email: 'E-Mail optional',
+    version: 'App-Version optional',
+    button: 'Feedback senden',
+    titlePlaceholder: 'Verschlüsselte Synchronisierung für große Videos',
+    detailsPlaceholder: 'Sagen Sie uns, was Sie brauchen und warum es wichtig ist.',
+    notConfigured: 'Feedback ist noch nicht eingerichtet. Fügen Sie vor dem Start Supabase-Umgebungsvariablen hinzu.',
+    sent: 'Danke. Ihr Feedback wurde gesendet.'
+  },
+  'es-ES': {
+    type: 'Tipo',
+    itemTitle: 'Título',
+    details: 'Detalles',
+    email: 'Correo opcional',
+    version: 'Versión de la app opcional',
+    button: 'Enviar comentarios',
+    titlePlaceholder: 'Sincronización cifrada para videos grandes',
+    detailsPlaceholder: 'Cuéntanos qué necesitas y por qué importa.',
+    notConfigured: 'Los comentarios aún no están configurados. Añade las variables de entorno de Supabase antes del lanzamiento.',
+    sent: 'Gracias. Tus comentarios se enviaron.'
+  },
+  'fr-FR': {
+    type: 'Type',
+    itemTitle: 'Titre',
+    details: 'Détails',
+    email: 'E-mail facultatif',
+    version: 'Version de l’app facultative',
+    button: 'Envoyer',
+    titlePlaceholder: 'Synchronisation chiffrée pour les grandes vidéos',
+    detailsPlaceholder: 'Dites-nous ce dont vous avez besoin et pourquoi c’est important.',
+    notConfigured: 'Le feedback n’est pas encore configuré. Ajoutez les variables Supabase avant le lancement.',
+    sent: 'Merci. Votre feedback a été envoyé.'
+  },
+  'it-IT': {
+    type: 'Tipo',
+    itemTitle: 'Titolo',
+    details: 'Dettagli',
+    email: 'Email facoltativa',
+    version: 'Versione app facoltativa',
+    button: 'Invia feedback',
+    titlePlaceholder: 'Sync cifrata per video grandi',
+    detailsPlaceholder: 'Dicci cosa ti serve e perché è importante.',
+    notConfigured: 'Il feedback non è ancora configurato. Aggiungi le variabili Supabase prima del lancio.',
+    sent: 'Grazie. Il feedback è stato inviato.'
+  },
+  'pt-BR': {
+    type: 'Tipo',
+    itemTitle: 'Título',
+    details: 'Detalhes',
+    email: 'Email opcional',
+    version: 'Versão do app opcional',
+    button: 'Enviar feedback',
+    titlePlaceholder: 'Sincronização criptografada para vídeos grandes',
+    detailsPlaceholder: 'Conte o que você precisa e por que isso importa.',
+    notConfigured: 'O feedback ainda não está configurado. Adicione as variáveis Supabase antes do lançamento.',
+    sent: 'Obrigado. Seu feedback foi enviado.'
+  },
+  'nl-NL': {
+    type: 'Type',
+    itemTitle: 'Titel',
+    details: 'Details',
+    email: 'E-mail optioneel',
+    version: 'App-versie optioneel',
+    button: 'Feedback verzenden',
+    titlePlaceholder: 'Versleutelde sync voor grote video’s',
+    detailsPlaceholder: 'Vertel wat je nodig hebt en waarom het belangrijk is.',
+    notConfigured: 'Feedback is nog niet geconfigureerd. Voeg Supabase-omgevingsvariabelen toe voor de lancering.',
+    sent: 'Bedankt. Je feedback is verzonden.'
+  },
+  tr: {
+    type: 'Tür',
+    itemTitle: 'Başlık',
+    details: 'Ayrıntılar',
+    email: 'E-posta isteğe bağlı',
+    version: 'Uygulama sürümü isteğe bağlı',
+    button: 'Geri bildirim gönder',
+    titlePlaceholder: 'Büyük videolar için şifreli senkronizasyon',
+    detailsPlaceholder: 'Neye ihtiyacınız olduğunu ve neden önemli olduğunu anlatın.',
+    notConfigured: 'Geri bildirim henüz yapılandırılmadı. Yayından önce Supabase ortam değişkenlerini ekleyin.',
+    sent: 'Teşekkürler. Geri bildiriminiz gönderildi.'
+  },
+  ru: {
+    type: 'Тип',
+    itemTitle: 'Заголовок',
+    details: 'Подробности',
+    email: 'Email необязательно',
+    version: 'Версия приложения необязательно',
+    button: 'Отправить отзыв',
+    titlePlaceholder: 'Зашифрованная синхронизация больших видео',
+    detailsPlaceholder: 'Расскажите, что вам нужно и почему это важно.',
+    notConfigured: 'Отзывы еще не настроены. Добавьте переменные Supabase перед запуском.',
+    sent: 'Спасибо. Ваш отзыв отправлен.'
+  },
+  ja: {
+    type: '種類',
+    itemTitle: 'タイトル',
+    details: '詳細',
+    email: 'メール任意',
+    version: 'アプリバージョン任意',
+    button: 'フィードバックを送信',
+    titlePlaceholder: '大きな動画の暗号化同期',
+    detailsPlaceholder: '必要なことと、それが重要な理由を教えてください。',
+    notConfigured: 'フィードバックはまだ設定されていません。公開前にSupabase環境変数を追加してください。',
+    sent: 'ありがとうございます。フィードバックを送信しました。'
+  },
+  ko: {
+    type: '유형',
+    itemTitle: '제목',
+    details: '자세한 내용',
+    email: '이메일 선택 사항',
+    version: '앱 버전 선택 사항',
+    button: '피드백 보내기',
+    titlePlaceholder: '대용량 동영상의 암호화 동기화',
+    detailsPlaceholder: '필요한 내용과 중요한 이유를 알려주세요.',
+    notConfigured: '피드백이 아직 설정되지 않았습니다. 출시 전에 Supabase 환경 변수를 추가하세요.',
+    sent: '감사합니다. 피드백이 전송되었습니다.'
+  },
+  vi: {
+    type: 'Loại',
+    itemTitle: 'Tiêu đề',
+    details: 'Chi tiết',
+    email: 'Email không bắt buộc',
+    version: 'Phiên bản app không bắt buộc',
+    button: 'Gửi góp ý',
+    titlePlaceholder: 'Đồng bộ mã hóa cho video lớn',
+    detailsPlaceholder: 'Hãy cho chúng tôi biết bạn cần gì và vì sao điều đó quan trọng.',
+    notConfigured: 'Góp ý chưa được cấu hình. Hãy thêm biến môi trường Supabase trước khi ra mắt.',
+    sent: 'Cảm ơn. Góp ý của bạn đã được gửi.'
+  },
+  th: {
+    type: 'ประเภท',
+    itemTitle: 'ชื่อเรื่อง',
+    details: 'รายละเอียด',
+    email: 'อีเมล ไม่บังคับ',
+    version: 'เวอร์ชันแอป ไม่บังคับ',
+    button: 'ส่งความคิดเห็น',
+    titlePlaceholder: 'ซิงค์แบบเข้ารหัสสำหรับวิดีโอขนาดใหญ่',
+    detailsPlaceholder: 'บอกเราว่าคุณต้องการอะไรและทำไมจึงสำคัญ',
+    notConfigured: 'ยังไม่ได้ตั้งค่าระบบความคิดเห็น เพิ่มตัวแปร Supabase ก่อนเปิดตัว',
+    sent: 'ขอบคุณ ความคิดเห็นของคุณถูกส่งแล้ว'
+  },
+  id: {
+    type: 'Jenis',
+    itemTitle: 'Judul',
+    details: 'Detail',
+    email: 'Email opsional',
+    version: 'Versi app opsional',
+    button: 'Kirim masukan',
+    titlePlaceholder: 'Sinkronisasi terenkripsi untuk video besar',
+    detailsPlaceholder: 'Ceritakan apa yang Anda butuhkan dan mengapa itu penting.',
+    notConfigured: 'Masukan belum dikonfigurasi. Tambahkan variabel lingkungan Supabase sebelum peluncuran.',
+    sent: 'Terima kasih. Masukan Anda telah dikirim.'
+  },
+  hi: {
+    type: 'प्रकार',
+    itemTitle: 'शीर्षक',
+    details: 'विवरण',
+    email: 'ईमेल वैकल्पिक',
+    version: 'ऐप वर्शन वैकल्पिक',
+    button: 'फीडबैक भेजें',
+    titlePlaceholder: 'बड़े वीडियो के लिए एन्क्रिप्टेड सिंक',
+    detailsPlaceholder: 'बताएं कि आपको क्या चाहिए और यह क्यों जरूरी है।',
+    notConfigured: 'फीडबैक अभी कॉन्फिगर नहीं है। लॉन्च से पहले Supabase environment variables जोड़ें।',
+    sent: 'धन्यवाद। आपका फीडबैक भेज दिया गया।'
+  },
+  ar: {
+    type: 'النوع',
+    itemTitle: 'العنوان',
+    details: 'التفاصيل',
+    email: 'البريد الإلكتروني اختياري',
+    version: 'إصدار التطبيق اختياري',
+    button: 'إرسال الملاحظة',
+    titlePlaceholder: 'مزامنة مشفرة للفيديوهات الكبيرة',
+    detailsPlaceholder: 'أخبرنا بما تحتاج إليه ولماذا يهم.',
+    notConfigured: 'لم يتم إعداد الملاحظات بعد. أضف متغيرات Supabase قبل الإطلاق.',
+    sent: 'شكراً. تم إرسال ملاحظتك.'
+  },
+  'zh-Hans': {
+    type: '类型',
+    itemTitle: '标题',
+    details: '详细说明',
+    email: '邮箱，可选',
+    version: 'App 版本，可选',
+    button: '发送反馈',
+    titlePlaceholder: '例如：支持大视频的加密同步',
+    detailsPlaceholder: '告诉我们你需要什么，以及为什么它重要。',
+    notConfigured: '反馈功能尚未配置。上线前请添加 Supabase 环境变量。',
+    sent: '谢谢，你的反馈已发送。'
+  },
+  'zh-Hant': {
+    type: '類型',
+    itemTitle: '標題',
+    details: '詳細說明',
+    email: '信箱，可選',
+    version: 'App 版本，可選',
+    button: '送出回饋',
+    titlePlaceholder: '例如：支援大影片的加密同步',
+    detailsPlaceholder: '告訴我們您需要什麼，以及為什麼它重要。',
+    notConfigured: '回饋功能尚未設定。上線前請加入 Supabase 環境變數。',
+    sent: '謝謝，您的回饋已送出。'
+  }
+};
+
+const labels = feedbackLabels[locale];
+---
+
+<section class="section container">
+  <div class="section-heading">
+    <h1>{copy.feedback.title}</h1>
+    <p>{copy.feedback.body}</p>
+  </div>
+  <form class="form-panel form-grid" id="feedback-form" data-locale={locale} data-not-configured={labels.notConfigured} data-sent={labels.sent}>
+    <input class="hidden" type="text" name="website" tabindex="-1" autocomplete="off" />
+    <div class="field">
+      <label for="type">{labels.type}</label>
+      <select id="type" name="type">
+        {feedbackTypes.map((type) => <option value={type}>{type}</option>)}
+      </select>
+    </div>
+    <div class="field">
+      <label for="title">{labels.itemTitle}</label>
+      <input id="title" name="title" maxlength="120" required placeholder={labels.titlePlaceholder} />
+    </div>
+    <div class="field">
+      <label for="message">{labels.details}</label>
+      <textarea id="message" name="message" maxlength="4000" required placeholder={labels.detailsPlaceholder}></textarea>
+    </div>
+    <div class="field">
+      <label for="email">{labels.email}</label>
+      <input id="email" name="email" type="email" maxlength="160" placeholder="you@example.com" />
+    </div>
+    <div class="field">
+      <label for="app_version">{labels.version}</label>
+      <input id="app_version" name="app_version" maxlength="40" placeholder="1.0.5" />
+    </div>
+    <button class="button" type="submit">{labels.button}</button>
+    <p class="status-line" id="feedback-status" role="status"></p>
+  </form>
+</section>
+
+<script>
+  import { createClient } from '@supabase/supabase-js';
+
+  document.addEventListener('DOMContentLoaded', () => {
+    const form = document.querySelector<HTMLFormElement>('#feedback-form');
+    const status = document.querySelector<HTMLElement>('#feedback-status');
+    const supabaseUrl = import.meta.env.PUBLIC_SUPABASE_URL;
+    const supabaseAnonKey = import.meta.env.PUBLIC_SUPABASE_ANON_KEY;
+
+    form?.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (!status || !form) return;
+
+      const data = new FormData(form);
+      if (String(data.get('website') || '').trim()) return;
+      if (!supabaseUrl || !supabaseAnonKey) {
+        status.textContent = form.dataset.notConfigured || 'Feedback is not configured yet.';
+        return;
+      }
+
+      const supabase = createClient(supabaseUrl, supabaseAnonKey);
+      const payload = {
+        locale: form.dataset.locale || 'en-US',
+        type: String(data.get('type') || 'feature'),
+        title: String(data.get('title') || '').trim(),
+        message: String(data.get('message') || '').trim(),
+        email: String(data.get('email') || '').trim() || null,
+        app_version: String(data.get('app_version') || '').trim() || null,
+        device: navigator.userAgent,
+        status: 'new'
+      };
+
+      const { error } = await supabase.from('feedback').insert(payload);
+      if (error) {
+        status.textContent = error.message;
+        return;
+      }
+
+      form.reset();
+      status.textContent = form.dataset.sent || 'Thanks. Your feedback was sent.';
+    });
+  });
+</script>

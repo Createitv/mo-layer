@@ -1,0 +1,135 @@
+---
+import { contentIndex } from '../content-index';
+import { getCopy } from '../i18n/copy';
+import { screenshotsForLocale } from '../i18n/screenshots';
+import type { LocaleCode } from '../i18n/locales';
+
+const { locale } = Astro.props as { locale: LocaleCode };
+const copy = getCopy(locale);
+const localArticles = contentIndex.filter((entry) => entry.locale === locale);
+const screenshots = screenshotsForLocale(locale);
+const heroScreenshot = screenshots[0] ?? {
+  src: '/app-screens/smart-classify.png',
+  alt: 'Mo Layer app preview showing organized private photos'
+};
+const galleryScreenshots = screenshots.slice(1);
+---
+
+<section class="hero container">
+  <div class="hero-center">
+    <img class="app-icon-hero" src="/images/app-icon.png" width="112" height="112" alt="Mo Layer app icon" decoding="async" />
+    <span class="eyebrow">{copy.hero.eyebrow}</span>
+    <h1>{copy.hero.title}</h1>
+    <p class="hero-copy">{copy.hero.subtitle}</p>
+    <div class="hero-actions" id="download">
+      <a class="button" href="https://apps.apple.com/app/id6772853639">{copy.hero.primary}</a>
+      <a class="button secondary" href="#privacy">{copy.hero.secondary}</a>
+    </div>
+    <div class="download-card" aria-label="App Store download QR code">
+      <img src="/images/app-store-qr.svg" width="150" height="150" alt="QR code to download Mo Layer on the App Store" loading="lazy" decoding="async" />
+      <div>
+        <strong>{copy.labels.qrTitle}</strong>
+        <p>{copy.labels.qrBody}</p>
+      </div>
+    </div>
+  </div>
+  <div class="product-hero" aria-label="Mo Layer app preview">
+    <img src={heroScreenshot.src} width="853" height="1844" alt={heroScreenshot.alt} decoding="async" fetchpriority="high" />
+  </div>
+</section>
+
+<section class="container">
+  <div class="trust-strip">
+    {copy.trust.map((item) => <div class="trust-item">{item}</div>)}
+  </div>
+</section>
+
+<section class="section container" id="features">
+  <div class="section-heading">
+    <h2>{copy.labels.featureTitle}</h2>
+    <p>{copy.labels.featureBody}</p>
+  </div>
+  <div class="feature-grid">
+    {copy.sections.map((section, index) => (
+      <article class="feature">
+        <span class="feature-index">{String(index + 1).padStart(2, '0')}</span>
+        <h3>{section.title}</h3>
+        <p>{section.body}</p>
+      </article>
+    ))}
+  </div>
+</section>
+
+<section class="section product-gallery container" aria-label="Mo Layer app screenshots">
+  <div class="section-heading centered">
+    <h2>{copy.labels.galleryTitle}</h2>
+    <p>{copy.labels.galleryBody}</p>
+  </div>
+  <div class="poster-grid">
+    {galleryScreenshots.map((screenshot) => (
+      <figure>
+        <img src={screenshot.src} width="853" height="1844" alt={screenshot.alt} loading="lazy" decoding="async" />
+      </figure>
+    ))}
+  </div>
+</section>
+
+<section class="section container explain" id="privacy">
+  <div class="privacy-panel">
+    <div class="section-heading">
+      <h2>{copy.privacy.title}</h2>
+      <p>{copy.privacy.body}</p>
+    </div>
+    <ol class="steps">
+      {copy.privacy.steps.map((step, index) => (
+        <li><span>{index + 1}</span>{step}</li>
+      ))}
+    </ol>
+  </div>
+  <div class="pro-panel">
+    <h2>{copy.pro.title}</h2>
+    <p>{copy.pro.body}</p>
+    <ul class="pro-list">
+      {copy.pro.features.map((feature) => <li>{feature}</li>)}
+    </ul>
+  </div>
+</section>
+
+<section class="section container">
+  <div class="section-heading">
+    <h2>{copy.labels.contentTitle}</h2>
+    <p>{copy.labels.contentBody}</p>
+  </div>
+  <div class="content-grid">
+    {localArticles.map((entry) => (
+      <a class="article-card" href={`/${locale}/content/${entry.slug}/`}>
+        <div>
+          <h3>{entry.title}</h3>
+          <p>{entry.description}</p>
+        </div>
+        <strong>{copy.labels.readContent}</strong>
+      </a>
+    ))}
+    <a class="article-card" href={`/${locale}/feedback/`}>
+      <div>
+        <h3>{copy.feedback.title}</h3>
+        <p>{copy.feedback.body}</p>
+      </div>
+      <strong>{copy.nav.feedback}</strong>
+    </a>
+  </div>
+</section>
+
+<section class="section container">
+  <div class="section-heading">
+    <h2>{copy.labels.faqTitle}</h2>
+  </div>
+  <div class="faq-grid">
+    {copy.faq.map((item) => (
+      <article class="faq-item">
+        <h3>{item.question}</h3>
+        <p>{item.answer}</p>
+      </article>
+    ))}
+  </div>
+</section>

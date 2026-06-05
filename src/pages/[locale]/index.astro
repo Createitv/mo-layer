@@ -1,0 +1,86 @@
+---
+import BaseLayout from '../../components/BaseLayout.astro';
+import LandingPage from '../../components/LandingPage.astro';
+import { getCopy } from '../../i18n/copy';
+import { localeCodes, type LocaleCode } from '../../i18n/locales';
+import { siteBase } from '../../lib/seo';
+
+export function getStaticPaths() {
+  return localeCodes.map((locale) => ({ params: { locale } }));
+}
+
+const locale = Astro.params.locale as LocaleCode;
+const copy = getCopy(locale);
+const site = siteBase(Astro.site);
+const productName = locale === 'zh-Hans' ? '墨层' : locale === 'zh-Hant' ? '墨層' : 'Mo Layer';
+const author = {
+  '@type': 'Person',
+  '@id': 'https://lingxiaoyao.cn/#person',
+  name: '林逍遥',
+  url: 'https://lingxiaoyao.cn',
+  email: 'xfy150150@gmail.com'
+};
+const publisher = {
+  '@type': 'Organization',
+  '@id': `${site}/#organization`,
+  name: productName,
+  url: `${site}/${locale}/`,
+  founder: author
+};
+const structuredData = [
+  {
+    '@context': 'https://schema.org',
+    '@type': 'WebSite',
+    '@id': `${site}/#website`,
+    name: productName,
+    url: site,
+    inLanguage: locale,
+    publisher,
+    about: [
+      'private photo vault',
+      'secure file organizer',
+      'encrypted iCloud sync',
+      'decoy vault',
+      'iPhone privacy app'
+    ]
+  },
+  {
+    '@context': 'https://schema.org',
+    ...publisher
+  },
+  {
+    '@context': 'https://schema.org',
+    '@type': 'SoftwareApplication',
+    '@id': `${site}/${locale}/#app`,
+    name: productName,
+    applicationCategory: 'SecurityApplication',
+    operatingSystem: 'iOS',
+    url: `${site}/${locale}/`,
+    sameAs: ['https://apps.apple.com/app/id6772853639'],
+    author,
+    publisher,
+    offers: {
+      '@type': 'Offer',
+      price: '0',
+      priceCurrency: 'USD'
+    },
+    description: copy.seo.description
+  },
+  {
+    '@context': 'https://schema.org',
+    '@type': 'FAQPage',
+    mainEntity: copy.faq.map((item) => ({
+      '@type': 'Question',
+      name: item.question,
+      acceptedAnswer: {
+        '@type': 'Answer',
+        text: item.answer
+      }
+    }))
+  }
+];
+---
+
+<BaseLayout locale={locale} title={copy.seo.title} description={copy.seo.description} path="/" structuredData={structuredData}>
+  <LandingPage locale={locale} />
+</BaseLayout>

@@ -1,0 +1,23 @@
+---
+import BaseLayout from '../../../components/BaseLayout.astro';
+import FeedbackForm from '../../../components/FeedbackForm.astro';
+import { getCopy } from '../../../i18n/copy';
+import { localeCodes, type LocaleCode } from '../../../i18n/locales';
+
+export function getStaticPaths() {
+  return localeCodes.map((locale) => ({ params: { locale } }));
+}
+
+const locale = Astro.params.locale as LocaleCode;
+const copy = getCopy(locale);
+---
+
+<BaseLayout
+  locale={locale}
+  title={`${copy.feedback.title} - Mo Layer`}
+  description={copy.feedback.body}
+  path="/feedback"
+  robots="noindex,follow"
+>
+  <FeedbackForm locale={locale} />
+</BaseLayout>

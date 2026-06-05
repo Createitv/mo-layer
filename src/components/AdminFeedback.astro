@@ -1,0 +1,122 @@
+<section class="section container">
+  <div class="section-heading">
+    <h1>Feedback admin</h1>
+    <p>Sign in with Supabase Auth to review feature requests and update planning status.</p>
+  </div>
+  <div class="form-panel form-grid" id="admin-login">
+    <div class="field">
+      <label for="admin-email">Email</label>
+      <input id="admin-email" type="email" autocomplete="email" />
+    </div>
+    <div class="field">
+      <label for="admin-password">Password</label>
+      <input id="admin-password" type="password" autocomplete="current-password" />
+    </div>
+    <button class="button" id="admin-sign-in">Sign in</button>
+    <p class="status-line" id="admin-status" role="status"></p>
+  </div>
+  <div class="form-panel hidden" id="admin-panel">
+    <div class="hero-actions">
+      <select id="status-filter" class="language-select">
+        <option value="">All statuses</option>
+        <option value="new">New</option>
+        <option value="reviewing">Reviewing</option>
+        <option value="planned">Planned</option>
+        <option value="done">Done</option>
+        <option value="rejected">Rejected</option>
+      </select>
+      <button class="button secondary" id="refresh-feedback">Refresh</button>
+    </div>
+    <div style="overflow-x:auto; margin-top: 18px;">
+      <table class="admin-table">
+        <thead>
+          <tr>
+            <th>Created</th>
+            <th>Type</th>
+            <th>Title</th>
+            <th>Status</th>
+            <th>Message</th>
+          </tr>
+        </thead>
+        <tbody id="feedback-rows"></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<script>
+  import { createClient } from '@supabase/supabase-js';
+
+  document.addEventListener('DOMContentLoaded', () => {
+    const supabaseUrl = import.meta.env.PUBLIC_SUPABASE_URL;
+    const supabaseAnonKey = import.meta.env.PUBLIC_SUPABASE_ANON_KEY;
+    const status = document.querySelector<HTMLElement>('#admin-status');
+    const login = document.querySelector<HTMLElement>('#admin-login');
+    const panel = document.querySelector<HTMLElement>('#admin-panel');
+    const rows = document.querySelector<HTMLElement>('#feedback-rows');
+    const filter = document.querySelector<HTMLSelectElement>('#status-filter');
+
+    function setStatus(message: string) {
+      if (status) status.textContent = message;
+    }
+
+    if (!supabaseUrl || !supabaseAnonKey) {
+      setStatus('Supabase is not configured yet.');
+    }
+
+    const supabase = supabaseUrl && supabaseAnonKey ? createClient(supabaseUrl, supabaseAnonKey) : null;
+
+    async function loadFeedback() {
+      if (!supabase || !rows) return;
+      rows.innerHTML = '<tr><td colspan="5">Loading...</td></tr>';
+      let query = supabase.from('feedback').select('*').order('created_at', { ascending: false }).limit(100);
+      if (filter?.value) query = query.eq('status', filter.value);
+      const { data, error } = await query;
+      if (error) {
+        rows.innerHTML = `<tr><td colspan="5">${error.message}</td></tr>`;
+        return;
+      }
+      rows.innerHTML = (data || [])
+        .map(
+          (item) => `<tr>
+          <td>${new Date(item.created_at).toLocaleString()}</td>
+          <td>${item.type}</td>
+          <td><strong>${item.title}</strong><br/>${item.email || ''}</td>
+          <td>
+            <select data-id="${item.id}" class="status-select">
+              ${['new', 'reviewing', 'planned', 'done', 'rejected']
+                .map((value) => `<option value="${value}" ${value === item.status ? 'selected' : ''}>${value}</option>`)
+                .join('')}
+            </select>
+          </td>
+          <td>${item.message}</td>
+        </tr>`
+        )
+        .join('');
+    }
+
+    document.querySelector('#admin-sign-in')?.addEventListener('click', async () => {
+      if (!supabase) return;
+      const email = (document.querySelector<HTMLInputElement>('#admin-email')?.value || '').trim();
+      const password = document.querySelector<HTMLInputElement>('#admin-password')?.value || '';
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) {
+        setStatus(error.message);
+        return;
+      }
+      login?.classList.add('hidden');
+      panel?.classList.remove('hidden');
+      await loadFeedback();
+    });
+
+    filter?.addEventListener('change', loadFeedback);
+    document.querySelector('#refresh-feedback')?.addEventListener('click', loadFeedback);
+    rows?.addEventListener('change', async (event) => {
+      const target = event.target as HTMLSelectElement;
+      if (!supabase || !target.classList.contains('status-select')) return;
+      const id = target.dataset.id;
+      const { error } = await supabase.from('feedback').update({ status: target.value }).eq('id', id);
+      setStatus(error ? error.message : 'Status updated.');
+    });
+  });
+</script>
