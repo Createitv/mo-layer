@@ -1,0 +1,51 @@
+---
+import BaseLayout from '../../../components/BaseLayout.astro';
+import { contentIndex } from '../../../content-index';
+import { getCopy } from '../../../i18n/copy';
+import { localeCodes, type LocaleCode } from '../../../i18n/locales';
+import { siteBase } from '../../../lib/seo';
+
+export function getStaticPaths() {
+  return localeCodes.map((locale) => ({ params: { locale } }));
+}
+
+const locale = Astro.params.locale as LocaleCode;
+const copy = getCopy(locale);
+const articles = contentIndex.filter((entry) => entry.locale === locale);
+const title = `${copy.nav.content} - ${copy.seo.title}`;
+const description = copy.labels.contentBody;
+const site = siteBase(Astro.site);
+const structuredData = {
+  '@context': 'https://schema.org',
+  '@type': 'CollectionPage',
+  name: title,
+  description,
+  url: `${site}/${locale}/content/`,
+  mainEntity: articles.map((entry, index) => ({
+    '@type': 'ListItem',
+    position: index + 1,
+    name: entry.title,
+    url: `${site}/${locale}/content/${entry.slug}/`
+  }))
+};
+---
+
+<BaseLayout locale={locale} title={title} description={description} path="/content" structuredData={structuredData}>
+  <section class="section container">
+    <div class="section-heading">
+      <h1>{copy.labels.contentTitle}</h1>
+      <p>{copy.labels.contentBody}</p>
+    </div>
+    <div class="content-grid">
+      {articles.map((entry) => (
+        <a class="article-card" href={`/${locale}/content/${entry.slug}/`}>
+          <div>
+            <h3>{entry.title}</h3>
+            <p>{entry.description}</p>
+          </div>
+          <strong>{copy.labels.readContent}</strong>
+        </a>
+      ))}
+    </div>
+  </section>
+</BaseLayout>
