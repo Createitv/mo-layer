@@ -635,7 +635,7 @@ struct VaultHomeView: View {
     }
 
     private func enterInnerVault() {
-        guard subscription.canImportAndSync else {
+        guard subscription.canEnterVault else {
             showMembership = true
             return
         }

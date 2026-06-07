@@ -564,6 +564,19 @@ struct privacyTests {
         #endif
     }
 
+    @Test func moLayerEntryUsesVaultReadAccessInsteadOfWriteAccess() throws {
+        let sourceText = try String(
+            contentsOf: repositoryRoot().appendingPathComponent("privacy/MainViews.swift"),
+            encoding: .utf8
+        )
+        let enterInnerVaultStart = try #require(sourceText.range(of: "private func enterInnerVault()"))
+        let toggleInnerVaultStart = try #require(sourceText.range(of: "private func toggleInnerVault()"))
+        let enterInnerVaultBody = String(sourceText[enterInnerVaultStart.lowerBound..<toggleInnerVaultStart.lowerBound])
+
+        #expect(enterInnerVaultBody.contains("subscription.canEnterVault"))
+        #expect(!enterInnerVaultBody.contains("subscription.canImportAndSync"))
+    }
+
     @Test func subscriptionManagerRejectsMissingRevenueCatAPIKey() {
         #expect(!SubscriptionManager.isRevenueCatAPIKeyConfigured(nil))
         #expect(!SubscriptionManager.isRevenueCatAPIKeyConfigured(""))
