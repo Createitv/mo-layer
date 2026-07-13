@@ -1,5 +1,7 @@
-import ActivityKit
 import Foundation
+
+#if canImport(ActivityKit) && !targetEnvironment(macCatalyst)
+import ActivityKit
 
 struct RecordingActivityAttributes: ActivityAttributes {
     struct ContentState: Codable, Hashable {
@@ -18,3 +20,4 @@ enum RecordingActivityPhase: String, Codable, Hashable {
     case saved
     case failed
 }
+#endif

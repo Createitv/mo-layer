@@ -1,4 +1,4 @@
-"CFBundleDisplayName" = "Aegis Tresor";
+"CFBundleDisplayName" = "Mo Layer";
 "CFBundleTypeName" = "Verschlusselte Tresordatei";
 "NSCameraUsageDescription" = "Wird verwendet, um Fotos direkt im verschlusselten Tresor zu speichern und bei aktivierter Eindringlingserfassung fehlgeschlagene Entsperrversuche zu protokollieren.";
 "NSPhotoLibraryAddUsageDescription" = "Wird verwendet, um exportierte Inhalte auf Wunsch in deiner Fotomediathek zu speichern.";

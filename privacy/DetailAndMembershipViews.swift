@@ -155,6 +155,8 @@ struct VaultItemDetailView: View {
 struct MembershipView: View {
     @EnvironmentObject private var subscription: SubscriptionManager
     var isRequiredBeforeUse = false
+    @State private var selectedProductID = SubscriptionManager.yearly
+    @State private var isRestoringPurchases = false
 
     init(isRequiredBeforeUse: Bool = false) {
         self.isRequiredBeforeUse = isRequiredBeforeUse
@@ -162,141 +164,199 @@ struct MembershipView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: 18) {
-                    membershipHero
+            GeometryReader { proxy in
+                let layout = ProPaywallLayout(width: proxy.size.width)
 
-                    if subscription.loadState == .loading {
-                        ProgressView(L.string("Loading subscription plans..."))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 8)
-                    }
+                ScrollView {
+                    VStack(spacing: layout.sectionSpacing) {
+                        membershipHero(layout: layout)
 
-                    if case .failed(let message) = subscription.loadState {
-                        AppCard {
-                            Label(message, systemImage: "exclamationmark.triangle")
-                                .foregroundStyle(AppTheme.warning)
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                        MembershipStatusCard(summary: subscription.membershipStatusSummary)
+
+                        if subscription.loadState == .loading {
+                            ProgressView(L.string("Loading subscription plans..."))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 8)
                         }
-                    }
 
-                    if let lifetimePackage {
-                        LifetimePlanCard(
-                            title: localizedName(for: lifetimePackage),
-                            description: localizedDescription(for: lifetimePackage),
-                            price: lifetimePackage.localizedPriceString,
-                            purchaseAction: { Task { await subscription.purchase(lifetimePackage) } }
-                        )
-                    }
-
-                    VStack(spacing: 10) {
-                        ForEach(secondaryPackages, id: \.storeProduct.productIdentifier) { package in
-                            SubscriptionPlanRow(
-                                title: localizedName(for: package),
-                                description: localizedDescription(for: package),
-                                price: package.localizedPriceString,
-                                badge: package.storeProduct.productIdentifier == SubscriptionManager.yearly ? L.string("Better value") : L.string("Flexible"),
-                                actionTitle: actionTitle(for: package),
-                                action: { Task { await subscription.purchase(package) } }
-                            )
-                        }
-                    }
-
-                    ForEach(subscription.missingProductIDs, id: \.self) { productID in
-                        AppCard {
-                            HStack(spacing: 12) {
-                                Image(systemName: "exclamationmark.icloud")
+                        if case .failed(let message) = subscription.loadState {
+                            AppCard {
+                                Label(message, systemImage: "exclamationmark.triangle")
                                     .foregroundStyle(AppTheme.warning)
-                                    .frame(width: 32, height: 32)
-                                    .background(AppTheme.warning.opacity(0.12))
-                                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(localizedName(forProductID: productID))
-                                        .font(.headline)
-                                    Text(L.string("Not returned by RevenueCat. Check the current offering and App Store Connect availability for this plan."))
-                                        .font(.caption)
-                                        .foregroundStyle(AppTheme.secondaryText)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
+
+                        ProAccessComparisonCard(
+                            isPro: subscription.accessLevel.allowsImportAndCloudSync,
+                            layout: layout
+                        )
+
+                        HStack(spacing: layout.planSpacing) {
+                            ForEach(displayPackages, id: \.storeProduct.productIdentifier) { package in
+                                ProPlanOptionCard(
+                                    title: localizedName(for: package),
+                                    price: package.localizedPriceString,
+                                    productID: package.storeProduct.productIdentifier,
+                                    badge: badgeTitle(for: package),
+                                    layout: layout,
+                                    isSelected: selectedProductID == package.storeProduct.productIdentifier,
+                                    action: {
+                                        selectedProductID = package.storeProduct.productIdentifier
+                                    }
+                                )
+                                .frame(maxWidth: .infinity)
+                            }
+                        }
+
+                        if !subscription.missingProductIDs.isEmpty {
+                            VStack(spacing: 10) {
+                                ForEach(subscription.missingProductIDs, id: \.self) { productID in
+                                    ProPlanPlaceholderCard(
+                                        title: localizedName(forProductID: productID),
+                                        badge: productID == SubscriptionManager.lifetime ? L.string("Recommended") : nil
+                                    )
                                 }
-                                Spacer()
                             }
                         }
-                    }
 
-                    AppCard {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text(L.string("Everything Pro protects"))
-                                .font(.headline)
-                                .foregroundStyle(AppTheme.ink)
-                            VStack(alignment: .leading, spacing: 8) {
-                                FeatureLine(L.string("Save unlimited photos, videos, audio, and files"))
-                                FeatureLine(L.string("Always-on encrypted iCloud sync"))
-                                FeatureLine(L.string("Disguised entry and decoy passcode space"))
-                                FeatureLine(L.string("Quick recording, Live Photos, and private previews"))
-                                FeatureLine(L.string("Intrusion records and advanced recovery"))
+                        Button {
+                            guard let selectedPackage else { return }
+                            Task { await subscription.purchase(selectedPackage) }
+                        } label: {
+                            Label(L.string("Open Pro and keep adding"), systemImage: "lock.open.fill")
+                        }
+                        .buttonStyle(AppButtonStyle())
+                        .disabled(selectedPackage == nil || subscription.loadState == .loading)
+                        .opacity(selectedPackage == nil ? 0.55 : 1)
+
+                        Text(L.string("Subscriptions are managed by Apple and can be canceled anytime in Apple ID subscription settings."))
+                            .font(.caption)
+                            .foregroundStyle(AppTheme.secondaryText)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 14)
+
+                        HStack(spacing: 18) {
+                            Link(destination: SubscriptionManager.privacyPolicyURL) {
+                                Label(L.string("Privacy Policy"), systemImage: "hand.raised.fill")
+                            }
+
+                            Link(destination: SubscriptionManager.termsOfUseURL) {
+                                Label(L.string("Terms of Use"), systemImage: "doc.text.fill")
                             }
                         }
-                    }
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(AppTheme.primary)
 
-                    Button {
-                        Task { await subscription.restorePurchases() }
-                    } label: {
-                        Label(L.string("Restore Purchases"), systemImage: "arrow.clockwise")
+                        Button {
+                            restorePurchases()
+                        } label: {
+                            Label(isRestoringPurchases ? L.string("Restoring") : L.string("Restore Purchases"), systemImage: "arrow.clockwise")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(AppTheme.primary)
+                        }
+                        .padding(.top, 2)
+                        .disabled(isRestoringPurchases)
+
+                        if let restoreFeedback = subscription.restoreFeedback {
+                            RestorePurchaseFeedbackView(feedback: restoreFeedback)
+                        } else if let statusMessage {
+                            Text(statusMessage)
+                                .font(.caption)
+                                .foregroundStyle(AppTheme.secondaryText)
+                                .multilineTextAlignment(.center)
+                        }
                     }
-                    .buttonStyle(SecondaryButtonStyle())
+                    .padding(layout.screenPadding)
                 }
-                .padding()
+                .background(AppGlassBackground().ignoresSafeArea())
             }
-            .background(AppTheme.background)
             .navigationTitle(L.string("Pro"))
+            .navigationBarTitleDisplayMode(.inline)
             .task {
                 await subscription.load()
+                selectDefaultPackageIfNeeded()
+            }
+            .onChange(of: subscription.packages.map(\.storeProduct.productIdentifier)) { _, _ in
+                selectDefaultPackageIfNeeded()
             }
         }
     }
 
-    private var lifetimePackage: Package? {
-        subscription.packages.first { $0.storeProduct.productIdentifier == SubscriptionManager.lifetime }
+    private func restorePurchases() {
+        guard !isRestoringPurchases else { return }
+        isRestoringPurchases = true
+        Task { @MainActor in
+            await subscription.restorePurchases()
+            isRestoringPurchases = false
+        }
     }
 
-    private var secondaryPackages: [Package] {
-        subscription.packages.filter { $0.storeProduct.productIdentifier != SubscriptionManager.lifetime }
+    private var displayPackages: [Package] {
+        subscription.packages.sorted {
+            SubscriptionManager.displayOrder(forStoreProductID: $0.storeProduct.productIdentifier) <
+            SubscriptionManager.displayOrder(forStoreProductID: $1.storeProduct.productIdentifier)
+        }
     }
 
-    private var membershipHero: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                StatusPill(title: L.string("Recommended"), systemImage: "sparkles", tint: AppTheme.warning)
-                Spacer()
-                StatusPill(title: L.string("3-day trial"), systemImage: "clock", tint: AppTheme.primary)
-            }
+    private var selectedPackage: Package? {
+        subscription.packages.first { $0.storeProduct.productIdentifier == selectedProductID } ?? displayPackages.last
+    }
 
+    private var statusMessage: String? {
+        if subscription.isPro {
+            return L.string("Pro Active")
+        }
+        if case .failed = subscription.loadState {
+            return nil
+        }
+        return subscription.statusText
+    }
+
+    private func membershipHero(layout: ProPaywallLayout) -> some View {
+        VStack(spacing: 16) {
+            Image("ProPaywallHero")
+                .resizable()
+                .scaledToFill()
+                .frame(height: layout.heroImageHeight)
+                .frame(maxWidth: .infinity)
+                .clipped()
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(Color.white.opacity(0.08))
+                )
             VStack(alignment: .leading, spacing: 8) {
-                Text(L.string("Own your private vault for life"))
-                    .font(.system(size: 30, weight: .bold, design: .rounded))
-                    .foregroundStyle(AppTheme.ink)
+                Text(L.string("Keep adding, open Pro"))
+                    .font(.system(size: layout.heroTitleSize, weight: .bold, design: .rounded))
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [AppTheme.ink, AppTheme.warning],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
-                Text(L.string("Choose Lifetime Pro once and keep the full private vault experience without another subscription renewal."))
-                    .font(.subheadline)
+                Text(L.string("Without Pro you can only view. Pro lets you keep importing encrypted files."))
+                    .font(.system(size: layout.heroSubtitleSize, weight: .regular, design: .rounded))
                     .foregroundStyle(AppTheme.secondaryText)
+                    .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
             }
-
-            HStack(spacing: 10) {
-                MarketingMetric(value: L.string("One-time"), label: L.string("payment"))
-                MarketingMetric(value: L.string("Private"), label: L.string("by design"))
-                MarketingMetric(value: L.string("iCloud"), label: L.string("encrypted sync"))
-            }
+            .frame(maxWidth: .infinity, alignment: .center)
         }
-        .padding(18)
-        .background(
-            LinearGradient(
-                colors: [AppTheme.primary.opacity(0.13), AppTheme.warning.opacity(0.12), AppTheme.card],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(AppTheme.primary.opacity(0.18)))
+        .padding(.top, 6)
+    }
+
+    private func selectDefaultPackageIfNeeded() {
+        let productIDs = displayPackages.map(\.storeProduct.productIdentifier)
+        guard !productIDs.contains(selectedProductID) else { return }
+        if productIDs.contains(SubscriptionManager.yearly) {
+            selectedProductID = SubscriptionManager.yearly
+        } else if let fallback = productIDs.last {
+            selectedProductID = fallback
+        }
     }
 
     private func localizedName(for package: Package) -> String {
@@ -357,6 +417,19 @@ struct MembershipView: View {
         }
     }
 
+    private func badgeTitle(for package: Package) -> String? {
+        switch package.storeProduct.productIdentifier {
+        case SubscriptionManager.monthly:
+            return L.string("3-day trial")
+        case SubscriptionManager.yearly:
+            return L.string("Better value")
+        case SubscriptionManager.lifetime:
+            return L.string("Recommended")
+        default:
+            return nil
+        }
+    }
+
     private func shouldUseStoreKitText(_ text: String) -> Bool {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return false
@@ -365,6 +438,41 @@ struct MembershipView: View {
             return true
         }
         return !text.containsChineseMembershipText
+    }
+}
+
+private struct RestorePurchaseFeedbackView: View {
+    let feedback: RestorePurchaseFeedback
+
+    var body: some View {
+        Label(feedback.message, systemImage: systemImage)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(tint)
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .background(tint.opacity(0.1))
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private var tint: Color {
+        switch feedback.kind {
+        case .success:
+            AppTheme.success
+        case .warning:
+            AppTheme.warning
+        }
+    }
+
+    private var systemImage: String {
+        switch feedback.kind {
+        case .success:
+            "checkmark.circle.fill"
+        case .warning:
+            "exclamationmark.triangle.fill"
+        }
     }
 }
 
@@ -382,6 +490,383 @@ private extension String {
             "解锁",
             "恢复购买"
         ].contains { contains($0) }
+    }
+}
+
+private struct ProPaywallLayout {
+    let width: CGFloat
+
+    private var contentWidth: CGFloat {
+        max(width - screenPadding * 2, 1)
+    }
+
+    var isCompact: Bool {
+        width < 390
+    }
+
+    var screenPadding: CGFloat {
+        width < 390 ? 14 : 16
+    }
+
+    var sectionSpacing: CGFloat {
+        width < 390 ? 13 : 16
+    }
+
+    var planSpacing: CGFloat {
+        width < 390 ? 8 : 10
+    }
+
+    var heroImageHeight: CGFloat {
+        min(max(width * 0.46, 168), 226)
+    }
+
+    var heroTitleSize: CGFloat {
+        min(max(width * 0.076, 27), 34)
+    }
+
+    var heroSubtitleSize: CGFloat {
+        width < 390 ? 14 : 15
+    }
+
+    var accessLabelSize: CGFloat {
+        width < 390 ? 12 : 13
+    }
+
+    var accessTitleSize: CGFloat {
+        width < 390 ? 16 : 18
+    }
+
+    var accessIconSize: CGFloat {
+        width < 390 ? 32 : 36
+    }
+
+    var planTitleSize: CGFloat {
+        width < 390 ? 15 : 17
+    }
+
+    var planPriceSize: CGFloat {
+        width < 390 ? 25 : 30
+    }
+
+    var planBadgeSize: CGFloat {
+        width < 390 ? 11 : 12
+    }
+
+    var planCardHeight: CGFloat {
+        let availableCardWidth = (contentWidth - planSpacing * 2) / 3
+        return max(142, min(availableCardWidth * 1.44, 170))
+    }
+
+    var planHorizontalPadding: CGFloat {
+        width < 390 ? 7 : 10
+    }
+}
+
+private struct ProAccessComparisonCard: View {
+    let isPro: Bool
+    let layout: ProPaywallLayout
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ProAccessColumn(
+                label: L.string("Free state"),
+                title: L.string("View encrypted files"),
+                systemImage: "eye.fill",
+                trailingSystemImage: "checkmark.circle.fill",
+                tint: AppTheme.primary,
+                layout: layout
+            )
+
+            Rectangle()
+                .fill(AppTheme.line)
+                .frame(width: 1, height: layout.isCompact ? 64 : 72)
+                .padding(.horizontal, layout.isCompact ? 8 : 12)
+
+            ProAccessColumn(
+                label: L.string("Open Pro"),
+                title: L.string("Keep adding encrypted files"),
+                systemImage: "plus.circle.fill",
+                trailingSystemImage: isPro ? "checkmark.circle.fill" : "lock.fill",
+                tint: AppTheme.warning,
+                layout: layout
+            )
+        }
+        .padding(layout.isCompact ? 13 : 16)
+        .background(
+            LinearGradient(
+                colors: [AppTheme.card.opacity(0.88), AppTheme.card.opacity(0.64)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(AppTheme.line.opacity(0.75)))
+    }
+}
+
+private struct MembershipStatusCard: View {
+    let summary: MembershipStatusSummary
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 19, weight: .semibold))
+                    .foregroundStyle(tint)
+                    .frame(width: 38, height: 38)
+                    .background(tint.opacity(0.14))
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+                VStack(alignment: .leading, spacing: 7) {
+                    HStack(spacing: 8) {
+                        Text(L.string("Current Membership"))
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(AppTheme.secondaryText)
+                        StatusPill(title: summary.stateTitle, systemImage: statusPillImage, tint: tint)
+                    }
+                    Text(summary.planTitle)
+                        .font(.system(.title3, design: .rounded, weight: .bold))
+                        .foregroundStyle(AppTheme.ink)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.65)
+                    if !summary.expirationText.isEmpty {
+                        Text(summary.expirationText)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(tint)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.72)
+                    }
+                }
+
+                Spacer(minLength: 0)
+            }
+
+            Text(summary.detailText)
+                .font(.caption)
+                .foregroundStyle(AppTheme.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(16)
+        .background(
+            LinearGradient(
+                colors: [AppTheme.card.opacity(0.92), tint.opacity(0.08)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(tint.opacity(0.28)))
+    }
+
+    private var tint: Color {
+        switch summary.accessLevel {
+        case .activePro:
+            AppTheme.success
+        case .expiredReadOnly:
+            AppTheme.warning
+        case .lockedUntilPro:
+            AppTheme.primary
+        }
+    }
+
+    private var systemImage: String {
+        switch summary.accessLevel {
+        case .activePro:
+            "checkmark.seal.fill"
+        case .expiredReadOnly:
+            "eye.fill"
+        case .lockedUntilPro:
+            "person.crop.circle.badge.questionmark"
+        }
+    }
+
+    private var statusPillImage: String {
+        switch summary.accessLevel {
+        case .activePro:
+            "checkmark.circle.fill"
+        case .expiredReadOnly:
+            "clock.arrow.circlepath"
+        case .lockedUntilPro:
+            "circle"
+        }
+    }
+}
+
+private struct ProAccessColumn: View {
+    let label: String
+    let title: String
+    let systemImage: String
+    let trailingSystemImage: String
+    let tint: Color
+    let layout: ProPaywallLayout
+
+    var body: some View {
+        VStack(spacing: 11) {
+            Text(label)
+                .font(.system(size: layout.accessLabelSize, weight: .semibold, design: .rounded))
+                .foregroundStyle(tint)
+                .lineLimit(1)
+                .minimumScaleFactor(0.55)
+
+            HStack(spacing: 8) {
+                Image(systemName: systemImage)
+                    .font(.system(size: layout.isCompact ? 16 : 18, weight: .semibold))
+                    .foregroundStyle(tint)
+                    .frame(width: layout.accessIconSize, height: layout.accessIconSize)
+                    .background(tint.opacity(0.16))
+                    .clipShape(Circle())
+
+                Text(title)
+                    .font(.system(size: layout.accessTitleSize, weight: .bold, design: .rounded))
+                    .foregroundStyle(AppTheme.ink)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
+
+                Image(systemName: trailingSystemImage)
+                    .font(.system(size: layout.isCompact ? 16 : 18, weight: .semibold))
+                    .foregroundStyle(tint)
+                    .frame(width: layout.isCompact ? 16 : 18)
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+private struct ProPlanOptionCard: View {
+    let title: String
+    let price: String
+    let productID: String
+    let badge: String?
+    let layout: ProPaywallLayout
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: layout.isCompact ? 11 : 13) {
+                VStack(spacing: layout.isCompact ? 6 : 7) {
+                    Text(title)
+                        .font(.system(size: layout.planTitleSize, weight: .bold, design: .rounded))
+                        .foregroundStyle(AppTheme.ink)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.48)
+
+                    Text(price)
+                        .font(.system(size: layout.planPriceSize, weight: .bold, design: .rounded))
+                        .foregroundStyle(isLifetime ? AppTheme.warning : AppTheme.ink)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.52)
+                }
+
+                if !isLifetime {
+                    Text(badge ?? subtitle)
+                        .font(.system(size: layout.planBadgeSize, weight: .bold, design: .rounded))
+                        .foregroundStyle(AppTheme.primary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.56)
+                        .padding(.horizontal, layout.isCompact ? 7 : 9)
+                        .padding(.vertical, 5)
+                        .background(AppTheme.primary.opacity(0.12))
+                        .clipShape(Capsule())
+                }
+
+                Spacer(minLength: 0)
+
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: layout.isCompact ? 25 : 28, weight: .bold))
+                    .foregroundStyle(isSelected ? selectionTint : AppTheme.secondaryText.opacity(0.55))
+            }
+            .frame(maxWidth: .infinity, minHeight: layout.planCardHeight)
+            .padding(.horizontal, layout.planHorizontalPadding)
+            .padding(.vertical, layout.isCompact ? 13 : 15)
+            .background(cardBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(isSelected ? selectionTint.opacity(0.82) : AppTheme.line, lineWidth: isSelected ? 1.8 : 1)
+            )
+            .shadow(color: isSelected ? selectionTint.opacity(0.34) : .clear, radius: 16, x: 0, y: 8)
+            .overlay(alignment: .topTrailing) {
+                if isLifetime {
+                    Text(L.string("Recommended"))
+                        .font(.system(size: layout.isCompact ? 10 : 11, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color(red: 0.09, green: 0.07, blue: 0.02))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
+                        .padding(.horizontal, layout.isCompact ? 8 : 10)
+                        .padding(.vertical, 5)
+                        .background(AppTheme.warning)
+                        .clipShape(Capsule())
+                        .offset(x: layout.isCompact ? 5 : 8, y: -13)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var isLifetime: Bool {
+        productID == SubscriptionManager.lifetime
+    }
+
+    private var selectionTint: Color {
+        isLifetime ? AppTheme.warning : AppTheme.primary
+    }
+
+    private var subtitle: String {
+        if isLifetime {
+            return L.string("Pay once")
+        }
+        return L.string("3-day trial")
+    }
+
+    private var cardBackground: some ShapeStyle {
+        LinearGradient(
+            colors: isSelected
+            ? [AppTheme.primary.opacity(0.18), AppTheme.card.opacity(0.95)]
+            : [AppTheme.card.opacity(0.94), AppTheme.card.opacity(0.86)],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    }
+}
+
+private struct ProPlanPlaceholderCard: View {
+    let title: String
+    let badge: String?
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: "exclamationmark.icloud")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(AppTheme.warning)
+                .frame(width: 28)
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Text(title)
+                        .font(.system(.headline, design: .rounded, weight: .bold))
+                        .foregroundStyle(AppTheme.ink)
+                    if let badge {
+                        Text(badge)
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(AppTheme.warning)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(AppTheme.warning.opacity(0.12))
+                            .clipShape(Capsule())
+                    }
+                }
+                Text(L.string("Plan is not available right now"))
+                    .font(.caption)
+                    .foregroundStyle(AppTheme.secondaryText)
+            }
+
+            Spacer()
+        }
+        .padding(16)
+        .background(AppTheme.card.opacity(0.74))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(AppTheme.warning.opacity(0.28)))
     }
 }
 

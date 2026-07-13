@@ -2,6 +2,7 @@ import SwiftUI
 import SwiftData
 
 struct OnboardingView: View {
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var auth: AuthenticationManager
     @EnvironmentObject private var subscription: SubscriptionManager
@@ -15,28 +16,28 @@ struct OnboardingView: View {
     @State private var animateMark = false
     @State private var showCloudRestore = false
     private let backupKeyLength = 6
+    private var isPadLayout: Bool { horizontalSizeClass == .regular }
 
     var body: some View {
-        ZStack {
-            AppTheme.background.ignoresSafeArea()
-            ScrollView {
-                VStack(spacing: 22) {
+        GeometryReader { proxy in
+            ZStack {
+                AppGlassBackground().ignoresSafeArea()
+                ScrollView {
+                    VStack(spacing: isPadLayout ? 28 : 22) {
                     SetupMotionMark(isAnimating: animateMark, step: step)
 
-                    VStack(spacing: 8) {
+                    VStack(spacing: isPadLayout ? 12 : 8) {
                         Text(step.title)
-                            .font(.system(.title, design: .rounded, weight: .bold))
+                            .font(.system(isPadLayout ? .largeTitle : .title, design: .rounded, weight: .bold))
                             .foregroundStyle(AppTheme.ink)
                             .contentTransition(.numericText())
                         Text(step.subtitle)
-                            .font(.callout)
+                            .font(isPadLayout ? .title3 : .callout)
                             .foregroundStyle(AppTheme.secondaryText)
                             .multilineTextAlignment(.center)
                     }
 
                     SetupProgressView(step: step)
-
-                    MembershipSetupNotice()
 
                     ZStack {
                         stepContent
@@ -48,7 +49,7 @@ struct OnboardingView: View {
                     }
                     .animation(.spring(response: 0.42, dampingFraction: 0.86), value: step)
 
-                    HStack(spacing: 12) {
+                    HStack(spacing: isPadLayout ? 14 : 12) {
                         if step != .securityCode {
                             Button(L.string("Back")) {
                                 withAnimation { step = step.previous }
@@ -73,12 +74,16 @@ struct OnboardingView: View {
 
                     if let message = auth.authMessage {
                         Text(message)
-                            .font(.footnote)
+                            .font(isPadLayout ? .callout : .footnote)
                             .foregroundStyle(AppTheme.warning)
                             .multilineTextAlignment(.center)
                     }
                 }
-                .padding(28)
+                .frame(maxWidth: isPadLayout ? 640 : .infinity)
+                .frame(maxWidth: .infinity, minHeight: proxy.size.height, alignment: .center)
+                .padding(.horizontal, isPadLayout ? 48 : 28)
+                .padding(.vertical, isPadLayout ? 44 : 28)
+                }
             }
         }
         .onAppear { animateMark = true }
@@ -220,30 +225,6 @@ struct OnboardingView: View {
     }
 }
 
-private struct MembershipSetupNotice: View {
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: "star.circle.fill")
-                .font(.title3)
-                .foregroundStyle(AppTheme.primary)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(L.string("Membership required after setup"))
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(AppTheme.ink)
-                Text(L.string("After the security setup is complete, start the 3-day trial or choose a monthly, yearly, or lifetime plan before using the vault. You can cancel subscriptions anytime in your Apple ID settings."))
-                    .font(.caption)
-                    .foregroundStyle(AppTheme.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(AppTheme.primary.opacity(0.07))
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(AppTheme.primary.opacity(0.14)))
-    }
-}
-
 struct CloudVaultRestoreView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
@@ -336,34 +317,38 @@ struct CloudVaultRestoreView: View {
 }
 
 private struct BackupKeyGridInput: View {
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Binding var value: String
     let length: Int
 
-    private let columns = Array(repeating: GridItem(.flexible(), spacing: 10), count: 3)
     private let digits = (1...9).map(String.init) + ["0"]
+    private var isPadLayout: Bool { horizontalSizeClass == .regular }
+    private var columns: [GridItem] {
+        Array(repeating: GridItem(.flexible(), spacing: isPadLayout ? 14 : 10), count: 3)
+    }
 
     var body: some View {
-        VStack(spacing: 14) {
-            HStack(spacing: 7) {
+        VStack(spacing: isPadLayout ? 18 : 14) {
+            HStack(spacing: isPadLayout ? 9 : 7) {
                 ForEach(0..<length, id: \.self) { index in
                     Circle()
                         .fill(index < value.count ? AppTheme.primary : AppTheme.line)
-                        .frame(width: 14, height: 14)
+                        .frame(width: isPadLayout ? 18 : 14, height: isPadLayout ? 18 : 14)
                         .overlay(Circle().stroke(AppTheme.primary.opacity(0.18)))
                 }
             }
             .accessibilityLabel(L.format("Security code has %d of %d digits", value.count, length))
 
-            LazyVGrid(columns: columns, spacing: 10) {
+            LazyVGrid(columns: columns, spacing: isPadLayout ? 14 : 10) {
                 ForEach(digits, id: \.self) { digit in
                     Button {
                         guard value.count < length else { return }
                         value.append(digit)
                     } label: {
                         Text(digit)
-                            .font(.system(.title2, design: .rounded, weight: .bold))
+                            .font(.system(isPadLayout ? .title : .title2, design: .rounded, weight: .bold))
                             .foregroundStyle(AppTheme.ink)
-                            .frame(maxWidth: .infinity, minHeight: 58)
+                            .frame(maxWidth: .infinity, minHeight: isPadLayout ? 72 : 58)
                             .background(AppTheme.primary.opacity(0.06))
                             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                             .overlay(RoundedRectangle(cornerRadius: 8).stroke(AppTheme.line))
@@ -378,9 +363,9 @@ private struct BackupKeyGridInput: View {
                 value.removeLast()
             } label: {
                 Label(L.string("Delete"), systemImage: "delete.left")
-                    .font(.system(.body, design: .rounded, weight: .semibold))
+                    .font(.system(isPadLayout ? .title3 : .body, design: .rounded, weight: .semibold))
                     .foregroundStyle(AppTheme.primary)
-                    .frame(maxWidth: .infinity, minHeight: 46)
+                    .frame(maxWidth: .infinity, minHeight: isPadLayout ? 58 : 46)
                     .background(AppTheme.primary.opacity(0.08))
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
@@ -483,19 +468,21 @@ enum SetupStep: Int, CaseIterable {
 }
 
 private struct SetupProgressView: View {
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     let step: SetupStep
+    private var isPadLayout: Bool { horizontalSizeClass == .regular }
 
     var body: some View {
         HStack(spacing: 8) {
             ForEach(SetupStep.allCases, id: \.rawValue) { item in
                 Capsule()
                     .fill(item.rawValue <= step.rawValue ? AppTheme.primary : AppTheme.line)
-                    .frame(height: 6)
+                    .frame(height: isPadLayout ? 8 : 6)
                     .overlay(alignment: .leading) {
                         if item == step {
                             Capsule()
                                 .fill(AppTheme.accent.opacity(0.45))
-                                .frame(width: 22, height: 6)
+                                .frame(width: isPadLayout ? 28 : 22, height: isPadLayout ? 8 : 6)
                                 .offset(x: 6)
                         }
                     }
@@ -506,26 +493,30 @@ private struct SetupProgressView: View {
 }
 
 private struct SetupMotionMark: View {
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     let isAnimating: Bool
     let step: SetupStep
+    private var isPadLayout: Bool { horizontalSizeClass == .regular }
+    private var baseSize: CGFloat { isPadLayout ? 108 : 88 }
+    private var stepSize: CGFloat { isPadLayout ? 24 : 18 }
 
     var body: some View {
         ZStack {
             ForEach(0..<3) { index in
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
                     .stroke(index == 0 ? AppTheme.primary : AppTheme.line, lineWidth: index == 0 ? 3 : 1)
-                    .frame(width: CGFloat(88 + index * 18), height: CGFloat(88 + index * 18))
+                    .frame(width: baseSize + CGFloat(index) * stepSize, height: baseSize + CGFloat(index) * stepSize)
                     .rotationEffect(.degrees(isAnimating ? Double(14 + index * 16) : Double(-14 - index * 10)))
                     .scaleEffect(isAnimating ? 1.0 + CGFloat(index) * 0.025 : 0.94)
                     .animation(.easeInOut(duration: 1.8 + Double(index) * 0.35).repeatForever(autoreverses: true), value: isAnimating)
             }
 
             Image(systemName: stepIcon)
-                .font(.system(size: 36, weight: .semibold))
+                .font(.system(size: isPadLayout ? 44 : 36, weight: .semibold))
                 .foregroundStyle(AppTheme.primary)
                 .symbolEffect(.pulse, value: step.rawValue)
         }
-        .frame(height: 132)
+        .frame(height: isPadLayout ? 164 : 132)
     }
 
     private var stepIcon: String {
@@ -539,30 +530,32 @@ private struct SetupMotionMark: View {
 }
 
 private struct SetupCard<Content: View>: View {
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     let icon: String
     var title: String? = nil
     var detail: String? = nil
     @ViewBuilder var content: Content
+    private var isPadLayout: Bool { horizontalSizeClass == .regular }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: isPadLayout ? 20 : 16) {
             if title != nil || detail != nil {
-                HStack(alignment: .top, spacing: 12) {
+                HStack(alignment: .top, spacing: isPadLayout ? 14 : 12) {
                     Image(systemName: icon)
-                        .font(.title3)
+                        .font(isPadLayout ? .title2 : .title3)
                         .foregroundStyle(AppTheme.primary)
-                        .frame(width: 40, height: 40)
+                        .frame(width: isPadLayout ? 48 : 40, height: isPadLayout ? 48 : 40)
                         .background(AppTheme.primary.opacity(0.1))
                         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     VStack(alignment: .leading, spacing: 5) {
                         if let title {
                             Text(title)
-                                .font(.headline)
+                                .font(isPadLayout ? .title3.weight(.semibold) : .headline)
                                 .foregroundStyle(AppTheme.ink)
                         }
                         if let detail {
                             Text(detail)
-                                .font(.subheadline)
+                                .font(isPadLayout ? .callout : .subheadline)
                                 .foregroundStyle(AppTheme.secondaryText)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
@@ -572,7 +565,7 @@ private struct SetupCard<Content: View>: View {
 
             content
         }
-        .padding(18)
+        .padding(isPadLayout ? 24 : 18)
         .background(AppTheme.card)
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(AppTheme.line))
@@ -593,22 +586,27 @@ private struct SetupBackButtonStyle: ButtonStyle {
 }
 
 struct LockView: View {
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @EnvironmentObject private var auth: AuthenticationManager
     @State private var showResetGesture = false
+    private var isPadLayout: Bool { horizontalSizeClass == .regular }
 
     var body: some View {
-        ZStack {
-            AppTheme.background.ignoresSafeArea()
-            VStack(spacing: 24) {
+        GeometryReader { proxy in
+            ZStack {
+                AppGlassBackground().ignoresSafeArea()
+                ScrollView {
+                    VStack(spacing: isPadLayout ? 30 : 24) {
                 Image(systemName: "lock.fill")
-                    .font(.system(size: 52, weight: .semibold))
+                    .font(.system(size: isPadLayout ? 70 : 52, weight: .semibold))
                     .foregroundStyle(AppTheme.primary)
 
-                VStack(spacing: 8) {
+                VStack(spacing: isPadLayout ? 12 : 8) {
                     Text(L.string("Private Space Locked"))
                         .font(.system(.largeTitle, design: .rounded, weight: .bold))
                         .foregroundStyle(AppTheme.ink)
                     Text(L.string("Unlock to view the vault and security center."))
+                        .font(isPadLayout ? .title3 : .body)
                         .foregroundStyle(AppTheme.secondaryText)
                 }
                 .multilineTextAlignment(.center)
@@ -629,11 +627,17 @@ struct LockView: View {
 
                 if let message = auth.authMessage {
                     Text(message)
-                        .font(.footnote)
+                        .font(isPadLayout ? .callout : .footnote)
                         .foregroundStyle(AppTheme.warning)
+                        .multilineTextAlignment(.center)
                 }
             }
-            .padding(28)
+            .frame(maxWidth: isPadLayout ? 620 : .infinity)
+            .frame(maxWidth: .infinity, minHeight: proxy.size.height, alignment: .center)
+            .padding(.horizontal, isPadLayout ? 56 : 28)
+            .padding(.vertical, isPadLayout ? 48 : 28)
+                }
+            }
         }
         .sheet(isPresented: $showResetGesture) {
             GestureResetView()
@@ -642,32 +646,37 @@ struct LockView: View {
 }
 
 struct BiometricLockView: View {
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @EnvironmentObject private var auth: AuthenticationManager
     @State private var isAuthenticating = false
+    private var isPadLayout: Bool { horizontalSizeClass == .regular }
 
     private var availability: BiometricAvailability {
         BiometricAuthService.availability()
     }
 
     var body: some View {
-        ZStack {
-            AppTheme.background.ignoresSafeArea()
-            VStack(spacing: 24) {
+        GeometryReader { proxy in
+            ZStack {
+                AppGlassBackground().ignoresSafeArea()
+                ScrollView {
+                    VStack(spacing: isPadLayout ? 30 : 24) {
                 Image(systemName: "faceid")
-                    .font(.system(size: 58, weight: .semibold))
+                    .font(.system(size: isPadLayout ? 76 : 58, weight: .semibold))
                     .foregroundStyle(AppTheme.primary)
 
-                VStack(spacing: 8) {
+                VStack(spacing: isPadLayout ? 12 : 8) {
                     Text(L.string("Face ID Required"))
                         .font(.system(.largeTitle, design: .rounded, weight: .bold))
                         .foregroundStyle(AppTheme.ink)
                     Text(L.string("First verify this device with Face ID, then draw your private gesture to open the real vault."))
+                        .font(isPadLayout ? .title3 : .body)
                         .foregroundStyle(AppTheme.secondaryText)
                         .multilineTextAlignment(.center)
                 }
 
                 AppCard {
-                    VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: isPadLayout ? 16 : 12) {
                         SecurityStageRow(
                             number: "1",
                             title: L.string("Device owner check"),
@@ -693,19 +702,24 @@ struct BiometricLockView: View {
 
                 if !availability.canEvaluate {
                     Text(L.string("Face ID or device authentication is not available on this device. Enable Face ID and a device passcode in iPhone Settings."))
-                        .font(.footnote)
+                        .font(isPadLayout ? .callout : .footnote)
                         .foregroundStyle(AppTheme.warning)
                         .multilineTextAlignment(.center)
                 }
 
                 if let message = auth.authMessage {
                     Text(message)
-                        .font(.footnote)
+                        .font(isPadLayout ? .callout : .footnote)
                         .foregroundStyle(AppTheme.warning)
                         .multilineTextAlignment(.center)
                 }
             }
-            .padding(28)
+            .frame(maxWidth: isPadLayout ? 620 : .infinity)
+            .frame(maxWidth: .infinity, minHeight: proxy.size.height, alignment: .center)
+            .padding(.horizontal, isPadLayout ? 56 : 28)
+            .padding(.vertical, isPadLayout ? 48 : 28)
+                }
+            }
         }
         .task {
             guard availability.canEvaluate, !isAuthenticating else { return }
@@ -721,26 +735,28 @@ struct BiometricLockView: View {
 }
 
 private struct SecurityStageRow: View {
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     let number: String
     let title: String
     let detail: String
     let isActive: Bool
+    private var isPadLayout: Bool { horizontalSizeClass == .regular }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .top, spacing: isPadLayout ? 14 : 12) {
             Text(number)
-                .font(.headline.weight(.bold))
+                .font((isPadLayout ? Font.title3 : Font.headline).weight(.bold))
                 .foregroundStyle(isActive ? .white : AppTheme.primary)
-                .frame(width: 30, height: 30)
+                .frame(width: isPadLayout ? 38 : 30, height: isPadLayout ? 38 : 30)
                 .background(isActive ? AppTheme.primary : AppTheme.primary.opacity(0.1))
                 .clipShape(Circle())
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(title)
-                    .font(.headline)
+                    .font(isPadLayout ? .title3.weight(.semibold) : .headline)
                     .foregroundStyle(AppTheme.ink)
                 Text(detail)
-                    .font(.caption)
+                    .font(isPadLayout ? .callout : .caption)
                     .foregroundStyle(AppTheme.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
             }

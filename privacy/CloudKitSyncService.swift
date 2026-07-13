@@ -104,6 +104,15 @@ enum CloudSyncState: Equatable {
         }
     }
 
+    var needsICloudSettingsAction: Bool {
+        switch self {
+        case .unavailable, .failed:
+            return true
+        case .checking, .available, .syncing, .synced:
+            return false
+        }
+    }
+
     var lastSuccessfulSyncText: String {
         switch self {
         case .synced(let date):
@@ -295,6 +304,9 @@ final class CloudKitSyncService: ObservableObject {
         CloudKitSchemaSeedDescriptor(recordType: "VaultItem", recordName: "__privacy_schema_seed_vault_item"),
         CloudKitSchemaSeedDescriptor(recordType: "DecoyNote", recordName: "__privacy_schema_seed_decoy_note")
     ]
+    static let writableProbeRecordType = "VaultManifest"
+    static let writableProbeRecordName = "__privacy_writable_probe"
+    static let internalRecordNamePrefix = "__privacy_"
 
     static var cloudKitEnvironment: String {
         #if DEBUG
@@ -355,8 +367,12 @@ final class CloudKitSyncService: ObservableObject {
         schemaSeedDescriptors.contains { $0.recordName == recordName }
     }
 
+    static func isInternalRecordName(_ recordName: String) -> Bool {
+        recordName.hasPrefix(internalRecordNamePrefix)
+    }
+
     static func userRecords(from records: [CKRecord]) -> [CKRecord] {
-        records.filter { !isSchemaSeedRecordName($0.recordID.recordName) }
+        records.filter { !isInternalRecordName($0.recordID.recordName) }
     }
 
     func recordMissingCloudSchema(recordType: String, issue: CloudSchemaIssue, detail: String) {
@@ -532,14 +548,13 @@ final class CloudKitSyncService: ObservableObject {
         }
 
         state = .syncing
-        let recordID = CKRecord.ID(recordName: "probe-\(UUID().uuidString)")
-        let record = CKRecord(recordType: "SyncDiagnosticProbe", recordID: recordID)
-        record["createdAt"] = Date()
-        record["containerIdentifier"] = containerIdentifier
-        record["appVersion"] = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
+        let recordID = CKRecord.ID(recordName: Self.writableProbeRecordName)
+        let now = Date()
 
         do {
-            _ = try await database.save(record)
+            _ = try await saveRecord(recordType: Self.writableProbeRecordType, recordID: recordID) { record in
+                assignWritableProbeFields(to: record, now: now)
+            }
             _ = try? await database.deleteRecord(withID: recordID)
             state = .synced(Date())
             lastSyncError = nil
@@ -553,6 +568,14 @@ final class CloudKitSyncService: ObservableObject {
             appendLog(detail)
             return false
         }
+    }
+
+    private func assignWritableProbeFields(to record: CKRecord, now: Date) {
+        record["vaultId"] = Self.writableProbeRecordName
+        record["schemaVersion"] = 1
+        record["encryptedVaultName"] = Data("writable-probe".utf8)
+        record["encryptedRootKeyPackage"] = Data("writable-probe".utf8)
+        record["updatedAt"] = now
     }
 
     func beginSyncRun(itemCount: Int, folderCount: Int, decoyNoteCount: Int, manifestCount: Int) {
@@ -661,7 +684,7 @@ final class CloudKitSyncService: ObservableObject {
             }
         }
 
-        let records = await fetchRecords(recordType: "VaultManifest")
+        let records = Self.userRecords(from: await fetchRecords(recordType: "VaultManifest"))
         let latest = records.max {
             ($0["updatedAt"] as? Date ?? .distantPast) < ($1["updatedAt"] as? Date ?? .distantPast)
         }
@@ -1072,8 +1095,8 @@ final class CloudKitSyncService: ObservableObject {
         switch ckError.code {
         case .quotaExceeded:
             return L.string("Your iCloud storage is full. This item could not be backed up to iCloud, but it remains saved locally on this device.")
-        case .notAuthenticated:
-            return L.string("Sign in to iCloud to back up encrypted vault data. Your data remains saved locally.")
+        case .notAuthenticated, .permissionFailure:
+            return L.string("Turn on iCloud for this app in iPhone Settings. Your data remains encrypted locally until iCloud is available.")
         case .networkUnavailable, .networkFailure:
             return L.string("Network is unavailable. iCloud backup will stay pending and your data remains saved locally.")
         case .missingEntitlement, .badContainer:

@@ -66,8 +66,7 @@ enum MediaGridLayout {
 }
 
 enum MediaGridScaleStorage {
-    static let imagesKey = "vault.mediaGridScale.images"
-    static let videosKey = "vault.mediaGridScale.videos"
+    static let albumKey = "vault.mediaGridScale.album"
     static let audioKey = "vault.mediaGridScale.audio"
     static let documentsKey = "vault.mediaGridScale.documents"
 
@@ -80,7 +79,7 @@ struct ZoomableMediaGrid<Data: RandomAccessCollection, Content: View>: View wher
     let content: (Data.Element) -> Content
 
     @GestureState private var pinchScale: CGFloat = 1
-    @State private var containerWidth: CGFloat = UIScreen.main.bounds.width - 32
+    @State private var containerWidth: CGFloat = 360
     @State private var isPinching = false
     @Namespace private var zoomNamespace
 

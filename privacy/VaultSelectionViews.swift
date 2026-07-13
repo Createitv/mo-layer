@@ -52,7 +52,7 @@ struct VaultSelectionToolbar: View {
     }
 }
 
-private struct VaultSelectionCheckbox: View {
+struct VaultSelectionCheckbox: View {
     let isSelected: Bool
 
     var body: some View {

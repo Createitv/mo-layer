@@ -35,6 +35,17 @@ struct privacyTests {
         _ = try ModelContainer(for: schema, configurations: [configuration])
     }
 
+    @Test func appModelStoreProtectsSQLiteStoreAndWALSidecars() {
+        #expect(AppModelStore.fileProtection == .completeUntilFirstUserAuthentication)
+        #expect(AppModelStore.storeFileName == "default.store")
+        #expect(AppModelStore.storeSidecarFileNames == ["default.store-wal", "default.store-shm"])
+    }
+
+    @Test func appModelStoreUsesInMemoryContainerWhenProtectedDataIsUnavailable() throws {
+        let modelContainer = try AppModelStore.makeContainer(protectedDataAvailable: false)
+        #expect(!modelContainer.usesPersistentStore)
+    }
+
     @Test func encryptDecryptRoundTrip() async throws {
         let key = SymmetricKey(size: .bits256)
         let plaintext = Data("private vault payload".utf8)
@@ -120,6 +131,31 @@ struct privacyTests {
 
         #expect(VaultImportFingerprint.digest(for: first) == VaultImportFingerprint.digest(for: second))
         #expect(VaultImportFingerprint.digest(for: first) != VaultImportFingerprint.digest(for: different))
+    }
+
+    @Test func importFingerprintCoversAllNonLinkFileKinds() async {
+        let data = Data("same imported bytes".utf8)
+        let expectedDigest = VaultImportFingerprint.digest(for: data)
+
+        for kind in [VaultItemKind.image, .livePhoto, .video, .audio, .document, .archive, .other] {
+            let fingerprint = await VaultImportArtifactBuilder.fingerprint(for: data, kind: kind)
+            #expect(fingerprint == expectedDigest)
+        }
+
+        let linkFingerprint = await VaultImportArtifactBuilder.fingerprint(for: data, kind: .link)
+        #expect(linkFingerprint == nil)
+    }
+
+    @Test func sharedImportDestinationMapsToExpectedFolderIds() {
+        #expect(SharedImportDestination.regular.folderId == nil)
+        #expect(SharedImportDestination.innerVault.folderId == VaultStore.innerVaultFolderId)
+    }
+
+    @Test func sharedImportDestinationDefaultsInvalidRawValuesToRegular() {
+        #expect(SharedImportDestination.from(nil) == .regular)
+        #expect(SharedImportDestination.from("regular") == .regular)
+        #expect(SharedImportDestination.from("innerVault") == .innerVault)
+        #expect(SharedImportDestination.from("unknown") == .regular)
     }
 
     @Test func vaultItemStoresImportFingerprintInSchema() throws {
@@ -248,29 +284,27 @@ struct privacyTests {
 
     @Test func vaultCategoriesFilterActiveItemsWithoutTrashCategory() {
         let image = TestVaultItemFactory.item(kind: .image)
+        let livePhoto = TestVaultItemFactory.item(kind: .livePhoto)
         let video = TestVaultItemFactory.item(kind: .video)
         let document = TestVaultItemFactory.item(kind: .document)
         let archive = TestVaultItemFactory.item(kind: .archive)
         let other = TestVaultItemFactory.item(kind: .other)
         let trashedImage = TestVaultItemFactory.item(kind: .image, deletedAt: Date())
-        let items = [image, video, document, archive, other, trashedImage]
+        let items = [image, livePhoto, video, document, archive, other, trashedImage]
 
-        #expect(VaultCategory.allCases == [.images, .videos, .audio, .documents, .links])
-        #expect(VaultCategory.images.items(from: items) == [image])
-        #expect(VaultCategory.videos.items(from: items) == [video])
+        #expect(VaultCategory.allCases == [.album, .audio, .documents, .links])
+        #expect(VaultCategory.album.items(from: items) == [image, livePhoto, video])
         #expect(VaultCategory.documents.items(from: items) == [document, archive, other])
         #expect(!VaultCategory.allCases.flatMap { $0.items(from: items) }.contains(trashedImage))
     }
 
     @Test func vaultCategorySummaryTextUsesCategorySpecificNouns() throws {
-        #expect(VaultCategory.images.summaryText(count: 3) == L.format("Total %d photos", 3))
-        #expect(VaultCategory.videos.summaryText(count: 2) == L.format("Total %d videos", 2))
+        #expect(VaultCategory.album.summaryText(count: 3) == L.format("Total %d media items", 3))
         #expect(VaultCategory.audio.summaryText(count: 1) == L.format("Total %d audio files", 1))
         #expect(VaultCategory.documents.summaryText(count: 4) == L.format("Total %d files", 4))
 
         let keys = [
-            "Total %d photos",
-            "Total %d videos",
+            "Total %d media items",
             "Total %d audio files",
             "Total %d files"
         ]
@@ -315,11 +349,58 @@ struct privacyTests {
         #expect(!MainShellAction.allCases.map(\.rawValue).contains("share"))
     }
 
+    @Test func moLayerHeaderStyleUsesDistinctActionsAndIcons() {
+        #expect(VaultFolderContextStyle.regular.trailingActions == [.profile, .import])
+        #expect(VaultFolderContextStyle.moLayer.trailingActions == [.import])
+        #expect(VaultFolderContextStyle.regular.showsProfileAction)
+        #expect(!VaultFolderContextStyle.moLayer.showsProfileAction)
+        #expect(VaultFolderContextStyle.regular.profileSystemImage == "person.crop.circle")
+        #expect(VaultFolderContextStyle.moLayer.profileSystemImage != VaultFolderContextStyle.regular.profileSystemImage)
+        #expect(VaultFolderContextStyle.moLayer.profileSystemImage == "person.crop.circle.badge.checkmark")
+        #expect(VaultFolderContextStyle.regular.importSystemImage == "tray.and.arrow.down")
+        #expect(VaultFolderContextStyle.moLayer.importSystemImage != VaultFolderContextStyle.regular.importSystemImage)
+        #expect(VaultFolderContextStyle.moLayer.importSystemImage == "square.stack.3d.down.right.fill")
+    }
+
+    @Test func homeShellDoesNotRenderMoLayerStatusPill() throws {
+        let mainSource = try String(
+            contentsOf: repositoryRoot()
+                .appendingPathComponent("privacy")
+                .appendingPathComponent("MainViews.swift"),
+            encoding: .utf8
+        )
+        let headerSource = try String(
+            contentsOf: repositoryRoot()
+                .appendingPathComponent("privacy")
+                .appendingPathComponent("VaultHeaderViews.swift"),
+            encoding: .utf8
+        )
+
+        #expect(!mainSource.contains("VaultFolderContextPill("))
+        #expect(!mainSource.contains("folderContextStyle.showsStatusIndicator"))
+        #expect(!headerSource.contains("VaultFolderContextPill"))
+        #expect(!headerSource.contains("contextStyle.showsStatusIndicator"))
+    }
+
+    @Test func vaultSelectionPolicyUsesOnlyCurrentCategoryFileItems() {
+        let image = VaultItem(kind: .image, encryptedMetadata: Data(), byteSize: 1)
+        let video = VaultItem(kind: .video, encryptedMetadata: Data(), byteSize: 1)
+        let audio = VaultItem(kind: .audio, encryptedMetadata: Data(), byteSize: 1)
+        let document = VaultItem(kind: .document, encryptedMetadata: Data(), byteSize: 1)
+        let link = VaultItem(kind: .link, encryptedMetadata: Data(), byteSize: 0)
+
+        #expect(VaultSelectionPolicy.selectableItems(in: [image, video, audio, document, link], category: .album).map(\.id) == [image.id, video.id])
+        #expect(VaultSelectionPolicy.selectableItems(in: [image, video, audio, document, link], category: .audio).map(\.id) == [audio.id])
+        #expect(VaultSelectionPolicy.selectableItems(in: [image, video, audio, document, link], category: .documents).map(\.id) == [document.id])
+    }
+
     @Test func mediaPreviewBadgesUsePhotoVideoAndAudioIcons() {
         #expect(VaultItemKind.image.previewBadgeSystemImage == "photo.fill")
+        #expect(VaultItemKind.livePhoto.previewBadgeSystemImage == "livephoto")
         #expect(VaultItemKind.video.previewBadgeSystemImage == "video.fill")
         #expect(VaultItemKind.audio.previewBadgeSystemImage == "waveform")
         #expect(VaultItemKind.image.isPreviewableMedia)
+        #expect(VaultItemKind.livePhoto.isPreviewableMedia)
         #expect(VaultItemKind.video.isPreviewableMedia)
         #expect(VaultItemKind.audio.isPreviewableMedia)
         #expect(!VaultItemKind.document.isPreviewableMedia)
@@ -328,6 +409,136 @@ struct privacyTests {
         #expect(VaultItemKind.other.isPreviewableContent)
         #expect(!VaultItemKind.link.isPreviewableContent)
         #expect(VaultItemKind.document.previewBadgeSystemImage == "doc.richtext")
+        #expect(VaultItemKind.livePhoto.usesLongPressMediaPreview)
+    }
+
+    @Test func videoPreviewUsesNativePlayerLayerControls() throws {
+        let source = try String(
+            contentsOf: repositoryRoot()
+                .appendingPathComponent("privacy")
+                .appendingPathComponent("MainViews.swift"),
+            encoding: .utf8
+        )
+
+        #expect(source.contains("PlayerLayerView(player: player)"))
+        #expect(source.contains("AVPlayerLayer.self"))
+        #expect(source.contains("VideoPlayerControlsOverlay("))
+        #expect(source.contains("MediaPreviewAudioSession.makePlayer(for: url, kind: item.kind)"))
+        #expect(source.contains("preferredForwardBufferDuration"))
+        #expect(source.contains("automaticallyWaitsToMinimizeStalling = true"))
+        #expect(source.contains("previewURL = url"))
+        #expect(source.contains("adjustmentGesture(containerSize: proxy.size)"))
+        #expect(source.contains("VideoPlayerAdjustmentIndicator"))
+        #expect(source.contains("VideoPlayerGesturePolicy.adjustedValue"))
+        #expect(source.contains("dragGesture(containerSize: proxy.size)"))
+        #expect(source.contains("VideoPlayerProgressControl("))
+        #expect(source.contains(".frame(minHeight: 44)"))
+        #expect(!source.contains("private var volumeBinding"))
+        #expect(!source.contains("private var brightnessBinding"))
+        #expect(!source.contains("let volumeChanged: (Double) -> Void"))
+        #expect(!source.contains("let brightnessChanged: (Double) -> Void"))
+        #expect(!source.contains("controlSlider("))
+        #expect(!source.contains("VideoPlayer(player: player)"))
+    }
+
+    @Test func videoPlayerGesturePolicyClassifiesVerticalScreenDrags() {
+        #expect(VideoPlayerGesturePolicy.adjustment(
+            startX: 40,
+            containerWidth: 300,
+            translation: CGSize(width: 3, height: -80),
+            scale: 1
+        ) == .brightness)
+        #expect(VideoPlayerGesturePolicy.adjustment(
+            startX: 260,
+            containerWidth: 300,
+            translation: CGSize(width: 3, height: -80),
+            scale: 1
+        ) == .volume)
+        #expect(VideoPlayerGesturePolicy.adjustment(
+            startX: 40,
+            containerWidth: 300,
+            translation: CGSize(width: 90, height: -30),
+            scale: 1
+        ) == nil)
+        #expect(VideoPlayerGesturePolicy.adjustment(
+            startX: 40,
+            containerWidth: 300,
+            translation: CGSize(width: 1, height: -5),
+            scale: 1
+        ) == nil)
+        #expect(VideoPlayerGesturePolicy.adjustment(
+            startX: 40,
+            containerWidth: 300,
+            translation: CGSize(width: 1, height: -80),
+            scale: 2
+        ) == nil)
+    }
+
+    @Test func videoPlayerGesturePolicyAdjustsAndClampsValues() {
+        #expect(VideoPlayerGesturePolicy.adjustedValue(
+            startingValue: 0.5,
+            verticalTranslation: -100,
+            containerHeight: 400,
+            range: 0...1
+        ) == 0.75)
+        #expect(VideoPlayerGesturePolicy.adjustedValue(
+            startingValue: 0.5,
+            verticalTranslation: 100,
+            containerHeight: 400,
+            range: 0...1
+        ) == 0.25)
+        #expect(VideoPlayerGesturePolicy.adjustedValue(
+            startingValue: 0.9,
+            verticalTranslation: -400,
+            containerHeight: 400,
+            range: 0...1
+        ) == 1)
+        #expect(VideoPlayerGesturePolicy.adjustedValue(
+            startingValue: 0.1,
+            verticalTranslation: 400,
+            containerHeight: 400,
+            range: 0.05...1
+        ) == 0.05)
+    }
+
+    @Test func videoPlayerControlStringsAreLocalized() throws {
+        let keys = [
+            "Back 10 Seconds",
+            "Brightness",
+            "Forward 10 Seconds",
+            "Mute",
+            "Pause",
+            "Play",
+            "Playback Position",
+            "Replay",
+            "Unmute",
+            "Volume"
+        ]
+
+        for bundleCode in ["en", "zh-Hans", "zh-Hant", "de", "es", "fr", "ja", "ko"] {
+            let strings = try localizedStrings(bundleCode: bundleCode)
+            for key in keys {
+                #expect(strings[key]?.isEmpty == false)
+            }
+        }
+    }
+
+    @Test func duplicateImportStringsAreLocalized() throws {
+        let keys = [
+            "%@ imported. %d duplicate(s) skipped.",
+            "%@ imported. %d duplicate(s) skipped. %d failed.",
+            "No new items imported. %d duplicate(s) skipped.",
+            "Selected %d files, imported %d, skipped %d duplicates",
+            "Selected %d files, imported %d, skipped %d duplicates, %d failed",
+            "This item has already been imported."
+        ]
+
+        for bundleCode in ["en", "zh-Hans", "zh-Hant", "de", "es", "fr", "ja", "ko"] {
+            let strings = try localizedStrings(bundleCode: bundleCode)
+            for key in keys {
+                #expect(strings[key]?.isEmpty == false)
+            }
+        }
     }
 
     @Test func importSummaryFormatsCountsByMediaKind() {
@@ -344,12 +555,47 @@ struct privacyTests {
         #expect(summary.displayMessage.contains("1 Video"))
     }
 
+    @Test func importSummaryReportsSkippedDuplicateCounts() {
+        var mixedSummary = ImportSummary()
+        mixedSummary.record(.image)
+        mixedSummary.recordSkippedDuplicate()
+        mixedSummary.recordFailure()
+
+        #expect(mixedSummary.importedCount == 1)
+        #expect(mixedSummary.skippedDuplicateCount == 1)
+        #expect(mixedSummary.failedCount == 1)
+        #expect(mixedSummary.hasReportableResult)
+        #expect(mixedSummary.displayMessage.contains("1 duplicate(s) skipped"))
+        #expect(mixedSummary.displayMessage.contains("1 failed"))
+
+        var duplicateOnlySummary = ImportSummary()
+        duplicateOnlySummary.recordSkippedDuplicate()
+        duplicateOnlySummary.recordSkippedDuplicate()
+
+        #expect(duplicateOnlySummary.importedCount == 0)
+        #expect(duplicateOnlySummary.skippedDuplicateCount == 2)
+        #expect(duplicateOnlySummary.displayMessage == L.format("No new items imported. %d duplicate(s) skipped.", 2))
+    }
+
     @Test func vaultImportProgressReportsSelectedImportedAndFailedCounts() {
         var progress = VaultImportProgress(totalCount: 5)
 
         #expect(progress.isActive)
         #expect(progress.completedCount == 0)
         #expect(progress.statusText == "Selected 5 files, imported 0")
+
+        progress.updateCurrentItem(VaultImportProgressItem(
+            displayName: "clip.mov",
+            kind: .video,
+            phaseText: L.string("Encrypting current file"),
+            progress: 0.5,
+            thumbnailData: Data("thumb".utf8)
+        ))
+
+        #expect(progress.currentItem?.displayName == "clip.mov")
+        #expect(progress.currentItem?.kind == .video)
+        #expect(progress.currentItemProgress == 0.5)
+        #expect(progress.overallProgress == 0.1)
 
         progress.recordImported()
         progress.recordImported()
@@ -362,6 +608,20 @@ struct privacyTests {
 
         #expect(!progress.isActive)
         #expect(progress.statusText == "Selected 5 files, imported 2, 1 failed")
+    }
+
+    @Test func vaultImportProgressReportsSkippedDuplicates() {
+        var progress = VaultImportProgress(totalCount: 4)
+
+        progress.record(.imported)
+        progress.record(.skippedDuplicate)
+        progress.record(.failed)
+
+        #expect(progress.importedCount == 1)
+        #expect(progress.skippedDuplicateCount == 1)
+        #expect(progress.failedCount == 1)
+        #expect(progress.completedCount == 3)
+        #expect(progress.statusText == "Selected 4 files, imported 1, skipped 1 duplicates, 1 failed")
     }
 
     @Test func completedVaultImportProgressIsReadyForAutoDismissal() {
@@ -377,6 +637,43 @@ struct privacyTests {
         progress.finish()
 
         #expect(progress.isReadyForAutoDismissal)
+    }
+
+    @Test func vaultImportBatchPolicySavesEveryTenImportedItems() {
+        #expect(!VaultImportBatchPolicy.shouldSave(afterImportedCount: 0))
+        #expect(!VaultImportBatchPolicy.shouldSave(afterImportedCount: 9))
+        #expect(VaultImportBatchPolicy.shouldSave(afterImportedCount: 10))
+        #expect(!VaultImportBatchPolicy.shouldSave(afterImportedCount: 11))
+        #expect(VaultImportBatchPolicy.shouldSave(afterImportedCount: 20))
+    }
+
+    @Test func bulkImportQueueDefersCloudSyncUntilCompletion() throws {
+        let source = try String(
+            contentsOf: repositoryRoot()
+                .appendingPathComponent("privacy")
+                .appendingPathComponent("ImportService.swift"),
+            encoding: .utf8
+        )
+
+        #expect(source.contains("syncAfterImport: false"))
+        #expect(source.contains("saveImmediately: false"))
+        #expect(source.contains("await vaultStore.syncPendingChanges(context: context, sync: sync)"))
+    }
+
+    @Test func duplicateImportSkipsWithoutCreatingNewVaultItem() throws {
+        let source = try String(
+            contentsOf: repositoryRoot()
+                .appendingPathComponent("privacy")
+                .appendingPathComponent("VaultStore.swift"),
+            encoding: .utf8
+        )
+
+        #expect(source.contains("enum VaultImportResult: Equatable"))
+        #expect(source.contains("case skippedDuplicate"))
+        #expect(source.contains("return .skippedDuplicate"))
+        #expect(source.contains("item.deletedAt == nil"))
+        #expect(source.contains("&& item.importFingerprint == importFingerprint"))
+        #expect(!source.contains("&& (item.kind == .image || item.kind == .video)"))
     }
 
     @Test func mediaGridLayoutSupportsReusablePinchSizing() {
@@ -395,17 +692,16 @@ struct privacyTests {
     }
 
     @Test func mediaGridScaleStorageSeparatesHomeCategories() {
-        #expect(MediaGridScaleStorage.imagesKey == "vault.mediaGridScale.images")
-        #expect(MediaGridScaleStorage.videosKey == "vault.mediaGridScale.videos")
+        #expect(MediaGridScaleStorage.albumKey == "vault.mediaGridScale.album")
         #expect(MediaGridScaleStorage.audioKey == "vault.mediaGridScale.audio")
         #expect(MediaGridScaleStorage.documentsKey == "vault.mediaGridScale.documents")
         #expect(MediaGridScaleStorage.defaultStoredScale == Double(MediaGridLayout.defaultScale))
     }
 
-    @Test func cloudToLocalSyncDownloadsOriginalsForAutomaticAndRefreshRuns() {
+    @Test func cloudToLocalSyncDownloadsOriginalsForAutomaticAndManualRefreshRuns() {
         #expect(VaultCloudToLocalSyncPolicy.automaticDownloadsOriginals)
-        #expect(VaultCloudToLocalSyncPolicy.pullToRefreshDownloadsOriginals)
-        #expect(VaultCloudToLocalSyncPolicy.syncedHomeCategories == [.images, .videos, .audio, .documents])
+        #expect(VaultCloudToLocalSyncPolicy.manualRefreshDownloadsOriginals)
+        #expect(VaultCloudToLocalSyncPolicy.syncedHomeCategories == [.album, .audio, .documents])
     }
 
     @Test func cloudAssetDownloadPolicySelectsOnlyMissingNonLinkItems() throws {
@@ -424,6 +720,26 @@ struct privacyTests {
         #expect(!VaultCloudAssetDownloadPolicy.shouldDownload(link))
         #expect(VaultCloudAssetDownloadPolicy.shouldDownload(localMissingFile))
         #expect(!VaultCloudAssetDownloadPolicy.shouldDownload(localExistingFile))
+    }
+
+    @Test func remoteMergePolicyKeepsPendingLocalDeleteOverOlderRemoteRecord() throws {
+        let localUpdatedAt = try #require(Calendar(identifier: .gregorian).date(from: DateComponents(year: 2026, month: 6, day: 9, hour: 11)))
+        let remoteUpdatedAt = try #require(Calendar(identifier: .gregorian).date(from: DateComponents(year: 2026, month: 6, day: 9, hour: 10)))
+
+        #expect(!VaultRemoteMergePolicy.shouldApplyRemote(
+            remoteUpdatedAt: remoteUpdatedAt,
+            remoteRevision: 3,
+            localUpdatedAt: localUpdatedAt,
+            localRevision: 4,
+            localSyncStatus: .pending
+        ))
+        #expect(VaultRemoteMergePolicy.shouldApplyRemote(
+            remoteUpdatedAt: remoteUpdatedAt,
+            remoteRevision: 3,
+            localUpdatedAt: localUpdatedAt,
+            localRevision: 4,
+            localSyncStatus: .synced
+        ))
     }
 
     @Test func homeIconLayoutsStayCompact() {
@@ -445,6 +761,7 @@ struct privacyTests {
     @Test func settingsChangesDoNotRebuildTheRootPresentation() {
         #expect(AppRootPresentation.rebuildsRootWhenSettingsChange == false)
         #expect(AppRootPresentation.requiresActiveMembershipBeforeVaultAccess == true)
+        #expect(AppRootPresentation.blocksLaunchForCloudRefresh == false)
     }
 
     @Test func settingsPreferenceRefreshTokenChangesWhenLanguageOrAppearanceChanges() {
@@ -485,7 +802,7 @@ struct privacyTests {
     }
 
     @Test func chineseICloudSyncCaptionIsTranslated() throws {
-        let key = "Encrypted iCloud Sync is always on. Items are encrypted on this device before upload to your private iCloud."
+        let key = "Items are encrypted on this device before optional iCloud sync."
         let english = try localizedStrings(bundleCode: "en")[key]
         let simplifiedChinese = try localizedStrings(bundleCode: "zh-Hans")[key]
         let traditionalChinese = try localizedStrings(bundleCode: "zh-Hant")[key]
@@ -494,6 +811,84 @@ struct privacyTests {
         #expect(traditionalChinese != english)
         #expect(simplifiedChinese?.contains("iCloud") == true)
         #expect(traditionalChinese?.contains("iCloud") == true)
+    }
+
+    @Test func localizedBrandNamesUseMoLayerNaming() throws {
+        let expectedDisplayNames = [
+            "en": "Mo Layer",
+            "zh-Hans": "墨层",
+            "zh-Hant": "墨層",
+            "de": "Mo Layer",
+            "es": "Mo Layer",
+            "fr": "Mo Layer",
+            "ja": "Mo Layer",
+            "ko": "Mo Layer"
+        ]
+
+        for (bundleCode, expectedName) in expectedDisplayNames {
+            let infoPlistStrings = try infoPlistStrings(bundleCode: bundleCode)
+            #expect(infoPlistStrings["CFBundleDisplayName"] == expectedName)
+
+            let localizedValues = try localizedStrings(bundleCode: bundleCode).values
+            #expect(!localizedValues.contains { $0.contains("Palimpsest") })
+            #expect(!localizedValues.contains { $0.contains("Aegis") })
+        }
+    }
+
+    @Test func moLayerTutorialStringsAreLocalized() throws {
+        let keys = [
+            "Mo Layer Tutorial",
+            "What is Mo Layer?",
+            "Enter Mo Layer",
+            "Save files to Mo Layer",
+            "Tap the blank touch zone between the category title and the profile avatar three times to enter Mo Layer.",
+            "Practice tapping the Mo Layer entry zone"
+        ]
+
+        let english = try localizedStrings(bundleCode: "en")
+        let simplifiedChinese = try localizedStrings(bundleCode: "zh-Hans")
+
+        for key in keys {
+            #expect(english[key]?.isEmpty == false)
+            #expect(simplifiedChinese[key]?.isEmpty == false)
+        }
+
+        #expect(english["Mo Layer Tutorial"] == "Mo Layer Tutorial")
+        #expect(simplifiedChinese["Mo Layer Tutorial"] == "墨层教学")
+        #expect(simplifiedChinese["Tap the blank touch zone between the category title and the profile avatar three times to enter Mo Layer."]?.contains("头像") == true)
+    }
+
+    @MainActor
+    @Test func moLayerTutorialPracticeCompletesOnThirdTap() {
+        var counter = MoLayerTutorialPracticeCounter()
+
+        #expect(counter.recordTap() == .counting(1))
+        #expect(counter.tapCount == 1)
+        #expect(counter.recordTap() == .counting(2))
+        #expect(counter.tapCount == 2)
+        #expect(counter.recordTap() == .completed(3))
+        #expect(counter.tapCount == 3)
+    }
+
+    @MainActor
+    @Test func moLayerTutorialPracticeResetClearsTapProgress() {
+        var counter = MoLayerTutorialPracticeCounter()
+
+        _ = counter.recordTap()
+        _ = counter.recordTap()
+        counter.reset()
+
+        #expect(counter.tapCount == 0)
+        #expect(counter.recordTap() == .counting(1))
+    }
+
+    @Test func cloudSyncStateExposesSettingsActionForUnavailableStates() {
+        #expect(CloudSyncState.unavailable("No iCloud").needsICloudSettingsAction)
+        #expect(CloudSyncState.failed("No iCloud").needsICloudSettingsAction)
+        #expect(!CloudSyncState.checking.needsICloudSettingsAction)
+        #expect(!CloudSyncState.available.needsICloudSettingsAction)
+        #expect(!CloudSyncState.syncing.needsICloudSettingsAction)
+        #expect(!CloudSyncState.synced(Date()).needsICloudSettingsAction)
     }
 
     @Test func knownUserFacingSwiftStringsUseLocalizationLookup() throws {
@@ -538,16 +933,128 @@ struct privacyTests {
         #expect(SubscriptionManager.displayOrder(forStoreProductID: "unknown") == Int.max)
     }
 
+    @MainActor
+    @Test func subscriptionComplianceLinksAndTrialDisclosureAreConfigured() {
+        #expect(SubscriptionManager.freeTrialDays == 3)
+        #expect(SubscriptionManager.termsOfUseURL.scheme == "https")
+        #expect(SubscriptionManager.termsOfUseURL.absoluteString.contains("molayer.tech"))
+    }
+
+    @Test func subscriptionManagerUsesRevenueCatBackupProxyForMainlandChinaReachability() {
+        #expect(SubscriptionManager.revenueCatProxyURL.absoluteString == "https://api.rc-backup.com/")
+    }
+
+    @MainActor
+    @Test func restorePurchasesWithoutRevenueCatShowsRestoreFailureFeedback() async {
+        let manager = SubscriptionManager()
+        manager.configureRevenueCat(apiKey: nil)
+
+        await manager.restorePurchases()
+
+        #expect(manager.statusText == L.string("Restore purchase failed. Please try again."))
+    }
+
+    @MainActor
+    @Test func restorePurchaseFeedbackDistinguishesRestoredNoPurchaseAndFailureStates() {
+        let restored = RestorePurchaseFeedback.restored(hasActivePro: true)
+        #expect(restored.kind == .success)
+        #expect(restored.message == L.string("Purchases restored. Pro is active."))
+
+        let notFound = RestorePurchaseFeedback.restored(hasActivePro: false)
+        #expect(notFound.kind == .warning)
+        #expect(notFound.message == L.string("No previous purchases found for this Apple ID."))
+
+        let failed = RestorePurchaseFeedback.failed()
+        #expect(failed.kind == .warning)
+        #expect(failed.message == L.string("Restore purchase failed. Please try again."))
+    }
+
     @Test func membershipAccessSeparatesActiveExpiredAndLockedStates() {
         #expect(SubscriptionManager.accessLevel(isPro: true, hasActivatedPro: false) == .activePro)
         #expect(SubscriptionManager.accessLevel(isPro: false, hasActivatedPro: true) == .expiredReadOnly)
         #expect(SubscriptionManager.accessLevel(isPro: false, hasActivatedPro: false) == .lockedUntilPro)
         #expect(MembershipAccessLevel.activePro.allowsVaultEntry)
+        #expect(MembershipAccessLevel.activePro.allowsCloudPull)
         #expect(MembershipAccessLevel.activePro.allowsImportAndCloudSync)
         #expect(MembershipAccessLevel.expiredReadOnly.allowsVaultEntry)
+        #expect(MembershipAccessLevel.expiredReadOnly.allowsCloudPull)
         #expect(!MembershipAccessLevel.expiredReadOnly.allowsImportAndCloudSync)
         #expect(!MembershipAccessLevel.lockedUntilPro.allowsVaultEntry)
+        #expect(!MembershipAccessLevel.lockedUntilPro.allowsCloudPull)
         #expect(!MembershipAccessLevel.lockedUntilPro.allowsImportAndCloudSync)
+    }
+
+    @Test func freeImportPolicyAllowsFirstNinetyNineVaultFilesBeforePro() {
+        #expect(VaultFreeImportPolicy.freeItemLimit == 99)
+        #expect(VaultFreeImportPolicy.canImport(currentCount: 0, incomingCount: 1, isPro: false))
+        #expect(VaultFreeImportPolicy.canImport(currentCount: 98, incomingCount: 1, isPro: false))
+        #expect(!VaultFreeImportPolicy.canImport(currentCount: 99, incomingCount: 1, isPro: false))
+        #expect(!VaultFreeImportPolicy.canImport(currentCount: 98, incomingCount: 2, isPro: false))
+        #expect(VaultFreeImportPolicy.canImport(currentCount: 250, incomingCount: 20, isPro: true))
+    }
+
+    @Test func freeImportPolicyCountsOnlyActiveMediaFileItems() {
+        let image = VaultItem(kind: .image, encryptedMetadata: Data(), byteSize: 1)
+        let video = VaultItem(kind: .video, encryptedMetadata: Data(), byteSize: 1)
+        let audio = VaultItem(kind: .audio, encryptedMetadata: Data(), byteSize: 1)
+        let document = VaultItem(kind: .document, encryptedMetadata: Data(), byteSize: 1)
+        let link = VaultItem(kind: .link, encryptedMetadata: Data(), byteSize: 0)
+        let deletedArchive = VaultItem(kind: .archive, encryptedMetadata: Data(), byteSize: 1)
+        deletedArchive.deletedAt = Date()
+
+        #expect(VaultFreeImportPolicy.countedItemCount(in: [image, video, audio, document, link, deletedArchive]) == 4)
+    }
+
+    @Test func membershipStatusSummaryShowsPlanAndExpiration() throws {
+        let expiry = try #require(Calendar(identifier: .gregorian).date(from: DateComponents(year: 2026, month: 7, day: 9)))
+        let activeSummary = MembershipStatusSummary(
+            accessLevel: .activePro,
+            productIdentifier: SubscriptionManager.yearly,
+            expirationDate: expiry,
+            referenceDate: Date(timeIntervalSince1970: 0)
+        )
+        #expect(activeSummary.planTitle == L.string("Yearly Pro"))
+        #expect(activeSummary.stateTitle == L.string("Pro Active"))
+        #expect(activeSummary.expirationText == L.format("Valid until %@", activeSummary.formattedExpirationDate))
+
+        let lifetimeSummary = MembershipStatusSummary(
+            accessLevel: .activePro,
+            productIdentifier: SubscriptionManager.lifetime,
+            expirationDate: nil,
+            referenceDate: Date(timeIntervalSince1970: 0)
+        )
+        #expect(lifetimeSummary.expirationText == L.string("Lifetime access"))
+
+        let monthlyWithoutExpirationSummary = MembershipStatusSummary(
+            accessLevel: .activePro,
+            productIdentifier: SubscriptionManager.monthly,
+            expirationDate: nil,
+            referenceDate: Date(timeIntervalSince1970: 0)
+        )
+        #expect(monthlyWithoutExpirationSummary.planTitle == L.string("Monthly Pro"))
+        #expect(monthlyWithoutExpirationSummary.expirationText.isEmpty)
+
+        let readOnlySummary = MembershipStatusSummary(
+            accessLevel: .expiredReadOnly,
+            productIdentifier: nil,
+            expirationDate: nil,
+            referenceDate: Date(timeIntervalSince1970: 0)
+        )
+        #expect(readOnlySummary.stateTitle == L.string("Read-Only Protection"))
+        #expect(readOnlySummary.expirationText == L.string("Expired or inactive"))
+    }
+
+    @Test func moLayerEntryUsesVaultReadAccessInsteadOfWriteAccess() throws {
+        let sourceText = try String(
+            contentsOf: repositoryRoot().appendingPathComponent("privacy/MainViews.swift"),
+            encoding: .utf8
+        )
+        let enterInnerVaultStart = try #require(sourceText.range(of: "private func enterInnerVault()"))
+        let toggleInnerVaultStart = try #require(sourceText.range(of: "private func toggleInnerVault()"))
+        let enterInnerVaultBody = String(sourceText[enterInnerVaultStart.lowerBound..<toggleInnerVaultStart.lowerBound])
+
+        #expect(enterInnerVaultBody.contains("subscription.canEnterVault"))
+        #expect(!enterInnerVaultBody.contains("subscription.canImportAndSync"))
     }
 
     @MainActor
@@ -562,19 +1069,6 @@ struct privacyTests {
         #expect(!manager.isPro)
         #expect(manager.statusText == L.string("Free Plan"))
         #endif
-    }
-
-    @Test func moLayerEntryUsesVaultReadAccessInsteadOfWriteAccess() throws {
-        let sourceText = try String(
-            contentsOf: repositoryRoot().appendingPathComponent("privacy/MainViews.swift"),
-            encoding: .utf8
-        )
-        let enterInnerVaultStart = try #require(sourceText.range(of: "private func enterInnerVault()"))
-        let toggleInnerVaultStart = try #require(sourceText.range(of: "private func toggleInnerVault()"))
-        let enterInnerVaultBody = String(sourceText[enterInnerVaultStart.lowerBound..<toggleInnerVaultStart.lowerBound])
-
-        #expect(enterInnerVaultBody.contains("subscription.canEnterVault"))
-        #expect(!enterInnerVaultBody.contains("subscription.canImportAndSync"))
     }
 
     @Test func subscriptionManagerRejectsMissingRevenueCatAPIKey() {
@@ -600,6 +1094,41 @@ struct privacyTests {
 
     @Test func lockFlowRequiresBiometricGateBeforeGestureGate() {
         #expect(AuthenticationManager.SessionMode.allCases == [.cover, .gestureGate, .realVault, .decoyVault])
+    }
+
+    @MainActor
+    @Test func disablingGestureVerificationSkipsGestureGateAfterFaceID() {
+        let auth = AuthenticationManager()
+        defer {
+            auth.requiresBiometricUnlock = true
+            auth.requiresGestureUnlock = true
+        }
+
+        auth.requiresBiometricUnlock = true
+        auth.requiresGestureUnlock = true
+        auth.sessionMode = .gestureGate
+
+        auth.requiresGestureUnlock = false
+
+        #expect(auth.sessionMode == .realVault)
+    }
+
+    @MainActor
+    @Test func disablingBothUnlockChecksOpensRealVaultFromCover() {
+        let auth = AuthenticationManager()
+        defer {
+            auth.requiresBiometricUnlock = true
+            auth.requiresGestureUnlock = true
+        }
+
+        auth.requiresBiometricUnlock = true
+        auth.requiresGestureUnlock = true
+        auth.sessionMode = .cover
+
+        auth.requiresBiometricUnlock = false
+        auth.requiresGestureUnlock = false
+
+        #expect(auth.sessionMode == .realVault)
     }
 
     @Test func configurationCanRecoverFromICloudKeychainCredentials() {
@@ -665,9 +1194,12 @@ struct privacyTests {
 
         #expect(router.receive(subscriptionID: "privacy.vault.change.VaultFolder"))
         #expect(router.pendingReason == .recordType("VaultFolder"))
+        #expect(router.lastReason == .recordType("VaultFolder"))
+        #expect(router.lastReceivedAt != nil)
 
         router.consume(.recordType("VaultFolder"))
         #expect(router.pendingReason == nil)
+        #expect(router.lastReason == .recordType("VaultFolder"))
         #expect(!router.receive(subscriptionID: "unrelated"))
     }
 
@@ -704,17 +1236,28 @@ struct privacyTests {
     }
 
     @MainActor
+    @Test func cloudKitWritableProbeUsesProductionSchemaRecordType() {
+        #expect(CloudKitSyncService.writableProbeRecordType == "VaultManifest")
+        #expect(CloudKitSyncService.writableProbeRecordName.hasPrefix(CloudKitSyncService.internalRecordNamePrefix))
+        #expect(CloudKitSyncService.changeSubscriptionDescriptors.map(\.recordType).contains(CloudKitSyncService.writableProbeRecordType))
+    }
+
+    @MainActor
     @Test func cloudKitSchemaSeedRecordsAreFilteredFromUserResults() {
         let seed = CKRecord(
             recordType: "VaultItem",
             recordID: CKRecord.ID(recordName: "__privacy_schema_seed_vault_item")
+        )
+        let probe = CKRecord(
+            recordType: "VaultManifest",
+            recordID: CKRecord.ID(recordName: CloudKitSyncService.writableProbeRecordName)
         )
         let user = CKRecord(
             recordType: "VaultItem",
             recordID: CKRecord.ID(recordName: "user-item")
         )
 
-        #expect(CloudKitSyncService.userRecords(from: [seed, user]).map(\.recordID.recordName) == ["user-item"])
+        #expect(CloudKitSyncService.userRecords(from: [seed, probe, user]).map(\.recordID.recordName) == ["user-item"])
     }
 
     @MainActor
@@ -783,6 +1326,16 @@ private func localizedStrings(bundleCode: String) throws -> [String: String] {
         .appendingPathComponent("privacy")
         .appendingPathComponent("\(bundleCode).lproj")
         .appendingPathComponent("Localizable.strings")
+    let data = try Data(contentsOf: url)
+    let plist = try PropertyListSerialization.propertyList(from: data, options: [], format: nil)
+    return try #require(plist as? [String: String])
+}
+
+private func infoPlistStrings(bundleCode: String) throws -> [String: String] {
+    let url = repositoryRoot()
+        .appendingPathComponent("privacy")
+        .appendingPathComponent("\(bundleCode).lproj")
+        .appendingPathComponent("InfoPlist.strings")
     let data = try Data(contentsOf: url)
     let plist = try PropertyListSerialization.propertyList(from: data, options: [], format: nil)
     return try #require(plist as? [String: String])

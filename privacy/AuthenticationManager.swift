@@ -66,8 +66,23 @@ final class AuthenticationManager: ObservableObject {
         didSet {
             UserDefaults.standard.set(requiresBiometricUnlock, forKey: Self.biometricRequirementKey)
             authMessage = nil
-            if !requiresBiometricUnlock && sessionMode == .cover {
+            if !requiresBiometricUnlock && requiresGestureUnlock && sessionMode == .cover {
                 sessionMode = .gestureGate
+            }
+            if !requiresBiometricUnlock && !requiresGestureUnlock && sessionMode == .cover {
+                openRealVault()
+            }
+        }
+    }
+    @Published var requiresGestureUnlock = UserDefaults.standard.object(forKey: gestureRequirementKey) as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(requiresGestureUnlock, forKey: Self.gestureRequirementKey)
+            authMessage = nil
+            if !requiresGestureUnlock && sessionMode == .gestureGate {
+                openRealVault()
+            }
+            if !requiresBiometricUnlock && !requiresGestureUnlock && sessionMode == .cover {
+                openRealVault()
             }
         }
     }
@@ -85,6 +100,7 @@ final class AuthenticationManager: ObservableObject {
 
     private static let configuredKey = "vault.isConfigured"
     private static let biometricRequirementKey = "vault.requiresBiometricUnlock"
+    private static let gestureRequirementKey = "vault.requiresGestureUnlock"
     private static let reauthenticationGracePeriodKey = "vault.reauthenticationGracePeriodMinutes"
     private var lastBackgroundedAt: Date?
 
@@ -158,8 +174,12 @@ final class AuthenticationManager: ObservableObject {
         switch result {
         case .success:
             isBiometricUnlockEnabled = true
-            sessionMode = .gestureGate
-            authMessage = L.string("Face ID verified. Draw your gesture to continue.")
+            if requiresGestureUnlock {
+                sessionMode = .gestureGate
+                authMessage = L.string("Face ID verified. Draw your gesture to continue.")
+            } else {
+                openRealVault()
+            }
         case .failure(let error):
             isBiometricUnlockEnabled = BiometricAuthService.availability().canEvaluate
             authMessage = L.format("Face ID verification failed: %@", error.localizedDescription)
@@ -172,18 +192,26 @@ final class AuthenticationManager: ObservableObject {
             sessionMode = .cover
             return
         }
+        guard requiresGestureUnlock else {
+            openRealVault()
+            return
+        }
         do {
             let result = try GestureCredentialService.verify(points)
             guard result.isMatch else {
                 openDecoyVault()
                 return
             }
-            sessionMode = .realVault
-            lastBackgroundedAt = nil
-            authMessage = nil
+            openRealVault()
         } catch {
             openDecoyVault()
         }
+    }
+
+    func openRealVault() {
+        sessionMode = .realVault
+        lastBackgroundedAt = nil
+        authMessage = nil
     }
 
     func openDecoyVault() {

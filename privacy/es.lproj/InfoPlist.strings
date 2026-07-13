@@ -1,4 +1,4 @@
-"CFBundleDisplayName" = "Caja Aegis";
+"CFBundleDisplayName" = "Mo Layer";
 "CFBundleTypeName" = "Archivo de caja cifrada";
 "NSCameraUsageDescription" = "Se usa para capturar fotos directamente en la caja cifrada y registrar fallos de desbloqueo si activas la captura de intrusion.";
 "NSPhotoLibraryAddUsageDescription" = "Se usa para guardar contenido exportado en tu fototeca cuando eliges exportar.";

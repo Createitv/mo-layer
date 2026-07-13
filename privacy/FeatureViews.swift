@@ -18,6 +18,7 @@ struct ImportHubView: View {
     @EnvironmentObject private var sync: CloudKitSyncService
     @EnvironmentObject private var vaultStore: VaultStore
     @EnvironmentObject private var importQueue: VaultImportQueue
+    @Query private var vaultItems: [VaultItem]
     var showsCloseButton = false
     var destinationFolderId: String? = nil
     var onImported: (ImportSummary) -> Void = { _ in }
@@ -26,14 +27,15 @@ struct ImportHubView: View {
     @State private var showCamera = false
     @State private var showAudioRecorder = false
     @State private var showScanner = false
+    @State private var showMembership = false
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 14) {
-                    if !subscription.canImportAndSync {
+                    if isFreeImportLimitReached {
                         AppCard {
-                            Label(L.string("Renew Pro to import new files."), systemImage: "star.circle")
+                            Label(freeImportLimitMessage, systemImage: "star.circle")
                                 .foregroundStyle(AppTheme.warning)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
@@ -43,7 +45,7 @@ struct ImportHubView: View {
                         ActionRow(icon: "photo.on.rectangle", title: L.string("Import from Photos"), subtitle: L.string("Photos and videos"))
                     }
                     .buttonStyle(.plain)
-                    .disabled(!subscription.canImportAndSync)
+                    .disabled(!canImportVaultItems(count: 1))
 
                     Button {
                         showFileImporter = true
@@ -51,7 +53,7 @@ struct ImportHubView: View {
                         ActionRow(icon: "folder", title: L.string("Import from Files"), subtitle: L.string("PDFs, documents, and archives"))
                     }
                     .buttonStyle(.plain)
-                    .disabled(!subscription.canImportAndSync)
+                    .disabled(!canImportVaultItems(count: 1))
 
                     Button {
                         showCamera = true
@@ -59,7 +61,7 @@ struct ImportHubView: View {
                         ActionRow(icon: "camera.viewfinder", title: L.string("Take Photo or Video"), subtitle: L.string("Use the full-screen camera and save directly to the vault"))
                     }
                     .buttonStyle(.plain)
-                    .disabled(!subscription.canImportAndSync || !UIImagePickerController.isSourceTypeAvailable(.camera))
+                    .disabled(!canImportVaultItems(count: 1) || !PlatformCapabilities.supportsCameraCapture)
 
                     Button {
                         showAudioRecorder = true
@@ -67,7 +69,7 @@ struct ImportHubView: View {
                         ActionRow(icon: "waveform.circle", title: L.string("Record Audio"), subtitle: L.string("Record a voice memo directly into the vault"))
                     }
                     .buttonStyle(.plain)
-                    .disabled(!subscription.canImportAndSync)
+                    .disabled(!canImportVaultItems(count: 1))
 
                     Button {
                         showScanner = true
@@ -75,7 +77,7 @@ struct ImportHubView: View {
                         ActionRow(icon: "doc.viewfinder", title: L.string("Scan Document"), subtitle: L.string("IDs, contracts, and receipts as encrypted images"))
                     }
                     .buttonStyle(.plain)
-                    .disabled(!subscription.canImportAndSync || !isDocumentScannerAvailable)
+                    .disabled(!canImportVaultItems(count: 1) || !isDocumentScannerAvailable)
                 }
                 .padding()
             }
@@ -83,10 +85,10 @@ struct ImportHubView: View {
             .navigationTitle(L.string("Import"))
             .navigationBarTitleDisplayMode(.inline)
             .onAppear {
-                vaultStore.setWriteAccess(subscription.canImportAndSync)
+                vaultStore.setWriteAccess(canImportVaultItems(count: 1))
             }
-            .onChange(of: subscription.canImportAndSync) { _, canWrite in
-                vaultStore.setWriteAccess(canWrite)
+            .onChange(of: subscription.isPro) { _, _ in
+                vaultStore.setWriteAccess(canImportVaultItems(count: 1))
             }
             .toolbar {
                 if showsCloseButton {
@@ -96,12 +98,14 @@ struct ImportHubView: View {
                 }
             }
             .onChange(of: pickerItems) { _, newItems in
-                guard subscription.canImportAndSync else {
+                guard canImportVaultItems(count: newItems.count) else {
                     pickerItems = []
+                    showMembership = true
                     return
                 }
                 guard !newItems.isEmpty else { return }
-                importQueue.importPickerItems(newItems, context: modelContext, vaultStore: vaultStore, sync: sync, folderId: destinationFolderId) { summary in
+                vaultStore.setWriteAccess(true)
+                importQueue.importPickerItems(newItems, context: modelContext, vaultStore: vaultStore, sync: sync, folderId: destinationFolderId, syncAfterImportCompletion: subscription.canImportAndSync) { summary in
                     handleImported(summary)
                 }
                 pickerItems = []
@@ -110,9 +114,13 @@ struct ImportHubView: View {
                 }
             }
             .fileImporter(isPresented: $showFileImporter, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
-                guard subscription.canImportAndSync else { return }
                 if case .success(let urls) = result {
-                    importQueue.importFiles(urls: urls, context: modelContext, vaultStore: vaultStore, sync: sync, folderId: destinationFolderId) { summary in
+                    guard canImportVaultItems(count: urls.count) else {
+                        showMembership = true
+                        return
+                    }
+                    vaultStore.setWriteAccess(true)
+                    importQueue.importFiles(urls: urls, context: modelContext, vaultStore: vaultStore, sync: sync, folderId: destinationFolderId, syncAfterImportCompletion: subscription.canImportAndSync) { summary in
                         handleImported(summary)
                     }
                     if showsCloseButton {
@@ -122,27 +130,34 @@ struct ImportHubView: View {
             }
             .fullScreenCover(isPresented: $showCamera) {
                 NativeCameraCaptureView { media in
-                    guard subscription.canImportAndSync else { return }
+                    guard canImportVaultItems(count: 1) else {
+                        showMembership = true
+                        return
+                    }
                     Task {
-                        let summary = await media.importSummary(context: modelContext, vaultStore: vaultStore, sync: sync, folderId: destinationFolderId)
+                        vaultStore.setWriteAccess(true)
+                        let summary = await media.importSummary(context: modelContext, vaultStore: vaultStore, sync: sync, folderId: destinationFolderId, syncAfterImport: subscription.canImportAndSync)
                         handleImported(summary)
                     }
                 }
             }
             .fullScreenCover(isPresented: $showAudioRecorder) {
                 AudioRecorderView { url, completion in
-                    guard subscription.canImportAndSync else {
+                    guard canImportVaultItems(count: 1) else {
+                        showMembership = true
                         completion(false)
                         return
                     }
                     Task {
+                        vaultStore.setWriteAccess(true)
                         let summary = await ImportService.importFiles(
                             urls: [url],
                             context: modelContext,
                             vaultStore: vaultStore,
                             sync: sync,
                             source: "Recorder",
-                            folderId: destinationFolderId
+                            folderId: destinationFolderId,
+                            syncAfterImport: subscription.canImportAndSync
                         )
                         try? FileManager.default.removeItem(at: url)
                         handleImported(summary)
@@ -151,20 +166,45 @@ struct ImportHubView: View {
                 }
             }
             .sheet(isPresented: $showScanner) { scannerSheet }
+            .fullScreenCover(isPresented: $showMembership) {
+                MembershipView(isRequiredBeforeUse: false)
+                    .environmentObject(subscription)
+            }
         }
     }
 
     private func handleImported(_ summary: ImportSummary) {
-        guard summary.importedCount > 0 || summary.failedCount > 0 else { return }
+        guard summary.hasReportableResult else { return }
         onImported(summary)
         if showsCloseButton {
             dismiss()
         }
     }
 
+    private var freeImportItemCount: Int {
+        VaultFreeImportPolicy.countedItemCount(in: vaultItems)
+    }
+
+    private var isFreeImportLimitReached: Bool {
+        !subscription.isPro && freeImportItemCount >= VaultFreeImportPolicy.freeItemLimit
+    }
+
+    private func canImportVaultItems(count incomingCount: Int) -> Bool {
+        VaultFreeImportPolicy.canImport(
+            currentCount: freeImportItemCount,
+            incomingCount: incomingCount,
+            isPro: subscription.isPro
+        )
+    }
+
+    private var freeImportLimitMessage: String {
+        L.format("Free vaults can hold up to %d photos, videos, audio, and files. Open Pro to keep adding.", VaultFreeImportPolicy.freeItemLimit)
+    }
+
     private var isDocumentScannerAvailable: Bool {
+        guard PlatformCapabilities.supportsDocumentScanner else { return false }
         #if canImport(VisionKit)
-        VNDocumentCameraViewController.isSupported
+        return VNDocumentCameraViewController.isSupported
         #else
         false
         #endif
@@ -174,12 +214,16 @@ struct ImportHubView: View {
     private var scannerSheet: some View {
         #if canImport(VisionKit)
         DocumentScannerView { images in
-            guard subscription.canImportAndSync else { return }
+            guard canImportVaultItems(count: images.count) else {
+                showMembership = true
+                return
+            }
             Task {
+                vaultStore.setWriteAccess(true)
                 var summary = ImportSummary()
                 for (index, image) in images.enumerated() {
                     guard let data = image.jpegData(compressionQuality: 0.9) else { continue }
-                    let success = await vaultStore.importData(
+                    let result = await vaultStore.importData(
                         data,
                         originalName: "Scan-\(Date().timeIntervalSince1970)-\(index + 1).jpg",
                         mimeType: "image/jpeg",
@@ -187,13 +231,10 @@ struct ImportHubView: View {
                         kind: .image,
                         context: modelContext,
                         sync: sync,
-                        folderId: destinationFolderId
+                        folderId: destinationFolderId,
+                        syncAfterImport: subscription.canImportAndSync
                     )
-                    if success {
-                        summary.record(.image)
-                    } else {
-                        summary.recordFailure()
-                    }
+                    summary.record(result, kind: .image)
                 }
                 handleImported(summary)
             }
@@ -215,7 +256,8 @@ enum CapturedVaultMedia {
         vaultStore: VaultStore,
         sync: CloudKitSyncService,
         source: String = "Camera",
-        folderId: String? = nil
+        folderId: String? = nil,
+        syncAfterImport: Bool = true
     ) async -> ImportSummary {
         var summary = ImportSummary()
         switch self {
@@ -224,7 +266,7 @@ enum CapturedVaultMedia {
                 summary.recordFailure()
                 return summary
             }
-            let success = await vaultStore.importData(
+            let result = await vaultStore.importData(
                 data,
                 originalName: "Photo-\(Int(Date().timeIntervalSince1970)).jpg",
                 mimeType: "image/jpeg",
@@ -232,9 +274,10 @@ enum CapturedVaultMedia {
                 kind: .image,
                 context: context,
                 sync: sync,
-                folderId: folderId
+                folderId: folderId,
+                syncAfterImport: syncAfterImport
             )
-            success ? summary.record(.image) : summary.recordFailure()
+            summary.record(result, kind: .image)
         case .video(let url):
             summary = await ImportService.importFiles(
                 urls: [url],
@@ -242,7 +285,8 @@ enum CapturedVaultMedia {
                 vaultStore: vaultStore,
                 sync: sync,
                 source: source,
-                folderId: folderId
+                folderId: folderId,
+                syncAfterImport: syncAfterImport
             )
             try? FileManager.default.removeItem(at: url)
         case .livePhoto(let package, let originalName):
@@ -252,7 +296,7 @@ enum CapturedVaultMedia {
                 summary.recordFailure()
                 return summary
             }
-            let success = await vaultStore.importData(
+            let result = await vaultStore.importData(
                 data,
                 originalName: originalName,
                 mimeType: "application/vnd.apple.live-photo",
@@ -260,9 +304,10 @@ enum CapturedVaultMedia {
                 kind: .livePhoto,
                 context: context,
                 sync: sync,
-                folderId: folderId
+                folderId: folderId,
+                syncAfterImport: syncAfterImport
             )
-            success ? summary.record(.livePhoto) : summary.recordFailure()
+            summary.record(result, kind: .livePhoto)
         }
         return summary
     }
@@ -300,6 +345,8 @@ struct ActionRow: View {
 
 struct SecurityCenterView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.openURL) private var openURL
+    @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject private var auth: AuthenticationManager
     @EnvironmentObject private var subscription: SubscriptionManager
     @EnvironmentObject private var sync: CloudKitSyncService
@@ -335,7 +382,7 @@ struct SecurityCenterView: View {
                             Label(L.string("Two-step vault unlock"), systemImage: "lock.shield")
                                 .font(.headline)
                                 .foregroundStyle(AppTheme.ink)
-                            Text(L.string("Palimpsest now requires two checks before showing private content: first Face ID through iOS, then your private gesture template stored on this device."))
+                            Text(L.string("Choose whether opening the real vault uses Face ID, your private gesture, both checks, or neither check."))
                                 .font(.subheadline)
                                 .foregroundStyle(AppTheme.secondaryText)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -363,7 +410,7 @@ struct SecurityCenterView: View {
                     }
 
                     SecurityRow(icon: "faceid", title: L.string("Face ID Gate"), detail: L.string("The first unlock layer uses iOS device authentication before the gesture screen appears."), status: auth.requiresBiometricUnlock ? L.string("Enabled") : L.string("Off"))
-                    SecurityRow(icon: "scribble.variable", title: L.string("Gesture Unlock"), detail: L.string("Verified from the on-device gesture template. Never uploaded to a server."), status: auth.isGestureUnlockEnabled ? L.string("Enabled") : L.string("Not Set"))
+                    SecurityRow(icon: "scribble.variable", title: L.string("Gesture Unlock"), detail: L.string("Verified from the on-device gesture template. Never uploaded to a server."), status: auth.requiresGestureUnlock ? (auth.isGestureUnlockEnabled ? L.string("Enabled") : L.string("Not Set")) : L.string("Off"))
                     SecurityRow(icon: "icloud", title: L.string("CloudKit Encrypted Sync"), detail: sync.state.detail, status: sync.state.title)
                     AppCard {
                         HStack(alignment: .top, spacing: 12) {
@@ -375,13 +422,56 @@ struct SecurityCenterView: View {
                                 .clipShape(Circle())
 
                             VStack(alignment: .leading, spacing: 5) {
-                                Text(L.string("Encrypted iCloud Sync is always on"))
+                                Text(L.string("Encrypted iCloud Sync when available"))
                                     .font(.headline)
                                     .foregroundStyle(AppTheme.ink)
-                                Text(L.string("Vault items are encrypted on this device and backed up to your private iCloud when available. This uses your iCloud storage and can restore data on your own devices signed in with the same iCloud account."))
+                                Text(L.string("Vault items are encrypted on this device. When iCloud is available, encrypted data backs up to your private iCloud; if it is off, items stay encrypted locally."))
                                     .font(.caption)
                                     .foregroundStyle(AppTheme.secondaryText)
                                     .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+                    if sync.state.needsICloudSettingsAction {
+                        AppCard {
+                            VStack(alignment: .leading, spacing: 12) {
+                                HStack(alignment: .top, spacing: 12) {
+                                    Image(systemName: "exclamationmark.icloud.fill")
+                                        .font(.title3)
+                                        .foregroundStyle(AppTheme.warning)
+                                        .frame(width: 34, height: 34)
+                                        .background(AppTheme.warning.opacity(0.12))
+                                        .clipShape(Circle())
+
+                                    VStack(alignment: .leading, spacing: 5) {
+                                        Text(L.string("Turn On iCloud Sync"))
+                                            .font(.headline)
+                                            .foregroundStyle(AppTheme.ink)
+                                        Text(L.string("Open iPhone Settings, sign in to iCloud, and allow this app to use iCloud. Your data remains encrypted locally until iCloud is available."))
+                                            .font(.caption)
+                                            .foregroundStyle(AppTheme.secondaryText)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
+                                }
+
+                                HStack(spacing: 10) {
+                                    Button {
+                                        openAppSettings()
+                                    } label: {
+                                        Label(L.string("Open iPhone Settings"), systemImage: "gear")
+                                            .frame(maxWidth: .infinity)
+                                    }
+                                    .buttonStyle(AppButtonStyle())
+
+                                    Button {
+                                        Task { await sync.checkAccountStatus() }
+                                    } label: {
+                                        Image(systemName: "arrow.clockwise.icloud")
+                                            .frame(width: 44, height: 44)
+                                    }
+                                    .buttonStyle(SecondaryButtonStyle())
+                                    .accessibilityLabel(L.string("Recheck iCloud"))
+                                }
                             }
                         }
                     }
@@ -473,6 +563,10 @@ struct SecurityCenterView: View {
             .background(AppTheme.background)
             .navigationTitle(L.string("Security Center"))
         }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            Task { await sync.checkAccountStatus() }
+        }
     }
 
     private var backupButtonTitle: String {
@@ -480,6 +574,11 @@ struct SecurityCenterView: View {
             return L.string("Backing Up All Files")
         }
         return L.string("Back Up All Files to iCloud")
+    }
+
+    private func openAppSettings() {
+        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+        openURL(url)
     }
 
     @MainActor
@@ -644,7 +743,7 @@ struct GeneralSettingsView: View {
                     SettingsNavigationRow(
                         icon: "star.circle",
                         title: L.string("Membership"),
-                        detail: L.string("Manage trial, monthly, yearly, lifetime, and restore purchases")
+                        detail: L.string("Manage trial, monthly, yearly, and restore purchases")
                     )
                 }
 
@@ -669,13 +768,13 @@ struct GeneralSettingsView: View {
                 }
 
                 NavigationLink {
-                    UnlockGracePeriodSettingsView()
+                    UnlockVerificationSettingsView()
                         .environmentObject(auth)
                 } label: {
                     SettingsNavigationRow(
-                        icon: "timer",
-                        title: L.string("Unlock Grace Period"),
-                        detail: L.string("Skip repeated Face ID and gesture checks after returning from the background")
+                        icon: "lock.shield",
+                        title: L.string("Unlock Verification"),
+                        detail: L.string("Manage Face ID, gesture verification, and the unlock grace period")
                     )
                 }
             } header: {
@@ -688,11 +787,41 @@ struct GeneralSettingsView: View {
     }
 }
 
-struct UnlockGracePeriodSettingsView: View {
+struct UnlockVerificationSettingsView: View {
     @EnvironmentObject private var auth: AuthenticationManager
 
     var body: some View {
         List {
+            Section {
+                Toggle(isOn: $auth.requiresBiometricUnlock) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(L.string("Require Face ID"))
+                            .foregroundStyle(AppTheme.ink)
+                        Text(L.string("When enabled, opening the real vault requires Face ID first."))
+                            .font(.caption)
+                            .foregroundStyle(AppTheme.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .tint(AppTheme.primary)
+
+                Toggle(isOn: $auth.requiresGestureUnlock) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(L.string("Require Gesture"))
+                            .foregroundStyle(AppTheme.ink)
+                        Text(L.string("When enabled, opening the real vault requires drawing the private gesture."))
+                            .font(.caption)
+                            .foregroundStyle(AppTheme.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .tint(AppTheme.primary)
+            } header: {
+                Text(L.string("Unlock Checks"))
+            } footer: {
+                Text(L.string("You can turn off Face ID, gesture verification, or both. Turning both off opens the real vault without an unlock check."))
+            }
+
             Section {
                 ForEach(AuthenticationManager.ReauthenticationGracePeriod.allCases) { option in
                     Button {
@@ -721,7 +850,7 @@ struct UnlockGracePeriodSettingsView: View {
                 Text(L.string("When enabled, Palimpsest remembers a successful unlock for the selected time after the app enters the background. Closing or relaunching the app still starts locked."))
             }
         }
-        .navigationTitle(L.string("Unlock Grace Period"))
+        .navigationTitle(L.string("Unlock Verification"))
         .navigationBarTitleDisplayMode(.inline)
     }
 }
@@ -918,6 +1047,11 @@ struct UserPermissionsView: View {
                     detail: L.string("Used only when you import photos or videos into the encrypted vault.")
                 )
                 PermissionDocumentRow(
+                    icon: "eye.trianglebadge.exclamationmark",
+                    title: L.string("Sensitive Content Warning"),
+                    detail: L.string("Adult-content warnings are controlled by iOS, not by this app.")
+                )
+                PermissionDocumentRow(
                     icon: "camera",
                     title: L.string("Camera"),
                     detail: L.string("Requested only when you capture directly into the vault.")
@@ -950,6 +1084,15 @@ struct UserPermissionsView: View {
             }
 
             VStack(alignment: .leading, spacing: 12) {
+                DocumentSection(
+                    title: L.string("Sensitive Content Warning"),
+                    paragraphs: [
+                        L.string("If iOS shows an adult-content warning while importing from Photos, the warning comes from iPhone privacy settings. Mo Layer cannot turn this system feature off for you."),
+                        L.string("To change it, open iPhone Settings > Privacy & Security > Sensitive Content Warning, then turn off Sensitive Content Warning or adjust the supported apps shown there."),
+                        L.string("If the device uses Screen Time or a child account, also check Settings > Screen Time > Communication Safety.")
+                    ]
+                )
+
                 DocumentSection(
                     title: L.string("Manage Permissions"),
                     paragraphs: [

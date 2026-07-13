@@ -1,4 +1,4 @@
-"CFBundleDisplayName" = "Aegis保管庫";
+"CFBundleDisplayName" = "Mo Layer";
 "CFBundleTypeName" = "暗号化保管庫ファイル";
 "NSCameraUsageDescription" = "写真を暗号化保管庫へ直接保存し、侵入記録を有効にした場合は解除失敗を記録するために使用します。";
 "NSPhotoLibraryAddUsageDescription" = "選択した内容を書き出すときに写真ライブラリへ保存するために使用します。";

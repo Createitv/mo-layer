@@ -64,6 +64,114 @@ enum AppTheme {
     }
 }
 
+struct AppGlassBackground: View {
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        ZStack {
+            base
+
+            GeometryReader { proxy in
+                let size = proxy.size
+
+                LinearGradient(
+                    colors: verticalGlowColors,
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+
+                Ellipse()
+                    .fill(AppTheme.primary.opacity(colorScheme == .dark ? 0.20 : 0.12))
+                    .frame(width: size.width * 1.16, height: size.height * 0.34)
+                    .blur(radius: 42)
+                    .offset(x: -size.width * 0.26, y: -size.height * 0.18)
+                    .blendMode(.screen)
+
+                Ellipse()
+                    .fill(AppTheme.accent.opacity(colorScheme == .dark ? 0.12 : 0.08))
+                    .frame(width: size.width * 0.92, height: size.height * 0.44)
+                    .blur(radius: 54)
+                    .offset(x: size.width * 0.46, y: size.height * 0.58)
+                    .blendMode(.screen)
+
+                LinearGradient(
+                    colors: edgeVignetteColors,
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                .blendMode(colorScheme == .dark ? .multiply : .softLight)
+
+                AppGlassTexture()
+                    .opacity(colorScheme == .dark ? 0.18 : 0.20)
+            }
+        }
+    }
+
+    private var base: Color {
+        if colorScheme == .dark {
+            return Color(red: 0.015, green: 0.025, blue: 0.055)
+        }
+        return Color(red: 0.94, green: 0.97, blue: 1.00)
+    }
+
+    private var verticalGlowColors: [Color] {
+        if colorScheme == .dark {
+            return [
+                Color(red: 0.055, green: 0.095, blue: 0.18).opacity(0.96),
+                Color(red: 0.015, green: 0.025, blue: 0.055).opacity(0.98),
+                Color(red: 0.00, green: 0.01, blue: 0.035).opacity(1)
+            ]
+        }
+        return [
+            Color.white.opacity(0.98),
+            Color(red: 0.91, green: 0.96, blue: 1.00).opacity(0.92),
+            Color(red: 0.86, green: 0.93, blue: 0.98).opacity(0.90)
+        ]
+    }
+
+    private var edgeVignetteColors: [Color] {
+        if colorScheme == .dark {
+            return [
+                .black.opacity(0.04),
+                .clear,
+                .black.opacity(0.36)
+            ]
+        }
+        return [
+            .white.opacity(0.40),
+            .clear,
+            AppTheme.primary.opacity(0.08)
+        ]
+    }
+}
+
+private struct AppGlassTexture: View {
+    var body: some View {
+        Canvas { context, size in
+            let spacing: CGFloat = 20
+            let lineColor = Color.white.opacity(0.11)
+            var x: CGFloat = 0
+            while x <= size.width {
+                var path = Path()
+                path.move(to: CGPoint(x: x, y: 0))
+                path.addLine(to: CGPoint(x: x, y: size.height))
+                context.stroke(path, with: .color(lineColor), lineWidth: 0.35)
+                x += spacing
+            }
+
+            var y: CGFloat = 0
+            while y <= size.height {
+                var path = Path()
+                path.move(to: CGPoint(x: 0, y: y))
+                path.addLine(to: CGPoint(x: size.width, y: y))
+                context.stroke(path, with: .color(lineColor.opacity(0.62)), lineWidth: 0.35)
+                y += spacing
+            }
+        }
+        .blendMode(.softLight)
+    }
+}
+
 struct AppButtonStyle: ButtonStyle {
     var role: ButtonRole?
 

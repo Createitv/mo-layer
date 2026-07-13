@@ -1,21 +1,23 @@
 import SwiftUI
 
 struct GestureCapturePad: View {
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     let title: String
     let subtitle: String
     var onComplete: ([GesturePoint]) -> Void
 
     @State private var points: [GesturePoint] = []
     @State private var currentLocation: CGPoint?
+    private var isPadLayout: Bool { horizontalSizeClass == .regular }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: isPadLayout ? 14 : 10) {
+            VStack(alignment: .leading, spacing: isPadLayout ? 6 : 4) {
                 Text(title)
-                    .font(.headline)
+                    .font(isPadLayout ? .title3.weight(.semibold) : .headline)
                     .foregroundStyle(AppTheme.ink)
                 Text(subtitle)
-                    .font(.caption)
+                    .font(isPadLayout ? .callout : .caption)
                     .foregroundStyle(AppTheme.secondaryText)
             }
 
@@ -36,7 +38,7 @@ struct GestureCapturePad: View {
 
                     if points.isEmpty {
                         Image(systemName: "scribble.variable")
-                            .font(.system(size: 34, weight: .semibold))
+                            .font(.system(size: isPadLayout ? 46 : 34, weight: .semibold))
                             .foregroundStyle(AppTheme.primary.opacity(0.34))
                     }
                 }
@@ -61,21 +63,23 @@ struct GestureCapturePad: View {
                         }
                 )
             }
-            .frame(height: 190)
+            .frame(height: isPadLayout ? 260 : 190)
         }
     }
 }
 
 struct GestureEnrollmentPanel: View {
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Binding var primary: [GesturePoint]
     @Binding var confirmation: [GesturePoint]
     var onValidationFailure: (String) -> Void = { _ in }
 
     private var hasPrimary: Bool { !primary.isEmpty }
     private var hasConfirmation: Bool { !confirmation.isEmpty }
+    private var isPadLayout: Bool { horizontalSizeClass == .regular }
 
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: isPadLayout ? 16 : 12) {
             GestureCapturePad(
                 title: hasPrimary ? L.string("Draw Gesture Again") : L.string("Set Gesture Passcode"),
                 subtitle: hasPrimary ? L.string("The second pass confirms muscle memory and similarity.") : L.string("Draw a motion you can remember but others cannot easily reproduce.")
@@ -93,7 +97,7 @@ struct GestureEnrollmentPanel: View {
                 }
             }
 
-            HStack {
+            HStack(spacing: isPadLayout ? 12 : 8) {
                 StatusPill(title: hasPrimary ? L.string("First Pass Recorded") : L.string("Waiting for First Pass"), systemImage: hasPrimary ? "checkmark.circle" : "1.circle", tint: hasPrimary ? AppTheme.success : AppTheme.warning)
                 StatusPill(title: hasConfirmation ? L.string("Confirmation Recorded") : L.string("Waiting for Confirmation"), systemImage: hasConfirmation ? "checkmark.circle" : "2.circle", tint: hasConfirmation ? AppTheme.success : AppTheme.warning)
             }

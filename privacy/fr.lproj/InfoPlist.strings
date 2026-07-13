@@ -1,4 +1,4 @@
-"CFBundleDisplayName" = "Coffre Aegis";
+"CFBundleDisplayName" = "Mo Layer";
 "CFBundleTypeName" = "Fichier coffre chiffre";
 "NSCameraUsageDescription" = "Utilise pour capturer des photos directement dans le coffre chiffre et enregistrer les echecs de deverrouillage si vous activez la capture d'intrusion.";
 "NSPhotoLibraryAddUsageDescription" = "Utilise pour enregistrer le contenu exporte dans votre phototheque lorsque vous choisissez d'exporter.";

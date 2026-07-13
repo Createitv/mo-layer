@@ -1,5 +1,7 @@
-import ActivityKit
 import Foundation
+
+#if canImport(ActivityKit) && !targetEnvironment(macCatalyst)
+import ActivityKit
 
 @MainActor
 final class RecordingLiveActivityController {
@@ -97,3 +99,18 @@ final class RecordingLiveActivityController {
         }
     }
 }
+#else
+@MainActor
+final class RecordingLiveActivityController {
+    static let shared = RecordingLiveActivityController()
+
+    private init() {}
+
+    func start() {}
+    func update(elapsedTime: TimeInterval, level: CGFloat) {}
+    func markSaving(elapsedTime: TimeInterval, level: CGFloat) {}
+    func endSaved(elapsedTime: TimeInterval) {}
+    func endFailed(elapsedTime: TimeInterval) {}
+    func endCancelled() {}
+}
+#endif

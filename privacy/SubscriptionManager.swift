@@ -26,6 +26,155 @@ enum MembershipAccessLevel: Equatable {
     var allowsImportAndCloudSync: Bool {
         self == .activePro
     }
+
+    var allowsCloudPull: Bool {
+        switch self {
+        case .activePro, .expiredReadOnly:
+            true
+        case .lockedUntilPro:
+            false
+        }
+    }
+}
+
+struct RestorePurchaseFeedback: Equatable {
+    enum Kind: Equatable {
+        case success
+        case warning
+    }
+
+    let kind: Kind
+    let message: String
+
+    static func restored(hasActivePro: Bool) -> RestorePurchaseFeedback {
+        if hasActivePro {
+            return RestorePurchaseFeedback(kind: .success, message: L.string("Purchases restored. Pro is active."))
+        }
+        return RestorePurchaseFeedback(kind: .warning, message: L.string("No previous purchases found for this Apple ID."))
+    }
+
+    static func failed() -> RestorePurchaseFeedback {
+        RestorePurchaseFeedback(kind: .warning, message: L.string("Restore purchase failed. Please try again."))
+    }
+}
+
+enum VaultFreeImportPolicy {
+    static let freeItemLimit = 99
+
+    static func countsTowardFreeLimit(_ kind: VaultItemKind) -> Bool {
+        switch kind {
+        case .image, .livePhoto, .video, .audio, .document, .archive, .other:
+            true
+        case .link:
+            false
+        }
+    }
+
+    static func countedItemCount(in items: [VaultItem]) -> Int {
+        items.filter { item in
+            item.deletedAt == nil && countsTowardFreeLimit(item.kind)
+        }.count
+    }
+
+    static func remainingFreeSlots(currentCount: Int, isPro: Bool) -> Int? {
+        guard !isPro else { return nil }
+        return max(freeItemLimit - currentCount, 0)
+    }
+
+    static func canImport(currentCount: Int, incomingCount: Int, isPro: Bool) -> Bool {
+        guard incomingCount > 0 else { return true }
+        guard !isPro else { return true }
+        return currentCount + incomingCount <= freeItemLimit
+    }
+}
+
+struct MembershipStatusSummary: Equatable {
+    let accessLevel: MembershipAccessLevel
+    let productIdentifier: String?
+    let expirationDate: Date?
+    let referenceDate: Date
+
+    init(
+        accessLevel: MembershipAccessLevel,
+        productIdentifier: String?,
+        expirationDate: Date?,
+        referenceDate: Date = Date()
+    ) {
+        self.accessLevel = accessLevel
+        self.productIdentifier = productIdentifier
+        self.expirationDate = expirationDate
+        self.referenceDate = referenceDate
+    }
+
+    var stateTitle: String {
+        switch accessLevel {
+        case .activePro:
+            L.string("Pro Active")
+        case .expiredReadOnly:
+            L.string("Read-Only Protection")
+        case .lockedUntilPro:
+            L.string("Free Plan")
+        }
+    }
+
+    var planTitle: String {
+        guard let productIdentifier else {
+            return accessLevel == .lockedUntilPro ? L.string("Free Plan") : L.string("Previous Pro")
+        }
+        return Self.localizedPlanName(forProductID: productIdentifier)
+    }
+
+    var formattedExpirationDate: String {
+        guard let expirationDate else { return "" }
+        return Self.expirationDateFormatter.string(from: expirationDate)
+    }
+
+    var expirationText: String {
+        switch accessLevel {
+        case .activePro:
+            if productIdentifier == SubscriptionManager.lifetime {
+                return L.string("Lifetime access")
+            }
+            guard expirationDate != nil else { return "" }
+            return L.format("Valid until %@", formattedExpirationDate)
+        case .expiredReadOnly:
+            return L.string("Expired or inactive")
+        case .lockedUntilPro:
+            return L.string("No active membership")
+        }
+    }
+
+    var detailText: String {
+        switch accessLevel {
+        case .activePro:
+            L.string("You can add, edit, delete, and sync Mo Layer content.")
+        case .expiredReadOnly:
+            L.string("You can view existing Mo Layer content. Renew Pro to add or sync new content.")
+        case .lockedUntilPro:
+            L.format("Free vault includes up to %d photos, videos, audio, and files. Pro unlocks more imports, editing, and encrypted sync.", VaultFreeImportPolicy.freeItemLimit)
+        }
+    }
+
+    static func localizedPlanName(forProductID productID: String) -> String {
+        switch productID {
+        case SubscriptionManager.monthly:
+            L.string("Monthly Pro")
+        case SubscriptionManager.yearly:
+            L.string("Yearly Pro")
+        case SubscriptionManager.lifetime:
+            L.string("Lifetime Pro")
+        default:
+            L.string("Pro")
+        }
+    }
+
+    private static var expirationDateFormatter: DateFormatter {
+        let formatter = DateFormatter()
+        formatter.locale = AppLanguage.current.locale
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        return formatter
+    }
 }
 
 @MainActor
@@ -36,6 +185,14 @@ final class SubscriptionManager: NSObject, ObservableObject {
     nonisolated static let expectedProductIDs = [monthly, yearly, lifetime]
     nonisolated static let revenueCatEntitlementID = "pro"
     nonisolated static let revenueCatAPIKeyInfoPlistKey = "REVENUECAT_API_KEY"
+    nonisolated static let revenueCatProxyURL = URL(string: "https://api.rc-backup.com/")!
+    nonisolated static let freeTrialDays = 3
+    static var termsOfUseURL: URL {
+        localizedLegalURL(englishPath: "en-US/content/terms-of-service/", chinesePath: "zh-Hans/content/terms-of-service/")
+    }
+    static var privacyPolicyURL: URL {
+        localizedLegalURL(englishPath: "en-US/content/privacy-policy/", chinesePath: "zh-Hans/content/privacy-policy/")
+    }
     nonisolated static var grantsDeveloperAccessInDebug: Bool {
         #if DEBUG
         true
@@ -46,11 +203,25 @@ final class SubscriptionManager: NSObject, ObservableObject {
     private nonisolated static let revenueCatPlaceholderAPIKey = "REPLACE_WITH_REVENUECAT_PUBLIC_IOS_KEY"
     private nonisolated static let hasActivatedProStorageKey = "subscription.hasActivatedPro"
 
+    private static func localizedLegalURL(englishPath: String, chinesePath: String) -> URL {
+        let path: String
+        switch AppLanguage.current {
+        case .simplifiedChinese, .traditionalChinese:
+            path = chinesePath
+        case .system, .english, .japanese, .german, .french, .korean, .spanish:
+            path = englishPath
+        }
+        return URL(string: "https://molayer.tech/\(path)")!
+    }
+
     @Published var packages: [Package] = []
     @Published var missingProductIDs: [String] = []
     @Published var loadState: SubscriptionLoadState = .idle
     @Published var isPro = false
     @Published var statusText = L.string("Free Plan")
+    @Published var restoreFeedback: RestorePurchaseFeedback?
+    @Published private(set) var activeProductIdentifier: String?
+    @Published private(set) var activeExpirationDate: Date?
     @Published private(set) var hasActivatedPro = UserDefaults.standard.bool(forKey: hasActivatedProStorageKey)
     private var isRevenueCatReady = false
 
@@ -92,6 +263,18 @@ final class SubscriptionManager: NSObject, ObservableObject {
         accessLevel.allowsImportAndCloudSync
     }
 
+    var canPullFromCloud: Bool {
+        accessLevel.allowsCloudPull
+    }
+
+    var membershipStatusSummary: MembershipStatusSummary {
+        MembershipStatusSummary(
+            accessLevel: accessLevel,
+            productIdentifier: activeProductIdentifier,
+            expirationDate: activeExpirationDate
+        )
+    }
+
     func configureRevenueCat(apiKey: String?) {
         guard Self.isRevenueCatAPIKeyConfigured(apiKey) else {
             isRevenueCatReady = false
@@ -122,7 +305,9 @@ final class SubscriptionManager: NSObject, ObservableObject {
         do {
             let offerings = try await Purchases.shared.offerings()
             let fetchedPackages = offerings.current?.availablePackages ?? []
-            packages = fetchedPackages.sorted { lhs, rhs in
+            packages = fetchedPackages.filter { package in
+                Self.expectedProductIDs.contains(package.storeProduct.productIdentifier)
+            }.sorted { lhs, rhs in
                 Self.displayOrder(forStoreProductID: lhs.storeProduct.productIdentifier) < Self.displayOrder(forStoreProductID: rhs.storeProduct.productIdentifier)
             }
             missingProductIDs = Self.missingProductIDs(from: packages.map(\.storeProduct.productIdentifier))
@@ -138,6 +323,7 @@ final class SubscriptionManager: NSObject, ObservableObject {
     }
 
     func purchase(_ package: Package) async {
+        restoreFeedback = nil
         guard isRevenueCatReady else {
             statusText = L.string("RevenueCat API key is not configured.")
             return
@@ -153,16 +339,23 @@ final class SubscriptionManager: NSObject, ObservableObject {
     }
 
     func restorePurchases() async {
+        restoreFeedback = nil
         guard isRevenueCatReady else {
-            statusText = L.string("RevenueCat API key is not configured.")
+            let feedback = RestorePurchaseFeedback.failed()
+            restoreFeedback = feedback
+            statusText = feedback.message
             return
         }
         do {
             let customerInfo = try await Purchases.shared.restorePurchases()
             applyCustomerInfo(customerInfo)
+            let restoredActivePro = isPro
+            restoreFeedback = RestorePurchaseFeedback.restored(hasActivePro: restoredActivePro)
             applyDeveloperAccessIfNeeded()
         } catch {
-            statusText = L.string("Restore Failed")
+            let feedback = RestorePurchaseFeedback.failed()
+            restoreFeedback = feedback
+            statusText = feedback.message
             applyDeveloperAccessIfNeeded()
         }
     }
@@ -185,8 +378,11 @@ final class SubscriptionManager: NSObject, ObservableObject {
     }
 
     private func applyCustomerInfo(_ customerInfo: CustomerInfo) {
-        let active = customerInfo.entitlements[Self.revenueCatEntitlementID]?.isActive == true
+        let entitlement = customerInfo.entitlements[Self.revenueCatEntitlementID]
+        let active = entitlement?.isActive == true
         isPro = active
+        activeProductIdentifier = active ? entitlement?.productIdentifier : nil
+        activeExpirationDate = active ? entitlement?.expirationDate : nil
         if active {
             markProActivated()
         }
@@ -198,6 +394,8 @@ final class SubscriptionManager: NSObject, ObservableObject {
         guard Self.grantsDeveloperAccessInDebug else { return false }
         isPro = true
         statusText = L.string("Developer Access")
+        activeProductIdentifier = activeProductIdentifier ?? Self.lifetime
+        activeExpirationDate = nil
         return true
     }
 

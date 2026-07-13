@@ -12,6 +12,13 @@ import UniformTypeIdentifiers
 import Combine
 import UIKit
 
+private enum VaultHaptics {
+    @MainActor
+    static func moLayerTransferSucceeded() {
+        PlatformCapabilities.successNotification()
+    }
+}
+
 struct MainAppView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.scenePhase) private var scenePhase
@@ -32,13 +39,14 @@ struct MainAppView: View {
             vaultStore.setWriteAccess(subscription.canImportAndSync)
             await sync.checkAccountStatus()
             await sync.ensureChangeSubscriptions()
-            await vaultStore.bootstrap(context: modelContext, sync: sync, allowsCloudSync: subscription.canImportAndSync)
-            refreshPendingSharedImports()
-            await vaultStore.syncCloudToLocal(
+            await vaultStore.bootstrap(
                 context: modelContext,
                 sync: sync,
-                allowsCloudSync: subscription.canImportAndSync
+                allowsCloudSync: subscription.canPullFromCloud,
+                allowsCloudWrite: false
             )
+            refreshPendingSharedImports()
+            runBackgroundCloudSync()
         }
         .onChange(of: scenePhase) { _, phase in
             if auth.shouldLock(for: phase) {
@@ -50,7 +58,8 @@ struct MainAppView: View {
                     await vaultStore.syncCloudToLocal(
                         context: modelContext,
                         sync: sync,
-                        allowsCloudSync: subscription.canImportAndSync
+                        allowsCloudSync: subscription.canPullFromCloud,
+                        allowsCloudWrite: subscription.canImportAndSync
                     )
                 }
             }
@@ -58,17 +67,20 @@ struct MainAppView: View {
         .onChange(of: subscription.canImportAndSync) { _, canWrite in
             vaultStore.setWriteAccess(canWrite)
         }
+        .onChange(of: subscription.canPullFromCloud) { _, canPull in
+            guard canPull else { return }
+            Task {
+                await vaultStore.syncCloudToLocal(
+                    context: modelContext,
+                    sync: sync,
+                    allowsCloudSync: canPull,
+                    allowsCloudWrite: subscription.canImportAndSync
+                )
+            }
+        }
         .onOpenURL { url in
             Task {
-                if url.scheme == "privacy" && url.host() == "shared-imports" {
-                    await presentPendingSharedImportsFromExtension()
-                } else if url.isFileURL {
-                    if subscription.canImportAndSync, ImportService.stageFileForReview(url: url) {
-                        refreshPendingSharedImports()
-                    } else if !subscription.canImportAndSync {
-                        sharedImportMessage = L.string("Renew Pro to import new files.")
-                    }
-                } else {
+                if url.scheme != "privacy", !url.isFileURL {
                     if subscription.canImportAndSync {
                         await ImportService.importLink(url, source: "Open In", context: modelContext, vaultStore: vaultStore, sync: sync)
                     } else {
@@ -80,13 +92,17 @@ struct MainAppView: View {
         .sheet(isPresented: sharedImportSheetBinding) {
             SharedImportReviewSheet(
                 imports: pendingSharedImports,
+                destination: pendingSharedImports.first?.destination ?? .regular,
+                canImportAndSync: canImportVaultItems(count: pendingSharedImports.count),
                 isImporting: isImportingSharedFiles,
                 message: sharedImportMessage,
-                saveAction: { Task { await savePendingSharedImports() } },
+                saveAction: { selectedImports in
+                    Task { await savePendingSharedImports(selectedImports) }
+                },
                 cancelAction: discardPendingSharedImports
             )
         }
-        .background(AppTheme.background)
+        .background(AppGlassBackground().ignoresSafeArea())
     }
 
     private var sharedImportSheetBinding: Binding<Bool> {
@@ -108,36 +124,56 @@ struct MainAppView: View {
     }
 
     @MainActor
-    private func savePendingSharedImports() async {
+    private func savePendingSharedImports(_ selectedImports: [ImportService.PendingSharedImport]) async {
         guard !isImportingSharedFiles else { return }
-        guard subscription.canImportAndSync else {
-            sharedImportMessage = L.string("Renew Pro to import new files.")
+        guard canImportVaultItems(count: selectedImports.count) else {
+            sharedImportMessage = freeImportLimitMessage()
             return
         }
+        guard !selectedImports.isEmpty else { return }
+
         isImportingSharedFiles = true
         sharedImportMessage = L.string("Encrypting and saving shared files...")
-        let result = await ImportService.importPendingSharedImports(context: modelContext, vaultStore: vaultStore, sync: sync)
+        defer { isImportingSharedFiles = false }
+        vaultStore.setWriteAccess(true)
+
+        let selectedIds = Set(selectedImports.map(\.id))
+        let skippedImports = pendingSharedImports.filter { !selectedIds.contains($0.id) }
+        ImportService.discardSharedImports(skippedImports)
+
+        let result = await ImportService.importPendingSharedImports(
+            selectedImports,
+            context: modelContext,
+            vaultStore: vaultStore,
+            sync: sync,
+            folderId: selectedImports.first?.destination.folderId,
+            syncAfterImport: false
+        )
         pendingSharedImports = ImportService.pendingSharedImports()
         if result.failedCount == 0 {
-            sharedImportMessage = nil
             pendingSharedImports = []
-            routeToImportedCategory(result)
+            if result.importedCount > 0 {
+                sharedImportMessage = nil
+                routeToImportedCategory(result)
+                runBackgroundPendingSyncIfAllowed()
+            } else {
+                sharedImportMessage = result.displayMessage
+            }
         } else {
             sharedImportMessage = L.string("Some files could not be saved. You can retry or cancel.")
         }
-        isImportingSharedFiles = false
     }
 
     @MainActor
     private func autoSavePendingSharedImports() async {
         guard !isImportingSharedFiles else { return }
-        guard subscription.canImportAndSync else {
+        let pending = ImportService.pendingSharedImports()
+        guard canImportVaultItems(count: pending.count) else {
             refreshPendingSharedImports()
-            sharedImportMessage = L.string("Renew Pro to import new files.")
+            sharedImportMessage = freeImportLimitMessage()
             return
         }
 
-        let pending = ImportService.pendingSharedImports()
         guard !pending.isEmpty else {
             pendingSharedImports = []
             sharedImportMessage = nil
@@ -146,12 +182,25 @@ struct MainAppView: View {
 
         isImportingSharedFiles = true
         sharedImportMessage = L.string("Encrypting and saving shared files...")
-        let result = await ImportService.importPendingSharedImports(context: modelContext, vaultStore: vaultStore, sync: sync)
+        vaultStore.setWriteAccess(true)
+        let result = await ImportService.importPendingSharedImports(
+            pending,
+            context: modelContext,
+            vaultStore: vaultStore,
+            sync: sync,
+            folderId: nil,
+            syncAfterImport: false
+        )
         pendingSharedImports = ImportService.pendingSharedImports()
         if result.failedCount == 0 {
-            sharedImportMessage = nil
             pendingSharedImports = []
-            routeToImportedCategory(result)
+            if result.importedCount > 0 {
+                sharedImportMessage = nil
+                routeToImportedCategory(result)
+                runBackgroundPendingSyncIfAllowed()
+            } else {
+                sharedImportMessage = result.displayMessage
+            }
         } else {
             sharedImportMessage = L.string("Some files could not be saved. You can retry or cancel.")
         }
@@ -162,10 +211,10 @@ struct MainAppView: View {
     private func presentPendingSharedImportsFromExtension() async {
         refreshPendingSharedImports()
         guard !pendingSharedImports.isEmpty else { return }
-        if subscription.canImportAndSync {
+        if canImportVaultItems(count: pendingSharedImports.count) {
             sharedImportMessage = L.string("Review these shared files. Photos, videos, audio, and files will be saved into their matching vault sections.")
         } else {
-            sharedImportMessage = L.string("Renew Pro to import new files.")
+            sharedImportMessage = freeImportLimitMessage()
         }
     }
 
@@ -181,6 +230,38 @@ struct MainAppView: View {
         ImportService.discardSharedImports()
         pendingSharedImports = []
         sharedImportMessage = nil
+    }
+
+    private func runBackgroundCloudSync() {
+        Task { @MainActor in
+            await vaultStore.syncCloudToLocal(
+                context: modelContext,
+                sync: sync,
+                allowsCloudSync: subscription.canPullFromCloud,
+                allowsCloudWrite: subscription.canImportAndSync
+            )
+        }
+    }
+
+    private func runBackgroundPendingSyncIfAllowed() {
+        guard subscription.canImportAndSync else { return }
+        Task { @MainActor in
+            await vaultStore.syncPendingChanges(context: modelContext, sync: sync)
+        }
+    }
+
+    @MainActor
+    private func canImportVaultItems(count incomingCount: Int) -> Bool {
+        let items = (try? modelContext.fetch(FetchDescriptor<VaultItem>())) ?? []
+        return VaultFreeImportPolicy.canImport(
+            currentCount: VaultFreeImportPolicy.countedItemCount(in: items),
+            incomingCount: incomingCount,
+            isPro: subscription.isPro
+        )
+    }
+
+    private func freeImportLimitMessage() -> String {
+        L.format("Free vaults can hold up to %d photos, videos, audio, and files. Open Pro to keep adding.", VaultFreeImportPolicy.freeItemLimit)
     }
 }
 
@@ -199,42 +280,108 @@ enum MainShellLayout {
     static let importPresentation: MainShellImportPresentation = .fullScreen
 }
 
+enum VaultSelectionPolicy {
+    nonisolated static func canSelect(_ item: VaultItem) -> Bool {
+        item.deletedAt == nil && item.kind.isCategorySelectionItem
+    }
+
+    nonisolated static func selectableItems(in items: [VaultItem], category: VaultCategory) -> [VaultItem] {
+        category.items(from: items).filter(canSelect)
+    }
+}
+
 struct SharedImportReviewSheet: View {
     let imports: [ImportService.PendingSharedImport]
+    let destination: SharedImportDestination
+    let canImportAndSync: Bool
     let isImporting: Bool
     let message: String?
-    let saveAction: () -> Void
+    let saveAction: ([ImportService.PendingSharedImport]) -> Void
+    let proAction: (() -> Void)?
     let cancelAction: () -> Void
+    @State private var selectedImportIds: Set<String>
+
+    init(
+        imports: [ImportService.PendingSharedImport],
+        destination: SharedImportDestination = .regular,
+        canImportAndSync: Bool = true,
+        isImporting: Bool,
+        message: String?,
+        saveAction: @escaping ([ImportService.PendingSharedImport]) -> Void,
+        proAction: (() -> Void)? = nil,
+        cancelAction: @escaping () -> Void
+    ) {
+        self.imports = imports
+        self.destination = destination
+        self.canImportAndSync = canImportAndSync
+        self.isImporting = isImporting
+        self.message = message
+        self.saveAction = saveAction
+        self.proAction = proAction
+        self.cancelAction = cancelAction
+        _selectedImportIds = State(initialValue: Set(imports.map(\.id)))
+    }
+
+    private var selectedImports: [ImportService.PendingSharedImport] {
+        imports.filter { selectedImportIds.contains($0.id) }
+    }
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
                 List {
                     Section {
-                        ForEach(imports) { item in
-                            HStack(spacing: 12) {
-                                Image(systemName: icon(for: item))
-                                    .font(.title3)
-                                    .foregroundStyle(AppTheme.primary)
-                                    .frame(width: 34, height: 34)
-                                    .background(AppTheme.primary.opacity(0.1))
-                                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(item.originalName)
-                                        .font(.headline)
-                                        .lineLimit(2)
-                                    Text(ByteCountFormatter.string(fromByteCount: item.byteSize, countStyle: .file))
-                                        .font(.caption)
-                                        .foregroundStyle(AppTheme.secondaryText)
-                                }
+                        HStack(alignment: .top, spacing: 10) {
+                            Image(systemName: destination.icon)
+                                .font(.subheadline)
+                                .foregroundStyle(AppTheme.primary)
+                                .frame(width: 22, height: 22)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(destination.title)
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(AppTheme.ink)
+                                Text(destination.subtitle)
+                                    .font(.footnote)
+                                    .foregroundStyle(AppTheme.secondaryText)
                             }
-                            .padding(.vertical, 4)
+                        }
+                        .padding(.vertical, 2)
+                    } header: {
+                        Text(L.string("Save Location"))
+                    }
+
+                    Section {
+                        ForEach(imports) { item in
+                            Button {
+                                toggleSelection(for: item)
+                            } label: {
+                                HStack(spacing: 12) {
+                                    Image(systemName: selectedImportIds.contains(item.id) ? "checkmark.circle.fill" : "circle")
+                                        .font(.title3)
+                                        .foregroundStyle(selectedImportIds.contains(item.id) ? AppTheme.primary : AppTheme.secondaryText)
+                                        .frame(width: 28, height: 28)
+
+                                    SharedImportThumbnailView(item: item)
+
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(item.originalName)
+                                            .font(.headline)
+                                            .lineLimit(2)
+                                            .foregroundStyle(AppTheme.ink)
+                                        Text(ByteCountFormatter.string(fromByteCount: item.byteSize, countStyle: .file))
+                                            .font(.caption)
+                                            .foregroundStyle(AppTheme.secondaryText)
+                                    }
+                                }
+                                .padding(.vertical, 4)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(isImporting)
                         }
                     } header: {
                         Text(L.string("Shared Files"))
                     } footer: {
-                        Text(L.string("Files are encrypted on this device before they are uploaded to iCloud."))
+                        Text(L.string("Unselected shared files will be deleted. Selected files are saved locally first. Pro keeps encrypted iCloud backup running in the background."))
                     }
                 }
 
@@ -247,12 +394,31 @@ struct SharedImportReviewSheet: View {
                         .padding(.bottom, 8)
                 }
 
+                if !canImportAndSync {
+                    Label(L.format("Free vaults can hold up to %d photos, videos, audio, and files. Open Pro to keep adding.", VaultFreeImportPolicy.freeItemLimit), systemImage: "lock.fill")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(AppTheme.warning)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal)
+                        .padding(.bottom, 8)
+                }
+
                 VStack(spacing: 10) {
-                    Button(action: saveAction) {
-                        Label(isImporting ? L.string("Saving") : L.string("Save to Vault"), systemImage: "lock.doc")
+                    if canImportAndSync {
+                        Button {
+                            saveAction(selectedImports)
+                        } label: {
+                            Label(isImporting ? L.string("Saving") : L.string("Confirm Save"), systemImage: "lock.doc")
+                        }
+                        .buttonStyle(AppButtonStyle())
+                        .disabled(isImporting || selectedImports.isEmpty)
+                    } else if let proAction {
+                        Button(action: proAction) {
+                            Label(L.string("Open Pro and keep adding"), systemImage: "lock.open.fill")
+                        }
+                        .buttonStyle(AppButtonStyle())
+                        .disabled(isImporting)
                     }
-                    .buttonStyle(AppButtonStyle())
-                    .disabled(isImporting || imports.isEmpty)
 
                     Button(role: .destructive, action: cancelAction) {
                         Label(L.string("Cancel"), systemImage: "xmark")
@@ -265,21 +431,265 @@ struct SharedImportReviewSheet: View {
             }
             .navigationTitle(L.string("Confirm Import"))
             .navigationBarTitleDisplayMode(.inline)
+            .onChange(of: imports.map(\.id)) { _, ids in
+                let availableIds = Set(ids)
+                let retainedIds = selectedImportIds.intersection(availableIds)
+                selectedImportIds = retainedIds.isEmpty ? availableIds : retainedIds
+            }
         }
     }
 
-    private func icon(for item: ImportService.PendingSharedImport) -> String {
-        guard let type = UTType(item.typeIdentifier) else { return "doc" }
-        if type.conforms(to: .image) { return "photo" }
-        if type.conforms(to: .movie) { return "video" }
-        if type.conforms(to: .audio) { return "waveform" }
-        if type.conforms(to: .archive) { return "archivebox" }
-        return "doc"
+    private func toggleSelection(for item: ImportService.PendingSharedImport) {
+        if selectedImportIds.contains(item.id) {
+            selectedImportIds.remove(item.id)
+        } else {
+            selectedImportIds.insert(item.id)
+        }
+    }
+
+}
+
+private struct SharedImportThumbnailView: View {
+    let item: ImportService.PendingSharedImport
+    @State private var thumbnail: UIImage?
+    @State private var didLoad = false
+
+    private var kind: SharedImportPreviewKind {
+        SharedImportPreviewKind(item: item)
+    }
+
+    var body: some View {
+        ZStack {
+            if let thumbnail {
+                Image(uiImage: thumbnail)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                fallback
+            }
+        }
+        .frame(width: 56, height: 56)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(AppTheme.primary.opacity(0.12), lineWidth: 1)
+        }
+        .overlay(alignment: .bottomTrailing) {
+            if kind == .video {
+                Image(systemName: "play.fill")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 18, height: 18)
+                    .background(.black.opacity(0.58))
+                    .clipShape(Circle())
+                    .padding(4)
+            }
+        }
+        .task(id: item.id) {
+            await loadThumbnail()
+        }
+    }
+
+    private var fallback: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(AppTheme.primary.opacity(0.1))
+            if !didLoad, kind.supportsThumbnail {
+                ProgressView()
+                    .scaleEffect(0.8)
+                    .tint(AppTheme.primary)
+            } else {
+                Image(systemName: kind.fallbackIcon)
+                    .font(.title3)
+                    .foregroundStyle(AppTheme.primary)
+            }
+        }
+    }
+
+    @MainActor
+    private func loadThumbnail() async {
+        thumbnail = nil
+        didLoad = false
+        guard kind.supportsThumbnail else {
+            didLoad = true
+            return
+        }
+
+        let fileURL = item.fileURL
+        let typeIdentifier = item.typeIdentifier
+        let mimeType = item.mimeType
+        let data = await Task.detached(priority: .utility) {
+            await SharedImportThumbnailRenderer.makeThumbnailData(
+                for: fileURL,
+                typeIdentifier: typeIdentifier,
+                mimeType: mimeType
+            )
+        }.value
+        thumbnail = data.flatMap(UIImage.init(data:))
+        didLoad = true
+    }
+}
+
+private enum SharedImportPreviewKind: Equatable {
+    case image
+    case video
+    case audio
+    case archive
+    case document
+
+    init(item: ImportService.PendingSharedImport) {
+        self.init(type: item.sharedImportContentType, fileExtension: item.fileURL.pathExtension)
+    }
+
+    nonisolated init(type: UTType?, fileExtension: String) {
+        let ext = fileExtension.lowercased()
+        if type?.conforms(to: .image) == true || Self.imageExtensions.contains(ext) {
+            self = .image
+        } else if type?.conforms(to: .movie) == true || Self.videoExtensions.contains(ext) {
+            self = .video
+        } else if type?.conforms(to: .audio) == true {
+            self = .audio
+        } else if type?.conforms(to: .archive) == true {
+            self = .archive
+        } else {
+            self = .document
+        }
+    }
+
+    var supportsThumbnail: Bool {
+        self == .image || self == .video
+    }
+
+    var fallbackIcon: String {
+        switch self {
+        case .image:
+            "photo"
+        case .video:
+            "video"
+        case .audio:
+            "waveform"
+        case .archive:
+            "archivebox"
+        case .document:
+            "doc"
+        }
+    }
+
+    nonisolated private static let imageExtensions: Set<String> = [
+        "jpg", "jpeg", "png", "heic", "heif", "gif", "webp", "tiff", "tif"
+    ]
+
+    nonisolated private static let videoExtensions: Set<String> = [
+        "mp4", "mov", "m4v", "avi", "mkv", "webm", "hevc"
+    ]
+}
+
+private enum SharedImportThumbnailRenderer {
+    nonisolated static func makeThumbnailData(
+        for fileURL: URL,
+        typeIdentifier: String,
+        mimeType: String
+    ) async -> Data? {
+        let type = UTType(typeIdentifier)
+            ?? UTType(mimeType: mimeType)
+            ?? UTType(filenameExtension: fileURL.pathExtension)
+        let kind = SharedImportPreviewKind(type: type, fileExtension: fileURL.pathExtension)
+
+        switch kind {
+        case .image:
+            return makeImageThumbnailData(from: fileURL)
+        case .video:
+            return await makeVideoThumbnailData(from: fileURL)
+        case .audio, .archive, .document:
+            return nil
+        }
+    }
+
+    nonisolated private static func makeImageThumbnailData(from fileURL: URL) -> Data? {
+        guard let source = CGImageSourceCreateWithURL(fileURL as CFURL, nil) else {
+            return nil
+        }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: 360
+        ]
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+            return nil
+        }
+        return makeJPEGData(from: image)
+    }
+
+    nonisolated private static func makeVideoThumbnailData(from fileURL: URL) async -> Data? {
+        let asset = AVURLAsset(url: fileURL)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: 360, height: 360)
+        generator.requestedTimeToleranceBefore = .positiveInfinity
+        generator.requestedTimeToleranceAfter = .positiveInfinity
+
+        let times = [
+            CMTime(seconds: 0, preferredTimescale: 600),
+            CMTime(seconds: 0.1, preferredTimescale: 600),
+            CMTime(seconds: 0.5, preferredTimescale: 600),
+            CMTime(seconds: 1, preferredTimescale: 600)
+        ]
+        for time in times {
+            if let image = try? await generateImage(with: generator, at: time) {
+                return makeJPEGData(from: image)
+            }
+        }
+        return nil
+    }
+
+    nonisolated private static func generateImage(
+        with generator: AVAssetImageGenerator,
+        at time: CMTime
+    ) async throws -> CGImage {
+        try await withCheckedThrowingContinuation { continuation in
+            generator.generateCGImageAsynchronously(for: time) { image, _, error in
+                if let image {
+                    continuation.resume(returning: image)
+                } else {
+                    continuation.resume(throwing: error ?? CocoaError(.fileReadCorruptFile))
+                }
+            }
+        }
+    }
+
+    nonisolated private static func makeJPEGData(from image: CGImage) -> Data? {
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(
+            data,
+            UTType.jpeg.identifier as CFString,
+            1,
+            nil
+        ) else {
+            return nil
+        }
+        CGImageDestinationAddImage(
+            destination,
+            image,
+            [kCGImageDestinationLossyCompressionQuality: 0.78] as CFDictionary
+        )
+        guard CGImageDestinationFinalize(destination) else {
+            return nil
+        }
+        return data as Data
+    }
+}
+
+private extension ImportService.PendingSharedImport {
+    var sharedImportContentType: UTType? {
+        UTType(typeIdentifier)
+            ?? UTType(mimeType: mimeType)
+            ?? UTType(filenameExtension: fileURL.pathExtension)
     }
 }
 
 struct VaultHomeView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @EnvironmentObject private var auth: AuthenticationManager
     @EnvironmentObject private var quickActions: QuickActionRouter
     @EnvironmentObject private var sync: CloudKitSyncService
@@ -292,12 +702,14 @@ struct VaultHomeView: View {
     @State private var previewSelection: MediaPreviewSelection?
     @State private var audioDetailItem: VaultItem?
     @State private var documentDetailItem: VaultItem?
+    @State private var desktopDetailItem: VaultItem?
+    @State private var splitVisibility: NavigationSplitViewVisibility = .all
     @State private var showProfileCenter = false
     @State private var showImportHub = false
     @State private var showQuickCamera = false
     @State private var showQuickRecorder = false
     @State private var showMembership = false
-    @State private var selectedCategory: VaultCategory = .images
+    @State private var selectedCategory: VaultCategory = .album
     @State private var importSummary: ImportSummary?
     @State private var selectionMode = false
     @State private var selectedItemIds: Set<String> = []
@@ -310,8 +722,10 @@ struct VaultHomeView: View {
     @State private var peekTouchItemId: String?
     @State private var peekTask: Task<Void, Never>?
     @State private var suppressTapUntil: Date?
-    @AppStorage(MediaGridScaleStorage.imagesKey) private var imageGridScale = MediaGridScaleStorage.defaultStoredScale
-    @AppStorage(MediaGridScaleStorage.videosKey) private var videoGridScale = MediaGridScaleStorage.defaultStoredScale
+    @State private var moLayerTouchZoneFrame: CGRect = .zero
+    @State private var showMoLayerGuide = false
+    @AppStorage("vault.hasSeenMoLayerGuide") private var hasSeenMoLayerGuide = false
+    @AppStorage(MediaGridScaleStorage.albumKey) private var albumGridScale = MediaGridScaleStorage.defaultStoredScale
     @AppStorage(MediaGridScaleStorage.audioKey) private var audioGridScale = MediaGridScaleStorage.defaultStoredScale
     @AppStorage(MediaGridScaleStorage.documentsKey) private var documentGridScale = MediaGridScaleStorage.defaultStoredScale
 
@@ -327,16 +741,195 @@ struct VaultHomeView: View {
     private var visibleItems: [VaultItem] {
         categoryItems
     }
+    private var selectableVisibleItems: [VaultItem] {
+        VaultSelectionPolicy.selectableItems(in: visibleItems, category: selectedCategory)
+    }
+    private var freeImportItemCount: Int {
+        VaultFreeImportPolicy.countedItemCount(in: activeItems)
+    }
+    private var shouldShowFreeImportLimitBanner: Bool {
+        !subscription.isPro && freeImportItemCount >= VaultFreeImportPolicy.freeItemLimit
+    }
+    private func canImportVaultItems(count incomingCount: Int) -> Bool {
+        VaultFreeImportPolicy.canImport(
+            currentCount: freeImportItemCount,
+            incomingCount: incomingCount,
+            isPro: subscription.isPro
+        )
+    }
     private var importDestinationFolderId: String? {
         isInnerVaultActive ? VaultStore.innerVaultFolderId : nil
     }
+    private var usesSplitLayout: Bool {
+        PlatformCapabilities.usesDesktopLayout || horizontalSizeClass == .regular
+    }
+    private var folderContextStyle: VaultFolderContextStyle {
+        VaultFolderContextStyle(isInnerVaultActive: isInnerVaultActive)
+    }
+    private var categoryCounts: [VaultCategory: Int] {
+        Dictionary(uniqueKeysWithValues: VaultCategory.homeModes.map { category in
+            (category, category.items(from: spaceItems).count)
+        })
+    }
+    private var detailSheetBinding: Binding<VaultItem?> {
+        Binding {
+            usesSplitLayout ? nil : selectedItem
+        } set: { value in
+            selectedItem = value
+        }
+    }
 
     var body: some View {
+        Group {
+            if usesSplitLayout {
+                splitHomeContent
+            } else {
+                compactHomeContent
+            }
+        }
+        .sheet(item: detailSheetBinding) { item in
+            VaultItemDetailView(item: item)
+        }
+        .fullScreenCover(item: $audioDetailItem) { item in
+            AudioDetailPlayerView(item: item)
+        }
+        .fullScreenCover(item: $documentDetailItem) { item in
+            DocumentDetailPreviewView(item: item, isInnerVaultActive: isInnerVaultActive)
+        }
+        .fullScreenCover(item: $previewSelection) { selection in
+            VaultMediaPreviewView(
+                items: selection.items,
+                initialItemId: selection.initialItemId,
+                isInnerVaultActive: isInnerVaultActive
+            )
+        }
+        .fullScreenCover(isPresented: $showImportHub) {
+            ImportHubView(showsCloseButton: true, destinationFolderId: importDestinationFolderId) { summary in
+                handleImportCompletion(summary)
+                showImportHub = false
+            }
+            .environmentObject(subscription)
+            .environmentObject(sync)
+            .environmentObject(vaultStore)
+            .environmentObject(importQueue)
+        }
+        .fullScreenCover(isPresented: $showQuickCamera) {
+            NativeCameraCaptureView { media in
+                guard canImportVaultItems(count: 1) else {
+                    showMembership = true
+                    return
+                }
+                Task {
+                    vaultStore.setWriteAccess(true)
+                    let summary = await media.importSummary(
+                        context: modelContext,
+                        vaultStore: vaultStore,
+                        sync: sync,
+                        source: "Quick Camera",
+                        syncAfterImport: subscription.canImportAndSync
+                    )
+                    if subscription.canImportAndSync {
+                        await vaultStore.syncPendingChanges(context: modelContext, sync: sync)
+                    }
+                    handleImportCompletion(summary)
+                }
+            }
+        }
+        .fullScreenCover(isPresented: $showQuickRecorder) {
+            AudioRecorderView { url, completion in
+                guard canImportVaultItems(count: 1) else {
+                    showMembership = true
+                    completion(false)
+                    return
+                }
+                Task {
+                    vaultStore.setWriteAccess(true)
+                    let summary = await ImportService.importFiles(
+                        urls: [url],
+                        context: modelContext,
+                        vaultStore: vaultStore,
+                        sync: sync,
+                        source: "Quick Recorder",
+                        syncAfterImport: subscription.canImportAndSync
+                    )
+                    try? FileManager.default.removeItem(at: url)
+                    if subscription.canImportAndSync {
+                        await vaultStore.syncPendingChanges(context: modelContext, sync: sync)
+                    }
+                    handleImportCompletion(summary)
+                    completion(summary.importedCount > 0)
+                }
+            }
+        }
+        .fullScreenCover(isPresented: $showProfileCenter) {
+            ProfileCenterView(showMoLayerTutorialAction: {
+                showProfileCenter = false
+                showMoLayerGuide = true
+            })
+                .environmentObject(auth)
+                .environmentObject(subscription)
+                .environmentObject(sync)
+                .environmentObject(vaultStore)
+                .environmentObject(remoteChanges)
+        }
+        .fullScreenCover(isPresented: $showMembership) {
+            MembershipView(isRequiredBeforeUse: true)
+                .environmentObject(subscription)
+        }
+        .onAppear {
+            handleQuickAction(quickActions.pendingAction)
+            presentMoLayerGuideIfNeeded()
+        }
+        .onChange(of: quickActions.pendingAction) { _, action in
+            handleQuickAction(action)
+        }
+        .onAppear {
+            handleCategoryRoute(quickActions.pendingCategory)
+        }
+        .onChange(of: quickActions.pendingCategory) { _, category in
+            handleCategoryRoute(category)
+        }
+        .onChange(of: selectedCategory) { _, _ in
+            clearSelection()
+            endLightPeek()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
+            exitInnerVault()
+        }
+        .alert(item: $importSummary) { summary in
+            Alert(
+                title: Text(summary.displayTitle),
+                message: Text(summary.displayMessage),
+                dismissButton: .default(Text(L.string("OK")))
+            )
+        }
+        .alert(L.string("Delete Selected Items?"), isPresented: $confirmBulkDelete) {
+            Button(L.string("Cancel"), role: .cancel) {}
+            Button(L.string("Delete"), role: .destructive) {
+                Task { await deleteSelectedItems() }
+            }
+        } message: {
+            Text(L.format("%d selected item(s) will be removed from this device and marked for removal from iCloud.", selectedItemIds.count))
+        }
+        .overlay {
+            if showMoLayerGuide {
+                MoLayerTutorialOverlay(
+                    touchZoneFrame: moLayerTouchZoneFrame,
+                    enterMoLayerAction: enterInnerVault,
+                    completeAction: completeMoLayerGuide,
+                    dismissAction: { showMoLayerGuide = false }
+                )
+                .transition(.opacity.combined(with: .scale(scale: 0.98)))
+            }
+        }
+    }
+
+    private var compactHomeContent: some View {
         NavigationStack {
             ScrollView(.vertical, showsIndicators: true) {
                 scrollContent
             }
-            .background(AppTheme.background)
+            .background(AppGlassBackground().ignoresSafeArea())
             .safeAreaInset(edge: .bottom) {
                 bottomInsetContent
             }
@@ -348,120 +941,41 @@ struct VaultHomeView: View {
                         .allowsHitTesting(false)
                 }
             }
-            .sheet(item: $selectedItem) { item in
-                VaultItemDetailView(item: item)
-            }
-            .fullScreenCover(item: $audioDetailItem) { item in
-                AudioDetailPlayerView(item: item)
-            }
-            .fullScreenCover(item: $documentDetailItem) { item in
-                DocumentDetailPreviewView(item: item)
-            }
-            .fullScreenCover(item: $previewSelection) { selection in
-                VaultMediaPreviewView(
-                    items: selection.items,
-                    initialItemId: selection.initialItemId
-                )
-            }
-            .fullScreenCover(isPresented: $showImportHub) {
-                ImportHubView(showsCloseButton: true, destinationFolderId: importDestinationFolderId) { summary in
-                    handleImportCompletion(summary)
-                    showImportHub = false
-                }
-                .environmentObject(subscription)
-                .environmentObject(sync)
-                .environmentObject(vaultStore)
-                .environmentObject(importQueue)
-            }
-            .fullScreenCover(isPresented: $showQuickCamera) {
-                NativeCameraCaptureView { media in
-                    guard subscription.canImportAndSync else { return }
-                    Task {
-                        let summary = await media.importSummary(
-                            context: modelContext,
-                            vaultStore: vaultStore,
-                            sync: sync,
-                            source: "Quick Camera"
-                        )
-                        handleImportCompletion(summary)
-                    }
-                }
-            }
-            .fullScreenCover(isPresented: $showQuickRecorder) {
-                AudioRecorderView { url, completion in
-                    guard subscription.canImportAndSync else {
-                        completion(false)
-                        return
-                    }
-                    Task {
-                        let summary = await ImportService.importFiles(
-                            urls: [url],
-                            context: modelContext,
-                            vaultStore: vaultStore,
-                            sync: sync,
-                            source: "Quick Recorder"
-                        )
-                        try? FileManager.default.removeItem(at: url)
-                        handleImportCompletion(summary)
-                        completion(summary.importedCount > 0)
-                    }
-                }
-            }
-            .fullScreenCover(isPresented: $showProfileCenter) {
-                ProfileCenterView()
-                    .environmentObject(auth)
-                    .environmentObject(subscription)
-                    .environmentObject(sync)
-                    .environmentObject(vaultStore)
-                    .environmentObject(remoteChanges)
-            }
-            .fullScreenCover(isPresented: $showMembership) {
-                MembershipView(isRequiredBeforeUse: true)
-                    .environmentObject(subscription)
-            }
-            .onAppear {
-                handleQuickAction(quickActions.pendingAction)
-            }
-            .onChange(of: quickActions.pendingAction) { _, action in
-                handleQuickAction(action)
-            }
-            .onAppear {
-                handleCategoryRoute(quickActions.pendingCategory)
-            }
-            .onChange(of: quickActions.pendingCategory) { _, category in
-                handleCategoryRoute(category)
-            }
-            .onChange(of: selectedCategory) { _, _ in
-                clearSelection()
-                endLightPeek()
-            }
-            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
-                exitInnerVault()
-            }
-            .refreshable {
-                await vaultStore.syncCloudToLocal(
-                    context: modelContext,
-                    sync: sync,
-                    allowsCloudSync: subscription.canImportAndSync,
-                    downloadsOriginals: VaultCloudToLocalSyncPolicy.pullToRefreshDownloadsOriginals
-                )
-            }
-            .alert(item: $importSummary) { summary in
-                Alert(
-                    title: Text(summary.displayTitle),
-                    message: Text(summary.displayMessage),
-                    dismissButton: .default(Text(L.string("OK")))
-                )
-            }
-            .alert(L.string("Delete Selected Items?"), isPresented: $confirmBulkDelete) {
-                Button(L.string("Cancel"), role: .cancel) {}
-                Button(L.string("Delete"), role: .destructive) {
-                    Task { await deleteSelectedItems() }
-                }
-            } message: {
-                Text(L.format("%d selected item(s) will be removed from this device and marked for removal from iCloud.", selectedItemIds.count))
-            }
         }
+    }
+
+    private var splitHomeContent: some View {
+        NavigationSplitView(columnVisibility: $splitVisibility) {
+            VaultSidebarView(
+                selectedCategory: $selectedCategory,
+                isInnerVaultActive: isInnerVaultActive,
+                categoryCounts: categoryCounts,
+                toggleInnerVaultAction: toggleInnerVault,
+                importAction: openImportHub,
+                profileAction: { showProfileCenter = true }
+            )
+        } content: {
+            ScrollView(.vertical, showsIndicators: true) {
+                splitContent
+            }
+            .background(AppGlassBackground().ignoresSafeArea())
+            .safeAreaInset(edge: .bottom) {
+                bottomInsetContent
+            }
+            .navigationTitle(selectedCategory.title)
+            .toolbar {
+                splitToolbar
+            }
+        } detail: {
+            VaultDesktopDetailPane(
+                item: desktopDetailItem,
+                category: selectedCategory,
+                count: visibleItems.count,
+                isInnerVaultActive: isInnerVaultActive
+            )
+            .environmentObject(vaultStore)
+        }
+        .background(AppGlassBackground().ignoresSafeArea())
     }
 
     private var scrollContent: some View {
@@ -471,11 +985,14 @@ struct VaultHomeView: View {
                 isInnerVaultActive: isInnerVaultActive,
                 profileAction: { showProfileCenter = true },
                 importAction: openImportHub,
-                toggleInnerVaultAction: toggleInnerVault
+                toggleInnerVaultAction: toggleInnerVault,
+                onTouchZoneFrameChange: { frame in
+                    moLayerTouchZoneFrame = frame
+                }
             )
 
-            if !subscription.canImportAndSync {
-                ReadOnlyProtectionBanner()
+            if shouldShowFreeImportLimitBanner {
+                FreeImportLimitBanner()
             }
 
             if let progress = importQueue.progress {
@@ -496,12 +1013,109 @@ struct VaultHomeView: View {
         .padding()
     }
 
+    private var splitContent: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            if shouldShowFreeImportLimitBanner {
+                FreeImportLimitBanner()
+            }
+
+            if let progress = importQueue.progress {
+                VaultImportProgressBanner(progress: progress)
+            }
+
+            ZStack(alignment: .top) {
+                splitCategoryContent
+
+                if visibleItems.isEmpty {
+                    EmptyCategoryState(category: selectedCategory)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 64)
+                        .allowsHitTesting(false)
+                }
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 16)
+    }
+
+    @ViewBuilder
+    private var splitCategoryContent: some View {
+        if selectedCategory.usesListLayout {
+            VaultLinearCategoryList(
+                category: selectedCategory,
+                items: visibleItems,
+                isInnerVaultActive: isInnerVaultActive,
+                isSelectionMode: selectionMode,
+                selectedItemIds: selectedItemIds,
+                enterSelectionAction: enterSelectionMode,
+                toggleSelectionAction: toggleSelection,
+                openAudio: { desktopDetailItem = $0 },
+                openDocument: { desktopDetailItem = $0 },
+                openDetails: { desktopDetailItem = $0 },
+                deleteItem: { item in
+                    Task { await delete(item) }
+                }
+            )
+        } else {
+            mediaGridContent
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var splitToolbar: some ToolbarContent {
+        ToolbarItemGroup(placement: .topBarLeading) {
+            Button {
+                toggleInnerVault()
+            } label: {
+                Label(
+                    isInnerVaultActive ? L.string("Restore") : L.string("Mo Layer"),
+                    systemImage: isInnerVaultActive ? "arrow.uturn.left" : "lock.fill"
+                )
+            }
+        }
+
+        ToolbarItemGroup(placement: .topBarTrailing) {
+            Button {
+                Task { await refreshVaultFromCloud() }
+            } label: {
+                Label(L.string("Refresh"), systemImage: "arrow.clockwise")
+            }
+            .keyboardShortcut("r", modifiers: .command)
+
+            Button(action: openImportHub) {
+                Label(L.string("Import"), systemImage: folderContextStyle.importSystemImage)
+            }
+            .keyboardShortcut("i", modifiers: .command)
+
+            if subscription.canImportAndSync, !selectableVisibleItems.isEmpty {
+                Button(action: selectAllVisibleItems) {
+                    Label(L.string("Select All"), systemImage: "checkmark.circle")
+                }
+                .keyboardShortcut("a", modifiers: .command)
+            }
+
+            if folderContextStyle.showsProfileAction {
+                Button {
+                    showProfileCenter = true
+                } label: {
+                    Label(L.string("Profile"), systemImage: folderContextStyle.profileSystemImage)
+                }
+                .keyboardShortcut(",", modifiers: .command)
+            }
+        }
+    }
+
     @ViewBuilder
     private var categoryContent: some View {
         if selectedCategory.usesListLayout {
             VaultLinearCategoryList(
                 category: selectedCategory,
                 items: visibleItems,
+                isInnerVaultActive: isInnerVaultActive,
+                isSelectionMode: selectionMode,
+                selectedItemIds: selectedItemIds,
+                enterSelectionAction: enterSelectionMode,
+                toggleSelectionAction: toggleSelection,
                 openAudio: { audioDetailItem = $0 },
                 openDocument: { documentDetailItem = $0 },
                 openDetails: { selectedItem = $0 },
@@ -581,8 +1195,20 @@ struct VaultHomeView: View {
             VaultItemLongPressAction(
                 item: item,
                 previewAction: { openPreview(item, in: visibleItems) },
-                detailAction: { selectedItem = item },
+                detailAction: { openDetails(item) },
                 isEnabled: !selectionMode
+            )
+        )
+        .modifier(
+            VaultMediaGridContextMenu(
+                item: item,
+                isEnabled: !(item.kind == .livePhoto && !selectionMode),
+                canMoveToMoLayer: subscription.canImportAndSync && !isInnerVaultActive,
+                canDelete: subscription.canImportAndSync,
+                previewAction: { openPreview(item, in: visibleItems) },
+                detailAction: { openDetails(item) },
+                moveToMoLayerAction: { Task { await moveSingleItemToMoLayer(item) } },
+                deleteAction: { Task { await delete(item) } }
             )
         )
     }
@@ -617,8 +1243,18 @@ struct VaultHomeView: View {
         importSummary = summary
     }
 
+    private func presentMoLayerGuideIfNeeded() {
+        guard !hasSeenMoLayerGuide else { return }
+        showMoLayerGuide = true
+    }
+
+    private func completeMoLayerGuide() {
+        hasSeenMoLayerGuide = true
+        showMoLayerGuide = false
+    }
+
     private func openImportHub() {
-        guard subscription.canImportAndSync else {
+        guard canImportVaultItems(count: 1) else {
             showMembership = true
             return
         }
@@ -673,13 +1309,17 @@ struct VaultHomeView: View {
         case .importHub:
             openImportHub()
         case .camera:
-            if subscription.canImportAndSync {
-                showQuickCamera = true
+            if canImportVaultItems(count: 1) {
+                if PlatformCapabilities.supportsCameraCapture {
+                    showQuickCamera = true
+                } else {
+                    openImportHub()
+                }
             } else {
                 showMembership = true
             }
         case .recorder:
-            if subscription.canImportAndSync {
+            if canImportVaultItems(count: 1) {
                 showQuickRecorder = true
             } else {
                 showMembership = true
@@ -692,11 +1332,17 @@ struct VaultHomeView: View {
         guard let category else { return }
         withAnimation(.snappy) {
             selectedCategory = category
+            desktopDetailItem = nil
         }
         quickActions.consume(category)
     }
 
     private func open(_ item: VaultItem, in collection: [VaultItem]) {
+        if usesSplitLayout {
+            desktopDetailItem = item
+            return
+        }
+
         guard item.kind.isPreviewableContent else {
             selectedItem = item
             return
@@ -706,14 +1352,27 @@ struct VaultHomeView: View {
 
     private func openPreview(_ item: VaultItem, in collection: [VaultItem]) {
         guard item.kind.isPreviewableContent else { return }
+        if usesSplitLayout {
+            desktopDetailItem = item
+            return
+        }
+
         previewSelection = MediaPreviewSelection(
             items: collection.filter { $0.kind.isPreviewableContent },
             initialItemId: item.id
         )
     }
 
+    private func openDetails(_ item: VaultItem) {
+        if usesSplitLayout {
+            desktopDetailItem = item
+        } else {
+            selectedItem = item
+        }
+    }
+
     private func enterSelectionMode(selecting item: VaultItem) {
-        guard item.kind.isVisualMedia else { return }
+        guard VaultSelectionPolicy.canSelect(item) else { return }
         endLightPeek()
         withAnimation(.snappy) {
             selectionMode = true
@@ -722,7 +1381,7 @@ struct VaultHomeView: View {
     }
 
     private func toggleSelection(_ item: VaultItem) {
-        guard item.kind.isVisualMedia else { return }
+        guard VaultSelectionPolicy.canSelect(item) else { return }
         withAnimation(.snappy) {
             if selectedItemIds.contains(item.id) {
                 selectedItemIds.remove(item.id)
@@ -743,9 +1402,21 @@ struct VaultHomeView: View {
         }
     }
 
+    private func selectAllVisibleItems() {
+        let selectableItemIds = selectableVisibleItems
+            .map(\.id)
+        guard !selectableItemIds.isEmpty else { return }
+
+        withAnimation(.snappy) {
+            selectionMode = true
+            selectedItemIds = Set(selectableItemIds)
+        }
+        PlatformCapabilities.selectionChanged()
+    }
+
     private func handleSweepSelectionDrag(location: CGPoint, itemFrames: [AnyHashable: CGRect]) {
         guard selectionMode, subscription.canImportAndSync else { return }
-        let selectableItems = visibleItems.filter { $0.kind.isVisualMedia }
+        let selectableItems = selectableVisibleItems
         guard !selectableItems.isEmpty else { return }
 
         let currentItemId = selectableItems.first { item in
@@ -756,7 +1427,7 @@ struct VaultHomeView: View {
             guard let currentItemId else { return }
             sweepSelectionAnchorId = currentItemId
             selectedItemIds.insert(currentItemId)
-            UISelectionFeedbackGenerator().selectionChanged()
+            PlatformCapabilities.selectionChanged()
         }
 
         guard let anchorId = sweepSelectionAnchorId,
@@ -787,7 +1458,7 @@ struct VaultHomeView: View {
             selectedItemIds.formUnion(sweptIds)
         }
         if selectedItemIds.count != previousCount {
-            UISelectionFeedbackGenerator().selectionChanged()
+            PlatformCapabilities.selectionChanged()
         }
     }
 
@@ -837,6 +1508,17 @@ struct VaultHomeView: View {
     }
 
     @MainActor
+    private func refreshVaultFromCloud() async {
+        await vaultStore.syncCloudToLocal(
+            context: modelContext,
+            sync: sync,
+            allowsCloudSync: subscription.canPullFromCloud,
+            allowsCloudWrite: subscription.canImportAndSync,
+            downloadsOriginals: VaultCloudToLocalSyncPolicy.manualRefreshDownloadsOriginals
+        )
+    }
+
+    @MainActor
     private func delete(_ item: VaultItem) async {
         guard subscription.canImportAndSync else {
             showMembership = true
@@ -872,9 +1554,28 @@ struct VaultHomeView: View {
         if isInnerVaultActive {
             await vaultStore.moveOutOfInnerVault(selectedItems, context: modelContext, sync: sync)
         } else {
-            await vaultStore.moveToInnerVault(selectedItems, context: modelContext, sync: sync)
+            let didMove = await vaultStore.moveToInnerVault(selectedItems, context: modelContext, sync: sync)
+            if didMove {
+                VaultHaptics.moLayerTransferSucceeded()
+            }
         }
         clearSelection()
+    }
+
+    @MainActor
+    private func moveSingleItemToMoLayer(_ item: VaultItem) async {
+        guard subscription.canImportAndSync else {
+            showMembership = true
+            return
+        }
+        guard !isInnerVaultActive else { return }
+        let didMove = await vaultStore.moveToInnerVault([item], context: modelContext, sync: sync)
+        if didMove {
+            VaultHaptics.moLayerTransferSucceeded()
+            if desktopDetailItem?.id == item.id {
+                desktopDetailItem = nil
+            }
+        }
     }
 
     private var mediaGridScaleBinding: Binding<CGFloat> {
@@ -887,10 +1588,8 @@ struct VaultHomeView: View {
 
     private func storedScale(for category: VaultCategory) -> Double {
         switch category {
-        case .images:
-            imageGridScale
-        case .videos:
-            videoGridScale
+        case .album:
+            albumGridScale
         case .audio:
             audioGridScale
         case .documents, .links:
@@ -900,10 +1599,8 @@ struct VaultHomeView: View {
 
     private func setStoredScale(_ scale: Double, for category: VaultCategory) {
         switch category {
-        case .images:
-            imageGridScale = scale
-        case .videos:
-            videoGridScale = scale
+        case .album:
+            albumGridScale = scale
         case .audio:
             audioGridScale = scale
         case .documents, .links:
@@ -912,7 +1609,7 @@ struct VaultHomeView: View {
     }
 }
 
-private struct ReadOnlyProtectionBanner: View {
+private struct FreeImportLimitBanner: View {
     var body: some View {
         AppCard {
             HStack(alignment: .top, spacing: 12) {
@@ -920,10 +1617,10 @@ private struct ReadOnlyProtectionBanner: View {
                     .font(.title3.weight(.semibold))
                     .foregroundStyle(AppTheme.warning)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(L.string("Read-Only Protection"))
+                    Text(L.string("Free import limit reached"))
                         .font(.headline)
                         .foregroundStyle(AppTheme.ink)
-                    Text(L.string("Your existing vault is available in read-only mode. Renew Pro only when you want to add, edit, delete, or upload new backups."))
+                    Text(L.format("You can keep viewing your vault. Open Pro to add more after %d photos, videos, audio, and files.", VaultFreeImportPolicy.freeItemLimit))
                         .font(.caption)
                         .foregroundStyle(AppTheme.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
@@ -934,36 +1631,144 @@ private struct ReadOnlyProtectionBanner: View {
     }
 }
 
+private struct VaultSidebarView: View {
+    @Binding var selectedCategory: VaultCategory
+    let isInnerVaultActive: Bool
+    let categoryCounts: [VaultCategory: Int]
+    let toggleInnerVaultAction: () -> Void
+    let importAction: () -> Void
+    let profileAction: () -> Void
+
+    private var folderContextStyle: VaultFolderContextStyle {
+        VaultFolderContextStyle(isInnerVaultActive: isInnerVaultActive)
+    }
+
+    var body: some View {
+        List {
+            Section {
+                Button(action: toggleInnerVaultAction) {
+                    Label(
+                        isInnerVaultActive ? L.string("Regular Vault") : L.string("Mo Layer"),
+                        systemImage: isInnerVaultActive ? "tray.full" : "lock.fill"
+                    )
+                }
+
+            }
+
+            Section(L.string("Library")) {
+                ForEach(VaultCategory.homeModes) { category in
+                    Button {
+                        selectedCategory = category
+                    } label: {
+                        HStack {
+                            Label(category.title, systemImage: category.icon)
+                            Spacer()
+                            Text("\(categoryCounts[category] ?? 0)")
+                                .font(.caption)
+                                .foregroundStyle(AppTheme.secondaryText)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .listRowBackground(selectedCategory == category ? AppTheme.primary.opacity(0.12) : Color.clear)
+                }
+            }
+
+            Section {
+                Button(action: importAction) {
+                    Label(L.string("Import"), systemImage: folderContextStyle.importSystemImage)
+                }
+                if folderContextStyle.showsProfileAction {
+                    Button(action: profileAction) {
+                        Label(L.string("Profile"), systemImage: folderContextStyle.profileSystemImage)
+                    }
+                }
+            }
+        }
+        .navigationTitle(L.string("Mo Layer"))
+        .scrollContentBackground(.hidden)
+        .background(AppGlassBackground().ignoresSafeArea())
+    }
+}
+
+private struct VaultDesktopDetailPane: View {
+    @EnvironmentObject private var vaultStore: VaultStore
+    let item: VaultItem?
+    let category: VaultCategory
+    let count: Int
+    let isInnerVaultActive: Bool
+
+    var body: some View {
+        Group {
+            if let item {
+                VaultItemDetailView(item: item)
+            } else {
+                VStack(spacing: 14) {
+                    Image(systemName: category.icon)
+                        .font(.system(size: 46, weight: .semibold))
+                        .foregroundStyle(AppTheme.primary)
+                        .frame(width: 86, height: 86)
+                        .background(AppTheme.primary.opacity(0.10))
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+                    Text(category.title)
+                        .font(.system(.title2, design: .rounded, weight: .bold))
+                        .foregroundStyle(AppTheme.ink)
+
+                    Text(category.summaryText(count: count))
+                        .font(.subheadline)
+                        .foregroundStyle(AppTheme.secondaryText)
+
+                    if isInnerVaultActive {
+                        StatusPill(title: L.string("Mo Layer"), systemImage: "lock.fill", tint: AppTheme.primary)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(AppTheme.background)
+            }
+        }
+    }
+}
+
 private struct VaultImportProgressBanner: View {
     let progress: VaultImportProgress
 
     var body: some View {
         AppCard {
             HStack(alignment: .center, spacing: 12) {
-                ZStack {
-                    Circle()
-                        .fill(AppTheme.primary.opacity(0.12))
-                    if progress.isActive {
-                        ProgressView()
-                            .scaleEffect(0.72)
-                            .tint(AppTheme.primary)
-                    } else {
-                        Image(systemName: progress.failedCount > 0 ? "exclamationmark.icloud" : "checkmark.icloud")
-                            .font(.subheadline.weight(.bold))
-                            .foregroundStyle(progress.failedCount > 0 ? AppTheme.warning : AppTheme.success)
-                    }
-                }
-                .frame(width: 38, height: 38)
+                VaultImportProgressThumbnail(progress: progress)
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(progress.isActive ? L.string("Importing in Background") : L.string("Import Complete"))
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(AppTheme.ink)
-                    Text(progress.statusText)
-                        .font(.caption)
-                        .foregroundStyle(AppTheme.secondaryText)
-                        .lineLimit(2)
-                    if !progress.isActive && progress.importedCount > 0 {
+                VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(progress.isActive ? L.string("Importing in Background") : L.string("Import Complete"))
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(AppTheme.ink)
+                        if let currentItem = progress.currentItem, progress.isActive {
+                            Text(currentItem.displayName)
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(AppTheme.ink)
+                                .lineLimit(1)
+                        }
+                        Text(progress.currentItem?.phaseText ?? progress.statusText)
+                            .font(.caption)
+                            .foregroundStyle(AppTheme.secondaryText)
+                            .lineLimit(2)
+                    }
+
+                    if progress.isActive {
+                        VStack(alignment: .leading, spacing: 4) {
+                            ProgressView(value: progress.currentItemProgress)
+                                .progressViewStyle(.linear)
+                                .tint(AppTheme.primary)
+                            HStack {
+                                Text(progress.statusText)
+                                Spacer(minLength: 8)
+                                Text(L.format("%d%%", Int((progress.overallProgress * 100).rounded())))
+                            }
+                            .font(.caption2)
+                            .foregroundStyle(AppTheme.secondaryText)
+                        }
+                    } else if progress.importedCount > 0 {
                         Text(L.string("iCloud backup will continue automatically."))
                             .font(.caption2)
                             .foregroundStyle(AppTheme.secondaryText)
@@ -973,6 +1778,70 @@ private struct VaultImportProgressBanner: View {
                 Spacer(minLength: 0)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+private struct VaultImportProgressThumbnail: View {
+    let progress: VaultImportProgress
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(tint.opacity(0.12))
+
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Image(systemName: icon)
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(tint)
+            }
+
+            if !progress.isActive {
+                Color.black.opacity(0.18)
+                Image(systemName: progress.failedCount > 0 ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(progress.failedCount > 0 ? AppTheme.warning : AppTheme.success)
+            }
+        }
+        .frame(width: 54, height: 54)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private var image: UIImage? {
+        guard let data = progress.currentItem?.thumbnailData else { return nil }
+        return UIImage(data: data)
+    }
+
+    private var tint: Color {
+        guard progress.failedCount == 0 else { return AppTheme.warning }
+        return progress.isActive ? AppTheme.primary : AppTheme.success
+    }
+
+    private var icon: String {
+        if !progress.isActive {
+            return progress.failedCount > 0 ? "exclamationmark.triangle.fill" : "checkmark.circle.fill"
+        }
+        switch progress.currentItem?.kind {
+        case .image:
+            return "photo.fill"
+        case .livePhoto:
+            return "livephoto"
+        case .video:
+            return "video.fill"
+        case .audio:
+            return "waveform"
+        case .document:
+            return "doc.richtext"
+        case .archive:
+            return "archivebox.fill"
+        case .link:
+            return "link"
+        case .other, nil:
+            return "doc"
         }
     }
 }
@@ -994,6 +1863,283 @@ private struct EmptyCategoryState: View {
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(AppTheme.secondaryText)
         }
+    }
+}
+
+private enum MoLayerTutorialStep: Int, CaseIterable {
+    case overview
+    case enter
+    case save
+
+    var title: String {
+        switch self {
+        case .overview:
+            L.string("What is Mo Layer?")
+        case .enter:
+            L.string("Enter Mo Layer")
+        case .save:
+            L.string("Save files to Mo Layer")
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .overview:
+            L.string("Mo Layer is a deeper hidden directory inside the real vault. Use it for files that need an extra layer of privacy.")
+        case .enter:
+            L.string("Tap the blank touch zone between the category title and the profile avatar three times to enter Mo Layer.")
+        case .save:
+            L.string("Select items in the regular vault and tap Hide, or choose the Mo Layer directory when saving shared files.")
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .overview:
+            "lock.shield"
+        case .enter:
+            "hand.tap"
+        case .save:
+            "lock.doc"
+        }
+    }
+}
+
+enum MoLayerTutorialPracticeResult: Equatable {
+    case counting(Int)
+    case completed(Int)
+}
+
+struct MoLayerTutorialPracticeCounter: Equatable {
+    static let requiredTapCount = 3
+
+    private(set) var tapCount = 0
+
+    mutating func recordTap() -> MoLayerTutorialPracticeResult {
+        tapCount = min(Self.requiredTapCount, tapCount + 1)
+        if tapCount >= Self.requiredTapCount {
+            return .completed(tapCount)
+        }
+        return .counting(tapCount)
+    }
+
+    mutating func reset() {
+        tapCount = 0
+    }
+}
+
+private struct MoLayerTutorialOverlay: View {
+    let touchZoneFrame: CGRect
+    let enterMoLayerAction: () -> Void
+    let completeAction: () -> Void
+    let dismissAction: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var step: MoLayerTutorialStep = .overview
+    @State private var practiceCounter = MoLayerTutorialPracticeCounter()
+
+    private var stepIndex: Int { MoLayerTutorialStep.allCases.firstIndex(of: step) ?? 0 }
+    private var isLastStep: Bool { stepIndex == MoLayerTutorialStep.allCases.count - 1 }
+    private var practiceTapCount: Int { practiceCounter.tapCount }
+
+    var body: some View {
+        GeometryReader { proxy in
+            let containerFrame = proxy.frame(in: .global)
+            let localTouchFrame = localFrame(from: touchZoneFrame, in: containerFrame, fallbackSize: proxy.size)
+
+            ZStack {
+                Color.black.opacity(0.54)
+                    .ignoresSafeArea()
+
+                if step == .enter {
+                    MoLayerSpotlightShape(rect: localTouchFrame.insetBy(dx: -8, dy: -8), cornerRadius: 14)
+                        .fill(style: FillStyle(eoFill: true))
+                        .foregroundStyle(.black.opacity(0.54))
+                        .ignoresSafeArea()
+
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(AppTheme.primary, style: StrokeStyle(lineWidth: 2, dash: [7, 5]))
+                        .background(AppTheme.primary.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .frame(width: max(localTouchFrame.width + 16, 92), height: localTouchFrame.height + 16)
+                        .position(x: localTouchFrame.midX, y: localTouchFrame.midY)
+
+                    MoLayerTapIndicator(reduceMotion: reduceMotion)
+                        .position(x: localTouchFrame.midX, y: localTouchFrame.midY + 10)
+
+                    Button {
+                        recordPracticeTap()
+                    } label: {
+                        Color.clear
+                    }
+                    .frame(width: max(localTouchFrame.width + 36, 118), height: localTouchFrame.height + 42)
+                    .position(x: localTouchFrame.midX, y: localTouchFrame.midY)
+                    .accessibilityLabel(L.string("Practice tapping the Mo Layer entry zone"))
+                }
+
+                tutorialCard(localTouchFrame: localTouchFrame, containerSize: proxy.size)
+            }
+            .animation(.snappy, value: step)
+        }
+    }
+
+    private func tutorialCard(localTouchFrame: CGRect, containerSize: CGSize) -> some View {
+        let cardWidth = min(containerSize.width - 32, 380)
+        let yPosition = cardYPosition(for: step, touchFrame: localTouchFrame, containerSize: containerSize)
+
+        return VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: step.systemImage)
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(AppTheme.primary)
+                    .frame(width: 42, height: 42)
+                    .background(AppTheme.primary.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(L.format("Step %d of %d", stepIndex + 1, MoLayerTutorialStep.allCases.count))
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(AppTheme.primary)
+                    Text(step.title)
+                        .font(.title3.weight(.bold))
+                        .foregroundStyle(AppTheme.ink)
+                    Text(step.detail)
+                        .font(.subheadline)
+                        .foregroundStyle(AppTheme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            if step == .enter {
+                HStack(spacing: 8) {
+                    ForEach(0..<3, id: \.self) { index in
+                        Circle()
+                            .fill(index < practiceTapCount ? AppTheme.primary : AppTheme.line)
+                            .frame(width: 10, height: 10)
+                    }
+
+                    Text(L.format("%d of 3 taps", practiceTapCount))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(AppTheme.secondaryText)
+                }
+            }
+
+            HStack(spacing: 10) {
+                Button(L.string("Skip")) {
+                    completeAction()
+                }
+                .buttonStyle(.plain)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(AppTheme.secondaryText)
+
+                Spacer()
+
+                if stepIndex > 0 {
+                    Button(L.string("Back")) {
+                        goBack()
+                    }
+                    .buttonStyle(.plain)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(AppTheme.ink)
+                }
+
+                Button(isLastStep ? L.string("Done") : L.string("Next")) {
+                    advance()
+                }
+                .buttonStyle(AppButtonStyle())
+            }
+        }
+        .padding(18)
+        .frame(width: cardWidth)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18).stroke(AppTheme.line.opacity(0.8)))
+        .shadow(color: .black.opacity(0.22), radius: 22, x: 0, y: 14)
+        .position(x: containerSize.width / 2, y: yPosition)
+    }
+
+    private func localFrame(from globalFrame: CGRect, in containerFrame: CGRect, fallbackSize: CGSize) -> CGRect {
+        guard globalFrame != .zero else {
+            return CGRect(x: fallbackSize.width * 0.42, y: 88, width: fallbackSize.width * 0.34, height: 44)
+        }
+
+        return CGRect(
+            x: globalFrame.minX - containerFrame.minX,
+            y: globalFrame.minY - containerFrame.minY,
+            width: globalFrame.width,
+            height: globalFrame.height
+        )
+    }
+
+    private func cardYPosition(for step: MoLayerTutorialStep, touchFrame: CGRect, containerSize: CGSize) -> CGFloat {
+        switch step {
+        case .enter:
+            let preferred = touchFrame.maxY + 190
+            return min(max(preferred, 250), containerSize.height - 190)
+        case .overview, .save:
+            return containerSize.height * 0.58
+        }
+    }
+
+    private func recordPracticeTap() {
+        guard step == .enter else { return }
+        let result = practiceCounter.recordTap()
+        if case .completed = result {
+            enterMoLayerAction()
+            advance()
+        }
+    }
+
+    private func goBack() {
+        let previousIndex = max(0, stepIndex - 1)
+        step = MoLayerTutorialStep.allCases[previousIndex]
+        practiceCounter.reset()
+    }
+
+    private func advance() {
+        guard !isLastStep else {
+            completeAction()
+            return
+        }
+
+        step = MoLayerTutorialStep.allCases[stepIndex + 1]
+        practiceCounter.reset()
+    }
+}
+
+private struct MoLayerTapIndicator: View {
+    let reduceMotion: Bool
+    @State private var isPressed = false
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(AppTheme.primary, lineWidth: 2)
+                .frame(width: 72, height: 72)
+                .scaleEffect(reduceMotion ? 1 : (isPressed ? 0.68 : 1.18))
+                .opacity(reduceMotion ? 0.65 : (isPressed ? 0.7 : 0.05))
+
+            Capsule()
+                .fill(.white)
+                .frame(width: 42, height: 58)
+                .shadow(color: .black.opacity(0.25), radius: 10, x: 0, y: 6)
+                .offset(y: reduceMotion ? 0 : (isPressed ? 10 : -6))
+        }
+        .task {
+            guard !reduceMotion else { return }
+            withAnimation(.easeInOut(duration: 0.62).repeatForever(autoreverses: true)) {
+                isPressed = true
+            }
+        }
+    }
+}
+
+private struct MoLayerSpotlightShape: Shape {
+    let rect: CGRect
+    let cornerRadius: CGFloat
+
+    func path(in bounds: CGRect) -> Path {
+        var path = Path()
+        path.addRect(bounds)
+        path.addRoundedRect(in: rect, cornerSize: CGSize(width: cornerRadius, height: cornerRadius))
+        return path
     }
 }
 
@@ -1050,6 +2196,7 @@ struct ProfileCenterView: View {
     @EnvironmentObject private var remoteChanges: CloudSyncRemoteChangeRouter
     @AppStorage(AppLanguage.storageKey) private var language = AppLanguage.english.rawValue
     @AppStorage(AppAppearance.storageKey) private var appearance = AppAppearance.system.rawValue
+    var showMoLayerTutorialAction: () -> Void = {}
     private let accountRoutes: [ProfileSettingsRoute] = [.general, .security, .membership]
 
     private var preferenceRefreshToken: SettingsPreferenceRefreshToken {
@@ -1067,6 +2214,15 @@ struct ProfileCenterView: View {
                             Label(route.title, systemImage: route.systemImage)
                         }
                     }
+                }
+
+                Section {
+                    Button {
+                        showMoLayerTutorialAction()
+                    } label: {
+                        Label(L.string("Mo Layer Tutorial"), systemImage: "hand.tap")
+                    }
+                    .foregroundStyle(AppTheme.ink)
                 }
             }
             .id(preferenceRefreshToken)
@@ -1116,8 +2272,15 @@ struct ProfileCenterView: View {
 private struct ProfileDocumentFooter: View {
     var body: some View {
         HStack(spacing: 12) {
-            NavigationLink(value: ProfileDocumentRoute.privacyPolicy) {
+            Link(destination: SubscriptionManager.privacyPolicyURL) {
                 Text(ProfileDocumentRoute.privacyPolicy.title)
+            }
+
+            Text("·")
+                .foregroundStyle(AppTheme.secondaryText.opacity(0.7))
+
+            Link(destination: SubscriptionManager.termsOfUseURL) {
+                Text(L.string("Terms of Use"))
             }
 
             Text("·")
@@ -1175,19 +2338,17 @@ private extension ImportSummary {
 }
 
 enum VaultCategory: String, CaseIterable, Identifiable {
-    case images
-    case videos
+    case album
     case audio
     case documents
     case links
 
     var id: String { rawValue }
-    static let homeModes: [VaultCategory] = [.images, .videos, .audio, .documents]
+    static let homeModes: [VaultCategory] = [.album, .audio, .documents]
 
     var title: String {
         switch self {
-        case .images: L.string("Photos")
-        case .videos: L.string("Videos")
+        case .album: L.string("Album")
         case .audio: L.string("Audio")
         case .documents: L.string("Files")
         case .links: L.string("Links")
@@ -1196,15 +2357,14 @@ enum VaultCategory: String, CaseIterable, Identifiable {
 
     var icon: String {
         switch self {
-        case .images: "photo"
-        case .videos: "video"
+        case .album: "photo.on.rectangle"
         case .audio: "waveform"
         case .documents: "doc"
         case .links: "link"
         }
     }
 
-    func items(from items: [VaultItem]) -> [VaultItem] {
+    nonisolated func items(from items: [VaultItem]) -> [VaultItem] {
         items.filter { item in
             guard item.deletedAt == nil else { return false }
             return contains(kind: item.kind)
@@ -1213,10 +2373,8 @@ enum VaultCategory: String, CaseIterable, Identifiable {
 
     func summaryText(count: Int) -> String {
         switch self {
-        case .images:
-            return L.format("Total %d photos", count)
-        case .videos:
-            return L.format("Total %d videos", count)
+        case .album:
+            return L.format("Total %d media items", count)
         case .audio:
             return L.format("Total %d audio files", count)
         case .documents:
@@ -1226,12 +2384,10 @@ enum VaultCategory: String, CaseIterable, Identifiable {
         }
     }
 
-    func contains(kind: VaultItemKind) -> Bool {
+    nonisolated func contains(kind: VaultItemKind) -> Bool {
         switch self {
-        case .images:
-            return kind == .image || kind == .livePhoto
-        case .videos:
-            return kind == .video
+        case .album:
+            return kind == .image || kind == .livePhoto || kind == .video
         case .audio:
             return kind == .audio
         case .documents:
@@ -1255,7 +2411,6 @@ private struct VaultCategorySummaryFooter: View {
             .padding(.horizontal, 16)
             .padding(.top, 6)
             .padding(.bottom, 8)
-            .background(AppTheme.background.opacity(0.94))
     }
 }
 
@@ -1277,6 +2432,7 @@ struct VaultCategoryDetailView: View {
                 VaultLinearCategoryList(
                     category: category,
                     items: items,
+                    isInnerVaultActive: false,
                     openAudio: { audioDetailItem = $0 },
                     openDocument: { documentDetailItem = $0 },
                     openDetails: { selectedItem = $0 },
@@ -1327,20 +2483,13 @@ struct VaultCategoryDetailView: View {
             AudioDetailPlayerView(item: item)
         }
         .fullScreenCover(item: $documentDetailItem) { item in
-            DocumentDetailPreviewView(item: item)
+            DocumentDetailPreviewView(item: item, isInnerVaultActive: false)
         }
         .fullScreenCover(item: $previewSelection) { selection in
             VaultMediaPreviewView(
                 items: selection.items,
-                initialItemId: selection.initialItemId
-            )
-        }
-        .refreshable {
-            await vaultStore.syncCloudToLocal(
-                context: modelContext,
-                sync: sync,
-                allowsCloudSync: subscription.canImportAndSync,
-                downloadsOriginals: VaultCloudToLocalSyncPolicy.pullToRefreshDownloadsOriginals
+                initialItemId: selection.initialItemId,
+                isInnerVaultActive: false
             )
         }
     }
@@ -1411,19 +2560,27 @@ private struct VaultCategoryItemRow: View {
         }
     }
 
-    @ViewBuilder
     private var thumbnail: some View {
-        if let image = vaultStore.thumbnail(for: item) {
-            Image(uiImage: image)
-                .resizable()
-                .scaledToFill()
-        } else {
-            ZStack {
+        ZStack(alignment: .topLeading) {
+            if let image = vaultStore.thumbnail(for: item) {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(AppTheme.primary.opacity(0.1))
                 Image(systemName: icon)
                     .font(.title3)
                     .foregroundStyle(AppTheme.primary)
+            }
+
+            if item.kind == .livePhoto {
+                Image(systemName: "livephoto")
+                    .font(.caption2.weight(.semibold))
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(.white)
+                    .shadow(color: .black.opacity(0.45), radius: 2, x: 0, y: 1)
+                    .padding(5)
             }
         }
     }
@@ -1455,6 +2612,11 @@ private struct VaultLinearCategoryList: View {
     @EnvironmentObject private var subscription: SubscriptionManager
     let category: VaultCategory
     let items: [VaultItem]
+    let isInnerVaultActive: Bool
+    var isSelectionMode = false
+    var selectedItemIds: Set<String> = []
+    var enterSelectionAction: (VaultItem) -> Void = { _ in }
+    var toggleSelectionAction: (VaultItem) -> Void = { _ in }
     let openAudio: (VaultItem) -> Void
     let openDocument: (VaultItem) -> Void
     let openDetails: (VaultItem) -> Void
@@ -1475,6 +2637,8 @@ private struct VaultLinearCategoryList: View {
                 if item.kind == .audio {
                     AudioListRow(
                         item: item,
+                        isSelectionMode: isSelectionMode,
+                        isSelected: selectedItemIds.contains(item.id),
                         isPlaying: activeAudioId == item.id,
                         isLoading: loadingAudioId == item.id,
                         waveformSamples: activeAudioId == item.id ? activeAudioSamples : [],
@@ -1490,12 +2654,17 @@ private struct VaultLinearCategoryList: View {
                         shareAction: { Task { await share(item) } },
                         canRename: subscription.canImportAndSync,
                         renameAction: { renameItem = item },
+                        canMoveToMoLayer: subscription.canImportAndSync && !isInnerVaultActive,
+                        moveToMoLayerAction: { Task { await moveToMoLayer(item) } },
                         canDelete: subscription.canImportAndSync,
-                        deleteAction: { deleteItem(item) }
+                        deleteAction: { deleteItem(item) },
+                        selectionAction: { handleSelection(for: item) }
                     )
                 } else {
                     DocumentListRow(
                         item: item,
+                        isSelectionMode: isSelectionMode,
+                        isSelected: selectedItemIds.contains(item.id),
                         openAction: {
                             stopAudioPlayback()
                             openDocument(item)
@@ -1504,8 +2673,11 @@ private struct VaultLinearCategoryList: View {
                         shareAction: { Task { await share(item) } },
                         canRename: subscription.canImportAndSync,
                         renameAction: { renameItem = item },
+                        canMoveToMoLayer: subscription.canImportAndSync && !isInnerVaultActive,
+                        moveToMoLayerAction: { Task { await moveToMoLayer(item) } },
                         canDelete: subscription.canImportAndSync,
-                        deleteAction: { deleteItem(item) }
+                        deleteAction: { deleteItem(item) },
+                        selectionAction: { handleSelection(for: item) }
                     )
                 }
             }
@@ -1518,6 +2690,17 @@ private struct VaultLinearCategoryList: View {
         }
         .onDisappear {
             stopAudioPlayback()
+        }
+    }
+
+    @MainActor
+    private func handleSelection(for item: VaultItem) {
+        guard VaultSelectionPolicy.canSelect(item) else { return }
+        stopAudioPlayback()
+        if isSelectionMode {
+            toggleSelectionAction(item)
+        } else {
+            enterSelectionAction(item)
         }
     }
 
@@ -1618,11 +2801,23 @@ private struct VaultLinearCategoryList: View {
         guard !urls.isEmpty else { return }
         sharePayload = SharePayload(items: urls)
     }
+
+    @MainActor
+    private func moveToMoLayer(_ item: VaultItem) async {
+        guard subscription.canImportAndSync, !isInnerVaultActive else { return }
+        stopAudioPlayback()
+        let didMove = await vaultStore.moveToInnerVault([item], context: modelContext, sync: sync)
+        if didMove {
+            VaultHaptics.moLayerTransferSucceeded()
+        }
+    }
 }
 
 private struct AudioListRow: View {
     @EnvironmentObject private var vaultStore: VaultStore
     let item: VaultItem
+    let isSelectionMode: Bool
+    let isSelected: Bool
     let isPlaying: Bool
     let isLoading: Bool
     let waveformSamples: [CGFloat]
@@ -1635,8 +2830,11 @@ private struct AudioListRow: View {
     let shareAction: () -> Void
     let canRename: Bool
     let renameAction: () -> Void
+    let canMoveToMoLayer: Bool
+    let moveToMoLayerAction: () -> Void
     let canDelete: Bool
     let deleteAction: () -> Void
+    let selectionAction: () -> Void
 
     private var metadata: VaultMetadata? {
         vaultStore.metadata(for: item)
@@ -1644,6 +2842,11 @@ private struct AudioListRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
+            if isSelectionMode {
+                VaultSelectionCheckbox(isSelected: isSelected)
+                    .transition(.scale.combined(with: .opacity))
+            }
+
             Button(action: playAction) {
                 ZStack {
                     Circle()
@@ -1661,6 +2864,8 @@ private struct AudioListRow: View {
                 .frame(width: 42, height: 42)
             }
             .buttonStyle(.plain)
+            .allowsHitTesting(!isSelectionMode)
+            .opacity(isSelectionMode ? 0.58 : 1)
 
             VStack(alignment: .leading, spacing: 5) {
                 Text(metadata?.originalName ?? L.string("Recording"))
@@ -1693,41 +2898,61 @@ private struct AudioListRow: View {
 
             Spacer(minLength: 8)
 
-            Menu {
-                Button(action: openAction) {
-                    Label(L.string("Open Player"), systemImage: "waveform")
-                }
-                Button(action: detailAction) {
-                    Label(L.string("Details"), systemImage: "info.circle")
-                }
-                Button(action: shareAction) {
-                    Label(L.string("Share"), systemImage: "square.and.arrow.up")
-                }
-                if canRename {
-                    Button(action: renameAction) {
-                        Label(L.string("Rename"), systemImage: "pencil")
+            if !isSelectionMode {
+                Menu {
+                    Button(action: openAction) {
+                        Label(L.string("Open Player"), systemImage: "waveform")
                     }
-                }
-                if canDelete {
-                    Button(role: .destructive, action: deleteAction) {
-                        Label(L.string("Delete"), systemImage: "trash")
+                    Button(action: detailAction) {
+                        Label(L.string("Details"), systemImage: "info.circle")
                     }
+                    Button(action: shareAction) {
+                        Label(L.string("Share"), systemImage: "square.and.arrow.up")
+                    }
+                    if canRename {
+                        Button(action: renameAction) {
+                            Label(L.string("Rename"), systemImage: "pencil")
+                        }
+                    }
+                    if canMoveToMoLayer {
+                        Button(action: moveToMoLayerAction) {
+                            Label(L.string("Send to Mo Layer"), systemImage: "lock.fill")
+                        }
+                    }
+                    if canDelete {
+                        Button(role: .destructive, action: deleteAction) {
+                            Label(L.string("Delete"), systemImage: "trash")
+                        }
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.headline.weight(.semibold))
+                        .foregroundStyle(AppTheme.secondaryText)
+                        .frame(width: 34, height: 34)
                 }
-            } label: {
-                Image(systemName: "ellipsis")
-                    .font(.headline.weight(.semibold))
-                    .foregroundStyle(AppTheme.secondaryText)
-                    .frame(width: 34, height: 34)
             }
         }
         .padding(12)
         .background(AppTheme.card)
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(AppTheme.line))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(isSelected ? AppTheme.primary : AppTheme.line, lineWidth: isSelected ? 2 : 1))
         .contentShape(Rectangle())
-        .onTapGesture(perform: openAction)
+        .onTapGesture {
+            if isSelectionMode {
+                selectionAction()
+            } else {
+                openAction()
+            }
+        }
+        .onLongPressGesture(minimumDuration: 0.35, maximumDistance: 18) {
+            if !isSelectionMode {
+                selectionAction()
+            }
+        }
         .animation(.smooth(duration: 0.18), value: isPlaying)
         .animation(.smooth(duration: 0.12), value: currentTime)
+        .animation(.smooth(duration: 0.16), value: isSelectionMode)
+        .animation(.smooth(duration: 0.16), value: isSelected)
         .accessibilityLabel(metadata?.originalName ?? L.string("Recording"))
     }
 
@@ -1880,13 +3105,18 @@ private enum AudioWaveformAnalyzer {
 private struct DocumentListRow: View {
     @EnvironmentObject private var vaultStore: VaultStore
     let item: VaultItem
+    let isSelectionMode: Bool
+    let isSelected: Bool
     let openAction: () -> Void
     let detailAction: () -> Void
     let shareAction: () -> Void
     let canRename: Bool
     let renameAction: () -> Void
+    let canMoveToMoLayer: Bool
+    let moveToMoLayerAction: () -> Void
     let canDelete: Bool
     let deleteAction: () -> Void
+    let selectionAction: () -> Void
 
     private var metadata: VaultMetadata? {
         vaultStore.metadata(for: item)
@@ -1898,6 +3128,11 @@ private struct DocumentListRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
+            if isSelectionMode {
+                VaultSelectionCheckbox(isSelected: isSelected)
+                    .transition(.scale.combined(with: .opacity))
+            }
+
             ZStack {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(descriptor.tint.opacity(0.14))
@@ -1926,39 +3161,59 @@ private struct DocumentListRow: View {
 
             Spacer(minLength: 8)
 
-            Menu {
-                Button(action: openAction) {
-                    Label(L.string("Preview"), systemImage: "doc.viewfinder")
-                }
-                Button(action: detailAction) {
-                    Label(L.string("Details"), systemImage: "info.circle")
-                }
-                Button(action: shareAction) {
-                    Label(L.string("Share"), systemImage: "square.and.arrow.up")
-                }
-                if canRename {
-                    Button(action: renameAction) {
-                        Label(L.string("Rename"), systemImage: "pencil")
+            if !isSelectionMode {
+                Menu {
+                    Button(action: openAction) {
+                        Label(L.string("Preview"), systemImage: "doc.viewfinder")
                     }
-                }
-                if canDelete {
-                    Button(role: .destructive, action: deleteAction) {
-                        Label(L.string("Delete"), systemImage: "trash")
+                    Button(action: detailAction) {
+                        Label(L.string("Details"), systemImage: "info.circle")
                     }
+                    Button(action: shareAction) {
+                        Label(L.string("Share"), systemImage: "square.and.arrow.up")
+                    }
+                    if canRename {
+                        Button(action: renameAction) {
+                            Label(L.string("Rename"), systemImage: "pencil")
+                        }
+                    }
+                    if canMoveToMoLayer {
+                        Button(action: moveToMoLayerAction) {
+                            Label(L.string("Send to Mo Layer"), systemImage: "lock.fill")
+                        }
+                    }
+                    if canDelete {
+                        Button(role: .destructive, action: deleteAction) {
+                            Label(L.string("Delete"), systemImage: "trash")
+                        }
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.headline.weight(.semibold))
+                        .foregroundStyle(AppTheme.secondaryText)
+                        .frame(width: 34, height: 34)
                 }
-            } label: {
-                Image(systemName: "ellipsis")
-                    .font(.headline.weight(.semibold))
-                    .foregroundStyle(AppTheme.secondaryText)
-                    .frame(width: 34, height: 34)
             }
         }
         .padding(12)
         .background(AppTheme.card)
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(AppTheme.line))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(isSelected ? AppTheme.primary : AppTheme.line, lineWidth: isSelected ? 2 : 1))
         .contentShape(Rectangle())
-        .onTapGesture(perform: openAction)
+        .onTapGesture {
+            if isSelectionMode {
+                selectionAction()
+            } else {
+                openAction()
+            }
+        }
+        .onLongPressGesture(minimumDuration: 0.35, maximumDistance: 18) {
+            if !isSelectionMode {
+                selectionAction()
+            }
+        }
+        .animation(.smooth(duration: 0.16), value: isSelectionMode)
+        .animation(.smooth(duration: 0.16), value: isSelected)
         .accessibilityLabel(metadata?.originalName ?? L.string("Private File"))
     }
 
@@ -2384,7 +3639,7 @@ private struct MediaThumbnailOverlay: View {
         ZStack {
             if kind.isVisualMedia {
                 LinearGradient(
-                    colors: [.clear, .black.opacity(kind == .image ? 0.18 : 0.34)],
+                    colors: [.clear, .black.opacity(kind == .video ? 0.34 : 0.18)],
                     startPoint: .center,
                     endPoint: .bottom
                 )
@@ -2424,6 +3679,48 @@ private struct MediaThumbnailOverlay: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
         .allowsHitTesting(false)
+    }
+}
+
+private struct VaultMediaGridContextMenu: ViewModifier {
+    let item: VaultItem
+    let isEnabled: Bool
+    let canMoveToMoLayer: Bool
+    let canDelete: Bool
+    let previewAction: () -> Void
+    let detailAction: () -> Void
+    let moveToMoLayerAction: () -> Void
+    let deleteAction: () -> Void
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if isEnabled {
+            content.contextMenu {
+                if item.kind.isPreviewableContent {
+                    Button(action: previewAction) {
+                        Label(L.string("Preview"), systemImage: "rectangle.expand.vertical")
+                    }
+                }
+
+                Button(action: detailAction) {
+                    Label(L.string("Details"), systemImage: "info.circle")
+                }
+
+                if canMoveToMoLayer {
+                    Button(action: moveToMoLayerAction) {
+                        Label(L.string("Hide"), systemImage: "lock.fill")
+                    }
+                }
+
+                if canDelete {
+                    Button(role: .destructive, action: deleteAction) {
+                        Label(L.string("Delete"), systemImage: "trash")
+                    }
+                }
+            }
+        } else {
+            content
+        }
     }
 }
 
@@ -2485,17 +3782,22 @@ struct VaultMediaPreviewView: View {
     @EnvironmentObject private var subscription: SubscriptionManager
     let items: [VaultItem]
     let initialItemId: String
+    let isInnerVaultActive: Bool
     @State private var selectedId: String
     @State private var previewItems: [VaultItem]
     @State private var sharePayload: SharePayload?
     @State private var detailItem: VaultItem?
     @State private var isPreparingShare = false
     @State private var isSavingToPhotos = false
+    @State private var isMovingToMoLayer = false
+    @State private var isDeletingSelectedItem = false
     @State private var photoSaveAlert: PhotoSaveAlert?
+    @State private var originalScreenBrightness: CGFloat?
 
-    init(items: [VaultItem], initialItemId: String) {
+    init(items: [VaultItem], initialItemId: String, isInnerVaultActive: Bool) {
         self.items = items
         self.initialItemId = initialItemId
+        self.isInnerVaultActive = isInnerVaultActive
         _selectedId = State(initialValue: initialItemId)
         _previewItems = State(initialValue: items)
     }
@@ -2553,12 +3855,22 @@ struct VaultMediaPreviewView: View {
                             Label(L.string("Export"), systemImage: "square.and.arrow.up")
                         }
 
+                        if subscription.canImportAndSync && !isInnerVaultActive {
+                            Button {
+                                Task { await moveSelectedItemToMoLayer() }
+                            } label: {
+                                Label(L.string("Send to Mo Layer"), systemImage: "lock.fill")
+                            }
+                            .disabled(isMovingToMoLayer)
+                        }
+
                         if subscription.canImportAndSync {
                             Button(role: .destructive) {
                                 Task { await deleteSelectedItem() }
                             } label: {
                                 Label(L.string("Delete"), systemImage: "trash")
                             }
+                            .disabled(isDeletingSelectedItem)
                         }
                     } label: {
                         Image(systemName: "ellipsis")
@@ -2589,9 +3901,15 @@ struct VaultMediaPreviewView: View {
             )
         }
         .onAppear {
+            if originalScreenBrightness == nil {
+                originalScreenBrightness = UIScreen.main.brightness
+            }
             MediaPreviewAudioSession.activateForPlayback()
         }
         .onDisappear {
+            if let originalScreenBrightness {
+                UIScreen.main.brightness = originalScreenBrightness
+            }
             MediaPreviewAudioSession.deactivate()
         }
     }
@@ -2630,15 +3948,41 @@ struct VaultMediaPreviewView: View {
 
     @MainActor
     private func deleteSelectedItem() async {
-        guard subscription.canImportAndSync else { return }
+        guard subscription.canImportAndSync, !isDeletingSelectedItem else { return }
         guard let selectedItem else { return }
+        isDeletingSelectedItem = true
+        defer { isDeletingSelectedItem = false }
+
         let nextSelection = previewItems.first { $0.id != selectedItem.id }?.id
-        previewItems.removeAll { $0.id == selectedItem.id }
         await vaultStore.deleteImmediately(selectedItem, context: modelContext, sync: sync)
         if let nextSelection {
             selectedId = nextSelection
+            await Task.yield()
+            previewItems.removeAll { $0.id == selectedItem.id }
         } else {
             dismiss()
+            previewItems.removeAll { $0.id == selectedItem.id }
+        }
+    }
+
+    @MainActor
+    private func moveSelectedItemToMoLayer() async {
+        guard subscription.canImportAndSync, !isInnerVaultActive, !isMovingToMoLayer else { return }
+        guard let selectedItem else { return }
+        isMovingToMoLayer = true
+        defer { isMovingToMoLayer = false }
+
+        let nextSelection = previewItems.first { $0.id != selectedItem.id }?.id
+        let didMove = await vaultStore.moveToInnerVault([selectedItem], context: modelContext, sync: sync)
+        guard didMove else { return }
+        VaultHaptics.moLayerTransferSucceeded()
+        if let nextSelection {
+            selectedId = nextSelection
+            await Task.yield()
+            previewItems.removeAll { $0.id == selectedItem.id }
+        } else {
+            dismiss()
+            previewItems.removeAll { $0.id == selectedItem.id }
         }
     }
 }
@@ -2699,7 +4043,7 @@ private struct MediaPreviewDetailSheet: View {
                     if item.assetState == .failed {
                         detailRow(L.string("Download Failure"), item.lastDownloadError)
                     }
-                    Text(L.string("Encrypted iCloud Sync is always on. Items are encrypted on this device before upload to your private iCloud."))
+                    Text(L.string("Items are encrypted on this device before optional iCloud sync."))
                         .font(.caption)
                         .foregroundStyle(AppTheme.secondaryText)
                 }
@@ -2923,7 +4267,9 @@ private struct DocumentDetailPreviewView: View {
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var vaultStore: VaultStore
     @EnvironmentObject private var sync: CloudKitSyncService
+    @EnvironmentObject private var subscription: SubscriptionManager
     let item: VaultItem
+    let isInnerVaultActive: Bool
     @State private var previewURL: URL?
     @State private var markdownText: String?
     @State private var isLoading = true
@@ -2974,6 +4320,13 @@ private struct DocumentDetailPreviewView: View {
                         } label: {
                             Label(L.string("Export"), systemImage: "square.and.arrow.up")
                         }
+                        if subscription.canImportAndSync && !isInnerVaultActive {
+                            Button {
+                                Task { await moveItemToMoLayer() }
+                            } label: {
+                                Label(L.string("Send to Mo Layer"), systemImage: "lock.fill")
+                            }
+                        }
                     } label: {
                         Image(systemName: "ellipsis.circle")
                     }
@@ -3022,6 +4375,16 @@ private struct DocumentDetailPreviewView: View {
         let urls = await vaultStore.decryptedTemporaryURLs(for: [item], context: modelContext, sync: sync)
         guard !urls.isEmpty else { return }
         sharePayload = SharePayload(items: urls)
+    }
+
+    @MainActor
+    private func moveItemToMoLayer() async {
+        guard subscription.canImportAndSync, !isInnerVaultActive else { return }
+        let didMove = await vaultStore.moveToInnerVault([item], context: modelContext, sync: sync)
+        if didMove {
+            VaultHaptics.moLayerTransferSucceeded()
+            dismiss()
+        }
     }
 }
 
@@ -3075,6 +4438,18 @@ private enum MediaPreviewAudioSession {
         player.isMuted = false
         player.volume = 1
     }
+
+    static func makePlayer(for url: URL, kind: VaultItemKind) -> AVPlayer {
+        let item = AVPlayerItem(url: url)
+        if kind == .video {
+            item.preferredForwardBufferDuration = 5
+            item.canUseNetworkResourcesForLiveStreamingWhilePaused = false
+        }
+        let player = AVPlayer(playerItem: item)
+        player.automaticallyWaitsToMinimizeStalling = true
+        configure(player)
+        return player
+    }
 }
 
 private struct VaultPeekPreviewOverlay: View {
@@ -3113,8 +4488,7 @@ private struct FullscreenMediaPage: View {
             } else if item.kind == .image, let image {
                 ZoomableImagePreview(image: image)
             } else if item.kind == .video, let player {
-                VideoPlayer(player: player)
-                    .ignoresSafeArea()
+                ZoomableVideoPreview(player: player)
                     .onAppear { updateVideoPlayback() }
                     .onChange(of: isSelected) { _, _ in updateVideoPlayback() }
                     .onDisappear { player.pause() }
@@ -3157,8 +4531,8 @@ private struct FullscreenMediaPage: View {
         } else if item.kind == .image, let data = try? Data(contentsOf: url), let loaded = UIImage(data: data) {
             image = loaded
         } else if item.kind == .video || item.kind == .audio {
-            let mediaPlayer = AVPlayer(url: url)
-            MediaPreviewAudioSession.configure(mediaPlayer)
+            previewURL = url
+            let mediaPlayer = MediaPreviewAudioSession.makePlayer(for: url, kind: item.kind)
             player = mediaPlayer
             updateVideoPlayback(for: mediaPlayer)
         } else if item.kind.isDocumentPreview {
@@ -3172,13 +4546,666 @@ private struct FullscreenMediaPage: View {
         guard item.kind == .video else { return }
         let currentPlayer = mediaPlayer ?? player
         guard let currentPlayer else { return }
-        MediaPreviewAudioSession.configure(currentPlayer)
+        if mediaPlayer != nil {
+            MediaPreviewAudioSession.configure(currentPlayer)
+        }
         if isSelected {
             MediaPreviewAudioSession.activateForPlayback()
             currentPlayer.play()
         } else {
             currentPlayer.pause()
         }
+    }
+}
+
+enum VideoPlayerAdjustmentKind: Equatable {
+    case brightness
+    case volume
+}
+
+enum VideoPlayerGesturePolicy {
+    private nonisolated static let minimumMovement: CGFloat = 12
+
+    nonisolated static func adjustment(
+        startX: CGFloat,
+        containerWidth: CGFloat,
+        translation: CGSize,
+        scale: CGFloat
+    ) -> VideoPlayerAdjustmentKind? {
+        guard scale <= 1.001,
+              containerWidth > 0,
+              abs(translation.height) >= minimumMovement,
+              abs(translation.height) > abs(translation.width) else {
+            return nil
+        }
+        return startX < containerWidth / 2 ? .brightness : .volume
+    }
+
+    nonisolated static func adjustedValue(
+        startingValue: Double,
+        verticalTranslation: CGFloat,
+        containerHeight: CGFloat,
+        range: ClosedRange<Double>
+    ) -> Double {
+        let effectiveHeight = max(containerHeight, 1)
+        let delta = -Double(verticalTranslation / effectiveHeight)
+        return min(max(startingValue + delta, range.lowerBound), range.upperBound)
+    }
+}
+
+private struct ZoomableVideoPreview: View {
+    private static let controlsAutoHideDelay: UInt64 = 3_000_000_000
+
+    let player: AVPlayer
+    @State private var scale: CGFloat = 1
+    @State private var committedOffset: CGSize = .zero
+    @State private var controlsVisible = true
+    @State private var currentTime: Double = 0
+    @State private var duration: Double = 0
+    @State private var scrubTime: Double = 0
+    @State private var isScrubbing = false
+    @State private var wasPlayingBeforeScrub = false
+    @State private var isPlaying = false
+    @State private var didReachEnd = false
+    @State private var isMuted = false
+    @State private var volume: Double = 1
+    @State private var brightness = Double(UIScreen.main.brightness)
+    @State private var activeAdjustment: VideoPlayerAdjustmentKind?
+    @State private var adjustmentStartValue: Double?
+    @State private var adjustmentIndicator: VideoPlayerAdjustmentIndicatorState?
+    @State private var timeObserver: Any?
+    @State private var hideControlsTask: Task<Void, Never>?
+    @State private var hideAdjustmentTask: Task<Void, Never>?
+    @GestureState private var pinchScale: CGFloat = 1
+    @GestureState private var dragTranslation: CGSize = .zero
+
+    private var displayScale: CGFloat {
+        clampedScale(scale * pinchScale)
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            let offset = clampedOffset(
+                CGSize(
+                    width: committedOffset.width + dragTranslation.width,
+                    height: committedOffset.height + dragTranslation.height
+                ),
+                scale: displayScale,
+                containerSize: proxy.size
+            )
+
+            ZStack {
+                PlayerLayerView(player: player)
+                    .scaleEffect(displayScale)
+                    .offset(offset)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .contentShape(Rectangle())
+                    .simultaneousGesture(zoomGesture(containerSize: proxy.size))
+                    .simultaneousGesture(dragGesture(containerSize: proxy.size))
+                    .simultaneousGesture(adjustmentGesture(containerSize: proxy.size))
+                    .simultaneousGesture(tapGesture)
+
+                if controlsVisible {
+                    VideoPlayerControlsOverlay(
+                        isPlaying: isPlaying,
+                        didReachEnd: didReachEnd,
+                        currentTime: currentTime,
+                        duration: duration,
+                        isMuted: isMuted,
+                        scrubTime: $scrubTime,
+                        isScrubbing: $isScrubbing,
+                        playPauseAction: togglePlayback,
+                        backwardAction: { jump(by: -10) },
+                        forwardAction: { jump(by: 10) },
+                        scrubEditingChanged: scrubEditingChanged,
+                        scrubChanged: updateScrubTime,
+                        muteAction: toggleMute,
+                        interactionAction: showControlsAndScheduleHide
+                    )
+                    .transition(.opacity)
+                    .allowsHitTesting(true)
+                }
+
+                if let adjustmentIndicator {
+                    VideoPlayerAdjustmentIndicator(state: adjustmentIndicator)
+                        .transition(.opacity.combined(with: .scale(scale: 0.94)))
+                        .allowsHitTesting(false)
+                }
+            }
+        }
+        .ignoresSafeArea()
+        .onAppear {
+            installTimeObserver()
+            syncPlayerState()
+            showControlsAndScheduleHide()
+        }
+        .onDisappear {
+            player.pause()
+            removeTimeObserver()
+            hideControlsTask?.cancel()
+            hideAdjustmentTask?.cancel()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .AVPlayerItemDidPlayToEndTime)) { notification in
+            guard notification.object as? AVPlayerItem === player.currentItem else { return }
+            didReachEnd = true
+            isPlaying = false
+            currentTime = duration
+            showControls()
+        }
+    }
+
+    private func zoomGesture(containerSize: CGSize) -> some Gesture {
+        MagnificationGesture()
+            .updating($pinchScale) { value, state, _ in
+                state = value
+            }
+            .onEnded { value in
+                withAnimation(.snappy(duration: 0.18)) {
+                    scale = clampedScale(scale * value)
+                    committedOffset = clampedOffset(
+                        committedOffset,
+                        scale: scale,
+                        containerSize: containerSize
+                    )
+                }
+            }
+    }
+
+    private var tapGesture: some Gesture {
+        ExclusiveGesture(TapGesture(count: 2), TapGesture())
+            .onEnded { value in
+                switch value {
+                case .first:
+                    withAnimation(.snappy(duration: 0.2)) {
+                        if scale > 1 {
+                            scale = 1
+                            committedOffset = .zero
+                        } else {
+                            scale = 2.5
+                        }
+                    }
+                    showControlsAndScheduleHide()
+                case .second:
+                    toggleControls()
+                }
+            }
+    }
+
+    private func dragGesture(containerSize: CGSize) -> some Gesture {
+        DragGesture()
+            .updating($dragTranslation) { value, state, _ in
+                guard displayScale > 1 else { return }
+                state = value.translation
+            }
+            .onEnded { value in
+                guard scale > 1 else {
+                    committedOffset = .zero
+                    return
+                }
+                committedOffset = clampedOffset(
+                    CGSize(
+                        width: committedOffset.width + value.translation.width,
+                        height: committedOffset.height + value.translation.height
+                    ),
+                    scale: scale,
+                    containerSize: containerSize
+                )
+            }
+    }
+
+    private func adjustmentGesture(containerSize: CGSize) -> some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                guard let kind = activeAdjustment ?? VideoPlayerGesturePolicy.adjustment(
+                    startX: value.startLocation.x,
+                    containerWidth: containerSize.width,
+                    translation: value.translation,
+                    scale: displayScale
+                ) else { return }
+
+                if activeAdjustment == nil {
+                    activeAdjustment = kind
+                    adjustmentStartValue = kind == .brightness ? brightness : volume
+                    hideAdjustmentTask?.cancel()
+                }
+                guard let startingValue = adjustmentStartValue else { return }
+
+                let range: ClosedRange<Double> = kind == .brightness ? 0.05...1 : 0...1
+                let newValue = VideoPlayerGesturePolicy.adjustedValue(
+                    startingValue: startingValue,
+                    verticalTranslation: value.translation.height,
+                    containerHeight: containerSize.height,
+                    range: range
+                )
+                applyAdjustment(kind, value: newValue)
+            }
+            .onEnded { _ in
+                finishAdjustment()
+            }
+    }
+
+    private func clampedScale(_ value: CGFloat) -> CGFloat {
+        min(max(value, 1), 5)
+    }
+
+    private func clampedOffset(_ value: CGSize, scale: CGFloat, containerSize: CGSize) -> CGSize {
+        guard scale > 1 else { return .zero }
+        let maxX = containerSize.width * (scale - 1) / 2
+        let maxY = containerSize.height * (scale - 1) / 2
+        return CGSize(
+            width: min(max(value.width, -maxX), maxX),
+            height: min(max(value.height, -maxY), maxY)
+        )
+    }
+
+    private func installTimeObserver() {
+        guard timeObserver == nil else { return }
+        timeObserver = player.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 0.25, preferredTimescale: 600),
+            queue: .main
+        ) { time in
+            guard !isScrubbing else { return }
+            let seconds = time.seconds
+            if seconds.isFinite {
+                currentTime = max(seconds, 0)
+            }
+            syncPlayerState()
+        }
+    }
+
+    private func removeTimeObserver() {
+        if let timeObserver {
+            player.removeTimeObserver(timeObserver)
+        }
+        timeObserver = nil
+    }
+
+    private func syncPlayerState() {
+        if let itemDuration = player.currentItem?.duration.seconds, itemDuration.isFinite, itemDuration > 0 {
+            duration = itemDuration
+        }
+        let wasPlaying = isPlaying
+        isPlaying = player.timeControlStatus == .playing
+        isMuted = player.isMuted
+        volume = Double(player.volume)
+        brightness = Double(UIScreen.main.brightness)
+        if isPlaying && !wasPlaying {
+            scheduleControlsAutoHide()
+        }
+    }
+
+    private func togglePlayback() {
+        MediaPreviewAudioSession.activateForPlayback()
+        showControlsAndScheduleHide()
+        if didReachEnd {
+            didReachEnd = false
+            currentTime = 0
+            scrubTime = 0
+            player.seek(to: .zero)
+        }
+
+        if player.timeControlStatus == .playing {
+            player.pause()
+            isPlaying = false
+        } else {
+            player.play()
+            isPlaying = true
+        }
+    }
+
+    private func jump(by seconds: Double) {
+        let targetTime = clampedTime(currentTime + seconds)
+        seek(to: targetTime, resumePlayback: player.timeControlStatus == .playing)
+        currentTime = targetTime
+        showControlsAndScheduleHide()
+    }
+
+    private func scrubEditingChanged(_ isEditing: Bool) {
+        if isEditing {
+            wasPlayingBeforeScrub = player.timeControlStatus == .playing
+            isScrubbing = true
+            scrubTime = currentTime
+            player.pause()
+            showControls()
+        } else {
+            let targetTime = clampedTime(scrubTime)
+            isScrubbing = false
+            currentTime = targetTime
+            seek(to: targetTime, resumePlayback: wasPlayingBeforeScrub)
+            showControlsAndScheduleHide()
+        }
+    }
+
+    private func updateScrubTime(_ value: Double) {
+        scrubTime = clampedTime(value)
+        currentTime = scrubTime
+        showControls()
+    }
+
+    private func seek(to seconds: Double, resumePlayback: Bool) {
+        didReachEnd = false
+        let time = CMTime(seconds: seconds, preferredTimescale: 600)
+        player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
+            DispatchQueue.main.async {
+                currentTime = seconds
+                if resumePlayback {
+                    MediaPreviewAudioSession.activateForPlayback()
+                    player.play()
+                    isPlaying = true
+                }
+            }
+        }
+    }
+
+    private func toggleMute() {
+        showControlsAndScheduleHide()
+        if isMuted {
+            if volume <= 0 {
+                setVolume(1)
+            }
+            player.isMuted = false
+            isMuted = false
+        } else {
+            player.isMuted = true
+            isMuted = true
+        }
+    }
+
+    private func setVolume(_ value: Double, schedulesControls: Bool = true) {
+        let clamped = min(max(value, 0), 1)
+        volume = clamped
+        player.volume = Float(clamped)
+        player.isMuted = clamped == 0
+        isMuted = player.isMuted
+        if schedulesControls {
+            showControlsAndScheduleHide()
+        }
+    }
+
+    private func setBrightness(_ value: Double, schedulesControls: Bool = true) {
+        let clamped = min(max(value, 0.05), 1)
+        brightness = clamped
+        UIScreen.main.brightness = CGFloat(clamped)
+        if schedulesControls {
+            showControlsAndScheduleHide()
+        }
+    }
+
+    private func applyAdjustment(_ kind: VideoPlayerAdjustmentKind, value: Double) {
+        if kind == .brightness {
+            setBrightness(value, schedulesControls: false)
+        } else {
+            setVolume(value, schedulesControls: false)
+        }
+        withAnimation(.easeOut(duration: 0.12)) {
+            adjustmentIndicator = VideoPlayerAdjustmentIndicatorState(kind: kind, value: value)
+        }
+    }
+
+    private func finishAdjustment() {
+        guard adjustmentIndicator != nil else { return }
+        activeAdjustment = nil
+        adjustmentStartValue = nil
+        hideAdjustmentTask?.cancel()
+        hideAdjustmentTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeIn(duration: 0.16)) {
+                adjustmentIndicator = nil
+            }
+        }
+    }
+
+    private func toggleControls() {
+        withAnimation(.easeInOut(duration: 0.18)) {
+            controlsVisible.toggle()
+        }
+        if controlsVisible {
+            scheduleControlsAutoHide()
+        } else {
+            hideControlsTask?.cancel()
+        }
+    }
+
+    private func showControls() {
+        withAnimation(.easeInOut(duration: 0.18)) {
+            controlsVisible = true
+        }
+        hideControlsTask?.cancel()
+    }
+
+    private func showControlsAndScheduleHide() {
+        showControls()
+        scheduleControlsAutoHide()
+    }
+
+    private func scheduleControlsAutoHide() {
+        hideControlsTask?.cancel()
+        guard isPlaying, !isScrubbing, !didReachEnd else { return }
+        hideControlsTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: Self.controlsAutoHideDelay)
+            guard !Task.isCancelled, isPlaying, !isScrubbing, !didReachEnd else { return }
+            withAnimation(.easeInOut(duration: 0.2)) {
+                controlsVisible = false
+            }
+        }
+    }
+
+    private func clampedTime(_ value: Double) -> Double {
+        guard duration.isFinite, duration > 0 else { return max(value, 0) }
+        return min(max(value, 0), duration)
+    }
+}
+
+private struct VideoPlayerAdjustmentIndicatorState: Equatable {
+    let kind: VideoPlayerAdjustmentKind
+    let value: Double
+
+    var systemImage: String {
+        switch kind {
+        case .brightness:
+            return "sun.max.fill"
+        case .volume:
+            if value <= 0 {
+                return "speaker.slash.fill"
+            }
+            if value < 0.5 {
+                return "speaker.wave.1.fill"
+            }
+            return "speaker.wave.3.fill"
+        }
+    }
+
+    var percentageText: String {
+        "\(Int((value * 100).rounded()))%"
+    }
+}
+
+private struct VideoPlayerAdjustmentIndicator: View {
+    let state: VideoPlayerAdjustmentIndicatorState
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Image(systemName: state.systemImage)
+                .font(.system(size: 30, weight: .semibold))
+
+            Text(state.percentageText)
+                .font(.headline.monospacedDigit())
+        }
+        .foregroundStyle(.white)
+        .frame(width: 112, height: 104)
+        .background(.black.opacity(0.68))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(L.string(state.kind == .brightness ? "Brightness" : "Volume"))
+        .accessibilityValue(state.percentageText)
+    }
+}
+
+private struct PlayerLayerView: UIViewRepresentable {
+    let player: AVPlayer
+
+    func makeUIView(context: Context) -> PlayerLayerContainerView {
+        let view = PlayerLayerContainerView()
+        view.playerLayer.videoGravity = .resizeAspect
+        view.playerLayer.player = player
+        return view
+    }
+
+    func updateUIView(_ uiView: PlayerLayerContainerView, context: Context) {
+        uiView.playerLayer.player = player
+    }
+}
+
+private final class PlayerLayerContainerView: UIView {
+    override static var layerClass: AnyClass {
+        AVPlayerLayer.self
+    }
+
+    var playerLayer: AVPlayerLayer {
+        layer as! AVPlayerLayer
+    }
+}
+
+private struct VideoPlayerControlsOverlay: View {
+    let isPlaying: Bool
+    let didReachEnd: Bool
+    let currentTime: Double
+    let duration: Double
+    let isMuted: Bool
+    @Binding var scrubTime: Double
+    @Binding var isScrubbing: Bool
+    let playPauseAction: () -> Void
+    let backwardAction: () -> Void
+    let forwardAction: () -> Void
+    let scrubEditingChanged: (Bool) -> Void
+    let scrubChanged: (Double) -> Void
+    let muteAction: () -> Void
+    let interactionAction: () -> Void
+
+    private var displayedTime: Double {
+        isScrubbing ? scrubTime : currentTime
+    }
+
+    var body: some View {
+        VStack {
+            Spacer()
+
+            VStack(spacing: 8) {
+                VideoPlayerProgressControl(
+                    displayedTime: displayedTime,
+                    duration: duration,
+                    scrubTime: $scrubTime,
+                    scrubChanged: scrubChanged,
+                    scrubEditingChanged: scrubEditingChanged
+                )
+
+                HStack(spacing: 20) {
+                    controlButton(
+                        systemImage: "gobackward.10",
+                        accessibilityLabel: L.string("Back 10 Seconds"),
+                        action: backwardAction
+                    )
+
+                    controlButton(
+                        systemImage: didReachEnd ? "gobackward" : (isPlaying ? "pause.fill" : "play.fill"),
+                        accessibilityLabel: didReachEnd ? L.string("Replay") : L.string(isPlaying ? "Pause" : "Play"),
+                        action: playPauseAction
+                    )
+
+                    controlButton(
+                        systemImage: "goforward.10",
+                        accessibilityLabel: L.string("Forward 10 Seconds"),
+                        action: forwardAction
+                    )
+
+                    Spacer(minLength: 12)
+
+                    controlButton(
+                        systemImage: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill",
+                        accessibilityLabel: L.string(isMuted ? "Unmute" : "Mute"),
+                        action: muteAction
+                    )
+                }
+                .padding(.horizontal, 2)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(.black.opacity(0.62))
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .padding(.horizontal, 14)
+            .padding(.bottom, 34)
+        }
+    }
+
+    private func controlButton(systemImage: String, accessibilityLabel: String, action: @escaping () -> Void) -> some View {
+        Button {
+            interactionAction()
+            action()
+        } label: {
+            Image(systemName: systemImage)
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 34, height: 34)
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel(accessibilityLabel)
+    }
+}
+
+private struct VideoPlayerProgressControl: View {
+    let displayedTime: Double
+    let duration: Double
+    @Binding var scrubTime: Double
+    let scrubChanged: (Double) -> Void
+    let scrubEditingChanged: (Bool) -> Void
+
+    private var progressBinding: Binding<Double> {
+        Binding(
+            get: { displayedTime },
+            set: { value in
+                scrubTime = value
+                scrubChanged(value)
+            }
+        )
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text(VideoPlayerTimeFormatter.text(for: displayedTime))
+                .frame(width: 46, alignment: .trailing)
+
+            Slider(
+                value: progressBinding,
+                in: 0...max(duration, 1),
+                onEditingChanged: scrubEditingChanged
+            )
+            .tint(.white)
+            .accessibilityLabel(L.string("Playback Position"))
+
+            Text(VideoPlayerTimeFormatter.text(for: duration))
+                .foregroundStyle(.white.opacity(0.72))
+                .frame(width: 46, alignment: .leading)
+        }
+        .font(.caption.monospacedDigit())
+        .foregroundStyle(.white.opacity(0.86))
+        .frame(maxWidth: .infinity)
+        .frame(minHeight: 44)
+        .contentShape(Rectangle())
+    }
+}
+
+private enum VideoPlayerTimeFormatter {
+    static func text(for seconds: Double) -> String {
+        guard seconds.isFinite, seconds > 0 else { return "0:00" }
+        let total = Int(seconds.rounded())
+        let hours = total / 3600
+        let minutes = (total % 3600) / 60
+        let remainingSeconds = total % 60
+        if hours > 0 {
+            return "\(hours):\(String(format: "%02d", minutes)):\(String(format: "%02d", remainingSeconds))"
+        }
+        return "\(minutes):\(String(format: "%02d", remainingSeconds))"
     }
 }
 
@@ -3510,8 +5537,17 @@ extension VaultItemKind {
         self == .image || self == .livePhoto || self == .video
     }
 
+    nonisolated var isCategorySelectionItem: Bool {
+        switch self {
+        case .image, .livePhoto, .video, .audio, .document, .archive, .other:
+            true
+        case .link:
+            false
+        }
+    }
+
     var usesLongPressMediaPreview: Bool {
-        self == .image || self == .video
+        self == .image || self == .livePhoto || self == .video
     }
 
     var previewBadgeSystemImage: String? {
@@ -3535,8 +5571,7 @@ private extension VaultCategory {
 
     var previewTint: Color {
         switch self {
-        case .images: AppTheme.primary
-        case .videos: AppTheme.accent
+        case .album: AppTheme.primary
         case .audio: AppTheme.success
         case .documents: AppTheme.secondaryText
         case .links: AppTheme.warning

@@ -54,13 +54,13 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         switch self {
         case .system: L.string("Follow System")
         case .english: "English"
-        case .simplifiedChinese: "Chinese (Simplified)"
+        case .simplifiedChinese: "简体中文"
         case .traditionalChinese: "繁體中文"
-        case .japanese: "Japanese"
+        case .japanese: "日本語"
         case .german: "Deutsch"
-        case .french: "French"
-        case .korean: "Korean"
-        case .spanish: "Spanish"
+        case .french: "Français"
+        case .korean: "한국어"
+        case .spanish: "Español"
         }
     }
 

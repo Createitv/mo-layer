@@ -27,6 +27,21 @@ enum VaultSyncStatus: String, Codable, CaseIterable {
     case conflict
 }
 
+enum VaultRemoteMergePolicy {
+    static func shouldApplyRemote(
+        remoteUpdatedAt: Date,
+        remoteRevision: Int,
+        localUpdatedAt: Date,
+        localRevision: Int,
+        localSyncStatus: VaultSyncStatus
+    ) -> Bool {
+        guard localSyncStatus != .synced else { return true }
+        if remoteRevision > localRevision { return true }
+        if remoteRevision < localRevision { return false }
+        return remoteUpdatedAt >= localUpdatedAt
+    }
+}
+
 enum SecurityEventKind: String, Codable, CaseIterable {
     case unlocked
     case authFailed

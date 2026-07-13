@@ -1,10 +1,60 @@
 import Combine
+import AVFoundation
 import Foundation
 import Photos
 import PhotosUI
 import SwiftData
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
+
+enum SharedImportDestination: String, CaseIterable, Identifiable {
+    case regular
+    case innerVault
+
+    var id: String { rawValue }
+
+    var folderId: String? {
+        switch self {
+        case .regular:
+            nil
+        case .innerVault:
+            VaultStore.innerVaultFolderId
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .regular:
+            L.string("Regular Vault")
+        case .innerVault:
+            L.string("Mo Layer")
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .regular:
+            L.string("Save to the regular vault directory.")
+        case .innerVault:
+            L.string("Save to the Mo Layer directory.")
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .regular:
+            "lock"
+        case .innerVault:
+            "square.stack.3d.down.right"
+        }
+    }
+
+    static func from(_ rawValue: String?) -> SharedImportDestination {
+        guard let rawValue else { return .regular }
+        return SharedImportDestination(rawValue: rawValue) ?? .regular
+    }
+}
 
 enum ImportService {
     static let appGroupIdentifier = "group.app.landlady.www.privacy"
@@ -13,12 +63,14 @@ enum ImportService {
 
     struct PendingSharedImport: Identifiable, Equatable {
         let id: String
+        let batchId: String?
         let originalName: String
         let mimeType: String
         let typeIdentifier: String
         let byteSize: Int64
         let createdAt: Date
         let fileURL: URL
+        let destination: SharedImportDestination
     }
 
     private struct SharedImportManifest: Codable {
@@ -27,12 +79,14 @@ enum ImportService {
 
     private struct SharedImportManifestItem: Codable {
         var id: String
+        var batchId: String?
         var originalName: String
         var storedFileName: String
         var typeIdentifier: String
         var mimeType: String
         var byteSize: Int64
         var createdAt: Date
+        var destinationRawValue: String?
     }
 
     @MainActor
@@ -44,13 +98,30 @@ enum ImportService {
         sync: CloudKitSyncService,
         folderId: String? = nil,
         syncAfterImport: Bool = true,
-        progress: ((Bool) -> Void)? = nil
+        progress: ((VaultImportProgressEvent) -> Void)? = nil
     ) async -> ImportSummary {
         var summary = ImportSummary()
-        for item in items {
+        for (index, item) in items.enumerated() {
+            guard !Task.isCancelled else { break }
+            let contentType = item.supportedContentTypes.first
+            progress?(.currentItem(VaultImportProgressItem(
+                displayName: L.format("Photo %d", index + 1),
+                kind: contentType?.conforms(to: UTType.movie) == true ? .video : .image,
+                phaseText: L.string("Loading current file"),
+                progress: 0.12,
+                thumbnailData: nil
+            )))
+
             if let livePhotoImport = await livePhotoImport(from: item),
                let packageData = try? binaryPropertyListEncoder.encode(livePhotoImport.package) {
-                let success = await vaultStore.importData(
+                progress?(.currentItem(VaultImportProgressItem(
+                    displayName: livePhotoImport.originalName,
+                    kind: .livePhoto,
+                    phaseText: L.string("Encrypting current file"),
+                    progress: 0.56,
+                    thumbnailData: renderPreviewThumbnailData(from: livePhotoImport.package.stillData)
+                )))
+                let result = await vaultStore.importData(
                     packageData,
                     originalName: livePhotoImport.originalName,
                     mimeType: "application/vnd.apple.live-photo",
@@ -59,22 +130,30 @@ enum ImportService {
                     context: context,
                     sync: sync,
                     folderId: folderId,
-                    syncAfterImport: syncAfterImport
+                    syncAfterImport: syncAfterImport,
+                    saveImmediately: false
                 )
-                success ? summary.record(.livePhoto) : summary.recordFailure()
-                progress?(success)
+                summary.record(result, kind: .livePhoto)
+                saveBatchIfNeeded(summary: summary, context: context)
+                progress?(.completed(result))
                 continue
             }
 
             guard let data = try? await item.loadTransferable(type: Data.self) else {
                 summary.recordFailure()
-                progress?(false)
+                progress?(.completed(.failed))
                 continue
             }
-            let contentType = item.supportedContentTypes.first
             let kind: VaultItemKind = contentType?.conforms(to: UTType.movie) == true ? .video : .image
             let name = "Photo-\(Date().timeIntervalSince1970).\(contentType?.preferredFilenameExtension ?? "dat")"
-            let success = await vaultStore.importData(
+            progress?(.currentItem(VaultImportProgressItem(
+                displayName: name,
+                kind: kind,
+                phaseText: L.string("Encrypting current file"),
+                progress: 0.56,
+                thumbnailData: await previewThumbnailData(from: data, kind: kind, preferredExtension: contentType?.preferredFilenameExtension)
+            )))
+            let result = await vaultStore.importData(
                 data,
                 originalName: name,
                 mimeType: contentType?.preferredMIMEType ?? "application/octet-stream",
@@ -83,15 +162,14 @@ enum ImportService {
                 context: context,
                 sync: sync,
                 folderId: folderId,
-                syncAfterImport: syncAfterImport
+                syncAfterImport: syncAfterImport,
+                saveImmediately: false
             )
-            if success {
-                summary.record(kind)
-            } else {
-                summary.recordFailure()
-            }
-            progress?(success)
+            summary.record(result, kind: kind)
+            saveBatchIfNeeded(summary: summary, context: context)
+            progress?(.completed(result))
         }
+        try? context.save()
         return summary
     }
 
@@ -166,9 +244,10 @@ enum ImportService {
         sync: CloudKitSyncService,
         source: String = "Files",
         folderId: String? = nil,
-        syncAfterImport: Bool = true
-    ) async -> Bool {
-        guard let data = await loadFileData(from: url) else { return false }
+        syncAfterImport: Bool = true,
+        saveImmediately: Bool = true
+    ) async -> VaultImportResult {
+        guard let data = await loadFileData(from: url) else { return .failed }
         let type = UTType(filenameExtension: url.pathExtension)
         return await vaultStore.importData(
             data,
@@ -179,7 +258,8 @@ enum ImportService {
             context: context,
             sync: sync,
             folderId: folderId,
-            syncAfterImport: syncAfterImport
+            syncAfterImport: syncAfterImport,
+            saveImmediately: saveImmediately
         )
     }
 
@@ -192,28 +272,35 @@ enum ImportService {
         source: String = "Files",
         folderId: String? = nil,
         syncAfterImport: Bool = true,
-        progress: ((Bool) -> Void)? = nil
+        progress: ((VaultImportProgressEvent) -> Void)? = nil
     ) async -> ImportSummary {
         var summary = ImportSummary()
         for url in urls {
+            guard !Task.isCancelled else { break }
             let type = UTType(filenameExtension: url.pathExtension)
             let kind = kind(for: type, fileExtension: url.pathExtension)
-            let success = await importFile(
+            progress?(.currentItem(VaultImportProgressItem(
+                displayName: url.lastPathComponent,
+                kind: kind,
+                phaseText: L.string("Loading current file"),
+                progress: 0.12,
+                thumbnailData: await previewThumbnailData(from: url, kind: kind)
+            )))
+            let result = await importFile(
                 url: url,
                 context: context,
                 vaultStore: vaultStore,
                 sync: sync,
                 source: source,
                 folderId: folderId,
-                syncAfterImport: syncAfterImport
+                syncAfterImport: syncAfterImport,
+                saveImmediately: false
             )
-            if success {
-                summary.record(kind)
-            } else {
-                summary.recordFailure()
-            }
-            progress?(success)
+            summary.record(result, kind: kind)
+            saveBatchIfNeeded(summary: summary, context: context)
+            progress?(.completed(result))
         }
+        try? context.save()
         return summary
     }
 
@@ -255,48 +342,56 @@ enum ImportService {
     }
 
     @MainActor
-    static func pendingSharedImports() -> [PendingSharedImport] {
+    static func pendingSharedImports(batchId: String? = nil) -> [PendingSharedImport] {
         guard let directory = sharedInboxDirectory() else { return [] }
+        let imports: [PendingSharedImport]
         if let manifest = readManifest(in: directory) {
-            return manifest.items.compactMap { item in
+            imports = manifest.items.compactMap { item in
                 let fileURL = directory.appendingPathComponent(item.storedFileName)
                 guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
                 return PendingSharedImport(
                     id: item.id,
+                    batchId: item.batchId,
                     originalName: item.originalName,
                     mimeType: item.mimeType,
                     typeIdentifier: item.typeIdentifier,
                     byteSize: item.byteSize,
                     createdAt: item.createdAt,
-                    fileURL: fileURL
+                    fileURL: fileURL,
+                    destination: SharedImportDestination.from(item.destinationRawValue)
                 )
             }
             .sorted { $0.createdAt < $1.createdAt }
-        }
-
-        guard let urls = try? FileManager.default.contentsOfDirectory(
-            at: directory,
-            includingPropertiesForKeys: nil
-        ) else {
-            return []
-        }
-
-        return urls
-            .filter { $0.lastPathComponent != sharedImportManifestName && $0.pathExtension != "urlimport" }
-            .compactMap { url in
-                let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentTypeKey, .creationDateKey])
-                let type = values?.contentType ?? UTType(filenameExtension: url.pathExtension) ?? .data
-                return PendingSharedImport(
-                    id: url.lastPathComponent,
-                    originalName: url.lastPathComponent,
-                    mimeType: type.preferredMIMEType ?? "application/octet-stream",
-                    typeIdentifier: type.identifier,
-                    byteSize: Int64(values?.fileSize ?? 0),
-                    createdAt: values?.creationDate ?? Date(),
-                    fileURL: url
-                )
+        } else {
+            guard let urls = try? FileManager.default.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: nil
+            ) else {
+                return []
             }
-            .sorted { $0.createdAt < $1.createdAt }
+
+            imports = urls
+                .filter { $0.lastPathComponent != sharedImportManifestName && $0.pathExtension != "urlimport" }
+                .compactMap { url in
+                    let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentTypeKey, .creationDateKey])
+                    let type = values?.contentType ?? UTType(filenameExtension: url.pathExtension) ?? .data
+                    return PendingSharedImport(
+                        id: url.lastPathComponent,
+                        batchId: nil,
+                        originalName: url.lastPathComponent,
+                        mimeType: type.preferredMIMEType ?? "application/octet-stream",
+                        typeIdentifier: type.identifier,
+                        byteSize: Int64(values?.fileSize ?? 0),
+                        createdAt: values?.creationDate ?? Date(),
+                        fileURL: url,
+                        destination: .regular
+                    )
+                }
+                .sorted { $0.createdAt < $1.createdAt }
+        }
+
+        guard let batchId else { return imports }
+        return imports.filter { $0.batchId == batchId }
     }
 
     @MainActor
@@ -305,41 +400,76 @@ enum ImportService {
         vaultStore: VaultStore,
         sync: CloudKitSyncService
     ) async -> ImportSummary {
-        let pending = pendingSharedImports()
+        await importPendingSharedImports(
+            pendingSharedImports(),
+            context: context,
+            vaultStore: vaultStore,
+            sync: sync
+        )
+    }
+
+    @MainActor
+    static func importPendingSharedImports(
+        _ pending: [PendingSharedImport],
+        context: ModelContext,
+        vaultStore: VaultStore,
+        sync: CloudKitSyncService,
+        folderId: String? = nil,
+        syncAfterImport: Bool = true,
+        progress: ((VaultImportProgressEvent) -> Void)? = nil
+    ) async -> ImportSummary {
         var summary = ImportSummary()
         var failedItems: [PendingSharedImport] = []
 
         for item in pending {
+            guard !Task.isCancelled else { break }
             let type = UTType(item.typeIdentifier) ?? UTType(filenameExtension: item.fileURL.pathExtension)
             let kind = kind(for: type, fileExtension: item.fileURL.pathExtension)
-            let success = await importFile(
+            progress?(.currentItem(VaultImportProgressItem(
+                displayName: item.originalName,
+                kind: kind,
+                phaseText: L.string("Loading current file"),
+                progress: 0.12,
+                thumbnailData: await previewThumbnailData(from: item.fileURL, kind: kind)
+            )))
+            let result = await importFile(
                 url: item.fileURL,
                 context: context,
                 vaultStore: vaultStore,
                 sync: sync,
-                source: "Share Extension"
+                source: "Share Extension",
+                folderId: folderId,
+                syncAfterImport: syncAfterImport,
+                saveImmediately: false
             )
-            if success {
-                summary.record(kind)
+            summary.record(result, kind: kind)
+            if result != .failed {
                 try? FileManager.default.removeItem(at: item.fileURL)
             } else {
-                summary.recordFailure()
                 failedItems.append(item)
             }
+            saveBatchIfNeeded(summary: summary, context: context)
+            progress?(.completed(result))
         }
 
-        rewriteManifest(for: failedItems)
+        try? context.save()
+        rewriteManifestAfterImport(processed: pending, failed: failedItems)
         return summary
     }
 
     @MainActor
     static func stageFileForReview(url: URL) -> Bool {
-        guard let directory = sharedInboxDirectory() else { return false }
+        stageFileForReview(url: url, batchId: nil) != nil
+    }
+
+    @MainActor
+    static func stageFileForReview(url: URL, batchId: String?) -> PendingSharedImport? {
+        guard let directory = sharedInboxDirectory() else { return nil }
         let didAccess = url.startAccessingSecurityScopedResource()
         defer {
             if didAccess { url.stopAccessingSecurityScopedResource() }
         }
-        guard FileManager.default.fileExists(atPath: url.path) else { return false }
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
 
         let originalName = sanitizedFileName(url.lastPathComponent.isEmpty ? "\(UUID().uuidString).dat" : url.lastPathComponent)
         let storedFileName = "\(UUID().uuidString)-\(originalName)"
@@ -351,21 +481,31 @@ enum ImportService {
             try? FileManager.default.setAttributes([.protectionKey: FileProtectionType.complete], ofItemAtPath: destination.path)
             let values = try? destination.resourceValues(forKeys: [.fileSizeKey, .contentTypeKey])
             let type = values?.contentType ?? UTType(filenameExtension: destination.pathExtension) ?? .data
-            appendManifestItem(
-                SharedImportManifestItem(
-                    id: UUID().uuidString,
-                    originalName: originalName,
-                    storedFileName: storedFileName,
-                    typeIdentifier: type.identifier,
-                    mimeType: type.preferredMIMEType ?? "application/octet-stream",
-                    byteSize: Int64(values?.fileSize ?? 0),
-                    createdAt: Date()
-                ),
-                in: directory
+            let item = SharedImportManifestItem(
+                id: UUID().uuidString,
+                batchId: batchId,
+                originalName: originalName,
+                storedFileName: storedFileName,
+                typeIdentifier: type.identifier,
+                mimeType: type.preferredMIMEType ?? "application/octet-stream",
+                byteSize: Int64(values?.fileSize ?? 0),
+                createdAt: Date(),
+                destinationRawValue: SharedImportDestination.regular.rawValue
             )
-            return true
+            appendManifestItem(item, in: directory)
+            return PendingSharedImport(
+                id: item.id,
+                batchId: item.batchId,
+                originalName: item.originalName,
+                mimeType: item.mimeType,
+                typeIdentifier: item.typeIdentifier,
+                byteSize: item.byteSize,
+                createdAt: item.createdAt,
+                fileURL: destination,
+                destination: SharedImportDestination.from(item.destinationRawValue)
+            )
         } catch {
-            return false
+            return nil
         }
     }
 
@@ -373,6 +513,26 @@ enum ImportService {
         guard let directory = sharedInboxDirectory() else { return }
         try? FileManager.default.removeItem(at: directory)
         _ = sharedInboxDirectory()
+    }
+
+    static func discardSharedImports(_ imports: [PendingSharedImport]) {
+        guard !imports.isEmpty else { return }
+        guard let directory = sharedInboxDirectory() else { return }
+        let discardedIds = Set(imports.map(\.id))
+        for item in imports {
+            try? FileManager.default.removeItem(at: item.fileURL)
+        }
+
+        let remainingItems = readManifest(in: directory)?.items.filter { !discardedIds.contains($0.id) } ?? []
+        guard !remainingItems.isEmpty else {
+            try? FileManager.default.removeItem(at: directory.appendingPathComponent(sharedImportManifestName))
+            return
+        }
+
+        let manifest = SharedImportManifest(items: remainingItems)
+        if let data = try? JSONEncoder().encode(manifest) {
+            try? data.write(to: directory.appendingPathComponent(sharedImportManifestName), options: .atomic)
+        }
     }
 
     static func sharedInboxDirectory() -> URL? {
@@ -405,6 +565,96 @@ enum ImportService {
         return .other
     }
 
+    private static func previewThumbnailData(from url: URL, kind: VaultItemKind) async -> Data? {
+        switch kind {
+        case .image:
+            guard let data = try? Data(contentsOf: url) else { return nil }
+            return renderPreviewThumbnailData(from: data)
+        case .video:
+            return await videoPreviewThumbnailData(from: url)
+        default:
+            return nil
+        }
+    }
+
+    private static func previewThumbnailData(from data: Data, kind: VaultItemKind, preferredExtension: String?) async -> Data? {
+        switch kind {
+        case .image:
+            return renderPreviewThumbnailData(from: data)
+        case .video:
+            let temporaryURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString)
+                .appendingPathExtension(preferredExtension?.isEmpty == false ? preferredExtension! : "mov")
+            do {
+                try data.write(to: temporaryURL, options: .atomic)
+                defer { try? FileManager.default.removeItem(at: temporaryURL) }
+                return await videoPreviewThumbnailData(from: temporaryURL)
+            } catch {
+                return nil
+            }
+        default:
+            return nil
+        }
+    }
+
+    private static func renderPreviewThumbnailData(from data: Data) -> Data? {
+        guard let image = UIImage(data: data) else { return nil }
+        return renderPreviewThumbnailData(from: image)
+    }
+
+    private static func renderPreviewThumbnailData(from image: UIImage) -> Data? {
+        let targetSize = CGSize(width: 160, height: 160)
+        let renderer = UIGraphicsImageRenderer(size: targetSize)
+        return renderer.jpegData(withCompressionQuality: 0.68) { _ in
+            let scale = max(targetSize.width / image.size.width, targetSize.height / image.size.height)
+            let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+            let origin = CGPoint(x: (targetSize.width - size.width) / 2, y: (targetSize.height - size.height) / 2)
+            image.draw(in: CGRect(origin: origin, size: size))
+        }
+    }
+
+    private static func videoPreviewThumbnailData(from url: URL) async -> Data? {
+        let asset = AVURLAsset(url: url)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: 320, height: 320)
+        generator.requestedTimeToleranceBefore = .positiveInfinity
+        generator.requestedTimeToleranceAfter = .positiveInfinity
+
+        for time in videoPreviewThumbnailTimes {
+            let thumbnailData: Data? = await withCheckedContinuation { continuation in
+                generator.generateCGImageAsynchronously(for: time) { image, _, _ in
+                    guard let image else {
+                        continuation.resume(returning: nil)
+                        return
+                    }
+                    continuation.resume(returning: renderPreviewThumbnailData(from: UIImage(cgImage: image)))
+                }
+            }
+            if let data = thumbnailData {
+                return data
+            }
+        }
+
+        return nil
+    }
+
+    private static var videoPreviewThumbnailTimes: [CMTime] {
+        [
+            CMTime(seconds: 0, preferredTimescale: 600),
+            CMTime(seconds: 0.1, preferredTimescale: 600),
+            CMTime(seconds: 0.5, preferredTimescale: 600),
+            CMTime(seconds: 1, preferredTimescale: 600)
+        ]
+    }
+
+    @MainActor
+    private static func saveBatchIfNeeded(summary: ImportSummary, context: ModelContext) {
+        if VaultImportBatchPolicy.shouldSave(afterImportedCount: summary.importedCount) {
+            try? context.save()
+        }
+    }
+
     private static func readManifest(in directory: URL) -> SharedImportManifest? {
         let url = directory.appendingPathComponent(sharedImportManifestName)
         guard let data = try? Data(contentsOf: url) else { return nil }
@@ -422,17 +672,37 @@ enum ImportService {
             items: imports.map {
                 SharedImportManifestItem(
                     id: $0.id,
+                    batchId: $0.batchId,
                     originalName: $0.originalName,
                     storedFileName: $0.fileURL.lastPathComponent,
                     typeIdentifier: $0.typeIdentifier,
                     mimeType: $0.mimeType,
                     byteSize: $0.byteSize,
-                    createdAt: $0.createdAt
+                    createdAt: $0.createdAt,
+                    destinationRawValue: $0.destination.rawValue
                 )
             }
         )
         if let data = try? JSONEncoder().encode(manifest) {
             try? data.write(to: url, options: .atomic)
+        }
+    }
+
+    private static func rewriteManifestAfterImport(processed: [PendingSharedImport], failed: [PendingSharedImport]) {
+        guard let directory = sharedInboxDirectory() else { return }
+        let processedIds = Set(processed.map(\.id))
+        let failedIds = Set(failed.map(\.id))
+        let existingItems = readManifest(in: directory)?.items ?? []
+        let remainingItems = existingItems.filter { item in
+            !processedIds.contains(item.id) || failedIds.contains(item.id)
+        }
+        guard !remainingItems.isEmpty else {
+            try? FileManager.default.removeItem(at: directory.appendingPathComponent(sharedImportManifestName))
+            return
+        }
+        let manifest = SharedImportManifest(items: remainingItems)
+        if let data = try? JSONEncoder().encode(manifest) {
+            try? data.write(to: directory.appendingPathComponent(sharedImportManifestName), options: .atomic)
         }
     }
 
@@ -461,9 +731,20 @@ final class VaultImportQueue: ObservableObject {
 
     @Published private(set) var progress: VaultImportProgress?
     private var autoDismissTask: Task<Void, Never>?
+    private var importTask: Task<Void, Never>?
 
     var isImporting: Bool {
         progress?.isActive == true
+    }
+
+    func cancelImport() {
+        importTask?.cancel()
+        importTask = nil
+        if var current = progress {
+            current.finish()
+            progress = current
+        }
+        scheduleAutoDismissIfNeeded()
     }
 
     func importFiles(
@@ -473,13 +754,15 @@ final class VaultImportQueue: ObservableObject {
         sync: CloudKitSyncService,
         source: String = "Files",
         folderId: String? = nil,
+        syncAfterImportCompletion: Bool = true,
         onComplete: @escaping (ImportSummary) -> Void
     ) {
         guard !urls.isEmpty, !isImporting else { return }
         autoDismissTask?.cancel()
+        importTask?.cancel()
         progress = VaultImportProgress(totalCount: urls.count)
 
-        Task { @MainActor in
+        importTask = Task { @MainActor in
             let summary = await ImportService.importFiles(
                 urls: urls,
                 context: context,
@@ -488,11 +771,12 @@ final class VaultImportQueue: ObservableObject {
                 source: source,
                 folderId: folderId,
                 syncAfterImport: false,
-                progress: { [weak self] success in
-                    self?.recordProgress(success: success)
+                progress: { [weak self] event in
+                    self?.recordProgress(event)
                 }
             )
-            finishImport(summary: summary, context: context, vaultStore: vaultStore, sync: sync, onComplete: onComplete)
+            guard !Task.isCancelled else { return }
+            finishImport(summary: summary, context: context, vaultStore: vaultStore, sync: sync, syncAfterImportCompletion: syncAfterImportCompletion, onComplete: onComplete)
         }
     }
 
@@ -502,13 +786,15 @@ final class VaultImportQueue: ObservableObject {
         vaultStore: VaultStore,
         sync: CloudKitSyncService,
         folderId: String? = nil,
+        syncAfterImportCompletion: Bool = true,
         onComplete: @escaping (ImportSummary) -> Void
     ) {
         guard !items.isEmpty, !isImporting else { return }
         autoDismissTask?.cancel()
+        importTask?.cancel()
         progress = VaultImportProgress(totalCount: items.count)
 
-        Task { @MainActor in
+        importTask = Task { @MainActor in
             let summary = await ImportService.importPickerItems(
                 items,
                 context: context,
@@ -516,20 +802,22 @@ final class VaultImportQueue: ObservableObject {
                 sync: sync,
                 folderId: folderId,
                 syncAfterImport: false,
-                progress: { [weak self] success in
-                    self?.recordProgress(success: success)
+                progress: { [weak self] event in
+                    self?.recordProgress(event)
                 }
             )
-            finishImport(summary: summary, context: context, vaultStore: vaultStore, sync: sync, onComplete: onComplete)
+            guard !Task.isCancelled else { return }
+            finishImport(summary: summary, context: context, vaultStore: vaultStore, sync: sync, syncAfterImportCompletion: syncAfterImportCompletion, onComplete: onComplete)
         }
     }
 
-    private func recordProgress(success: Bool) {
+    private func recordProgress(_ event: VaultImportProgressEvent) {
         guard var current = progress else { return }
-        if success {
-            current.recordImported()
-        } else {
-            current.recordFailure()
+        switch event {
+        case .currentItem(let item):
+            current.updateCurrentItem(item)
+        case .completed(let result):
+            current.record(result)
         }
         progress = current
     }
@@ -539,14 +827,17 @@ final class VaultImportQueue: ObservableObject {
         context: ModelContext,
         vaultStore: VaultStore,
         sync: CloudKitSyncService,
+        syncAfterImportCompletion: Bool,
         onComplete: @escaping (ImportSummary) -> Void
     ) {
         if var current = progress {
             current.finish()
             progress = current
         }
+        importTask = nil
         scheduleAutoDismissIfNeeded()
         onComplete(summary)
+        guard syncAfterImportCompletion else { return }
         Task { @MainActor in
             await vaultStore.syncPendingChanges(context: context, sync: sync)
         }
