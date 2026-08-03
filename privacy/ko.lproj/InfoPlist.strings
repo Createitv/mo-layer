@@ -4,3 +4,4 @@
 "NSPhotoLibraryAddUsageDescription" = "내보내기를 선택할 때 콘텐츠를 사진 보관함에 저장하는 데 사용됩니다.";
 "NSPhotoLibraryUsageDescription" = "암호화하여 개인 보관함으로 가져올 사진과 비디오를 선택하는 데 사용됩니다.";
 "NSFaceIDUsageDescription" = "개인 제스처로 암호화된 보관함을 열기 전 첫 번째 잠금 해제 단계로 사용됩니다.";
+"NSMicrophoneUsageDescription" = "암호화된 보관함에 직접 저장하는 음성 메모와 비디오 오디오를 녹음하는 데 사용됩니다.";

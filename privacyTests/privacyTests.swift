@@ -190,6 +190,19 @@ struct privacyTests {
         VaultFileStore.remove(path: storedPath)
     }
 
+    @Test func vaultFileStoreKeepsResolvedPathsInsideVaultDirectory() {
+        let vaultPath = VaultFileStore.vaultDirectory.standardizedFileURL.path
+        let traversalURL = VaultFileStore.assetURL(for: "../outside.enc").standardizedFileURL
+        let absoluteOutsideURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("outside-\(UUID().uuidString).enc")
+        let resolvedAbsoluteURL = VaultFileStore.assetURL(for: absoluteOutsideURL.path).standardizedFileURL
+
+        #expect(traversalURL.path.hasPrefix(vaultPath + "/"))
+        #expect(traversalURL.lastPathComponent == "outside.enc")
+        #expect(resolvedAbsoluteURL.path.hasPrefix(vaultPath + "/"))
+        #expect(resolvedAbsoluteURL.lastPathComponent == absoluteOutsideURL.lastPathComponent)
+    }
+
     @Test func encryptedVaultFilesUseCloudSyncFriendlyProtection() throws {
         let itemId = "cloud-protection-\(UUID().uuidString)"
         let objectPath = try VaultFileStore.writeEncryptedObject(Data("encrypted object".utf8), itemId: itemId)
@@ -215,6 +228,14 @@ struct privacyTests {
         if let thumbProtection {
             #expect(thumbProtection == .completeUntilFirstUserAuthentication)
         }
+    }
+
+    @Test func privateBrowserSanitizesDownloadFilenames() {
+        #expect(BrowserViewModel.sanitizedDownloadFilename("../../Vault/default.store") == "default.store")
+        #expect(BrowserViewModel.sanitizedDownloadFilename("folder/report.pdf") == "report.pdf")
+        #expect(BrowserViewModel.sanitizedDownloadFilename("invoice:2026.pdf") == "invoice-2026.pdf")
+        #expect(BrowserViewModel.sanitizedDownloadFilename("  .hidden  ") == "hidden")
+        #expect(BrowserViewModel.sanitizedDownloadFilename("   ").hasSuffix(".download"))
     }
 
     @Test func gestureEnrollmentAcceptsSameRouteWithScaleOffsetAndTimingChanges() throws {
@@ -720,6 +741,22 @@ struct privacyTests {
         #expect(!VaultCloudAssetDownloadPolicy.shouldDownload(link))
         #expect(VaultCloudAssetDownloadPolicy.shouldDownload(localMissingFile))
         #expect(!VaultCloudAssetDownloadPolicy.shouldDownload(localExistingFile))
+    }
+
+    @Test func cloudAssetDownloadPolicySelectsVisualItemsWithMissingLocalPreview() throws {
+        let image = VaultItem(kind: .image, encryptedMetadata: Data(), byteSize: 4, assetState: .local)
+        let video = VaultItem(kind: .video, encryptedMetadata: Data(), byteSize: 4, assetState: .local)
+        let audio = VaultItem(kind: .audio, encryptedMetadata: Data(), byteSize: 4, assetState: .local)
+        let thumbPath = try VaultFileStore.writeEncryptedThumb(Data("encrypted-thumb".utf8), itemId: "preview-policy-\(UUID().uuidString)")
+        defer { VaultFileStore.remove(path: thumbPath) }
+        video.encryptedThumbPath = thumbPath
+
+        #expect(VaultCloudAssetDownloadPolicy.needsLocalPreview(image))
+        #expect(!VaultCloudAssetDownloadPolicy.needsLocalPreview(video))
+        #expect(!VaultCloudAssetDownloadPolicy.needsLocalPreview(audio))
+
+        VaultFileStore.remove(path: thumbPath)
+        #expect(VaultCloudAssetDownloadPolicy.needsLocalPreview(video))
     }
 
     @Test func remoteMergePolicyKeepsPendingLocalDeleteOverOlderRemoteRecord() throws {

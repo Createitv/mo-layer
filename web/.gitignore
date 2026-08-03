@@ -1,6 +1,12 @@
 node_modules/
 dist/
 .astro/
-lighthouse/
-*.png
-!public/**/*.png
+.wrangler/
+
+.env
+.env.*
+!.env.example
+
+*.log
+landing-check.png
+landing-mobile-check.png

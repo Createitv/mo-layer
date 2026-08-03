@@ -31,6 +31,11 @@ const info = localeInfo(locale);
 const canonical = canonicalUrl(site, locale, path);
 const hreflangLinks = customHreflangLinks ?? buildHreflangLinks(site, path);
 const imageUrl = new URL(image, site).toString();
+const legalLocale = locale === 'zh-Hans' || locale === 'zh-Hant' ? 'zh-Hans' : 'en-US';
+const legalLabels =
+  legalLocale === 'zh-Hans'
+    ? { terms: '服务协议', privacy: '隐私政策' }
+    : { terms: 'Terms of Service', privacy: 'Privacy Policy' };
 const author = {
   name: '林逍遥',
   url: 'https://lingxiaoyao.cn',
@@ -99,6 +104,10 @@ const author = {
             <a href={`/${locale}/content/`}>{copy.nav.content}</a>
             ·
             <a href={`/${locale}/feedback/`}>{copy.nav.feedback}</a>
+            ·
+            <a href={`/${legalLocale}/content/terms-of-service/`}>{legalLabels.terms}</a>
+            ·
+            <a href={`/${legalLocale}/content/privacy-policy/`}>{legalLabels.privacy}</a>
             ·
             <a href="/llms.txt">llms.txt</a>
           </p>

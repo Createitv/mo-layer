@@ -2,5 +2,6 @@
 "CFBundleTypeName" = "Encrypted Vault File";
 "NSCameraUsageDescription" = "Used to capture photos directly into the encrypted vault and, if you enable intrusion capture, record failed unlock attempts.";
 "NSFaceIDUsageDescription" = "Used as the first unlock layer before your private gesture can open the encrypted vault.";
+"NSMicrophoneUsageDescription" = "Used to record audio for voice memos and videos you save directly into the encrypted vault.";
 "NSPhotoLibraryAddUsageDescription" = "Used to save exported content back to your photo library when you choose to export.";
 "NSPhotoLibraryUsageDescription" = "Used to select photos and videos that you choose to encrypt and import into your private vault.";

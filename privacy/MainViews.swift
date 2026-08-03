@@ -710,6 +710,7 @@ struct VaultHomeView: View {
     @State private var showQuickRecorder = false
     @State private var showMembership = false
     @State private var selectedCategory: VaultCategory = .album
+    @State private var albumMediaFilter: AlbumMediaFilter = .all
     @State private var importSummary: ImportSummary?
     @State private var selectionMode = false
     @State private var selectedItemIds: Set<String> = []
@@ -739,7 +740,15 @@ struct VaultHomeView: View {
         selectedCategory.items(from: spaceItems)
     }
     private var visibleItems: [VaultItem] {
-        categoryItems
+        guard selectedCategory == .album else { return categoryItems }
+        return albumMediaFilter.items(from: categoryItems)
+    }
+    private var mediaPreviewRepairKey: String {
+        guard selectedCategory == .album else { return "" }
+        return visibleItems
+            .filter { vaultStore.needsMediaPreviewRepair($0) }
+            .map(\.id)
+            .joined(separator: ",")
     }
     private var selectableVisibleItems: [VaultItem] {
         VaultSelectionPolicy.selectableItems(in: visibleItems, category: selectedCategory)
@@ -826,6 +835,7 @@ struct VaultHomeView: View {
                         vaultStore: vaultStore,
                         sync: sync,
                         source: "Quick Camera",
+                        folderId: importDestinationFolderId,
                         syncAfterImport: subscription.canImportAndSync
                     )
                     if subscription.canImportAndSync {
@@ -934,6 +944,11 @@ struct VaultHomeView: View {
                 bottomInsetContent
             }
             .toolbar(.hidden, for: .navigationBar)
+            .overlay(alignment: .bottomTrailing) {
+                albumFilterButton
+                    .padding(.trailing, 18)
+                    .padding(.bottom, 74)
+            }
             .overlay {
                 if let peekItem {
                     VaultPeekPreviewOverlay(item: peekItem)
@@ -962,6 +977,11 @@ struct VaultHomeView: View {
             .safeAreaInset(edge: .bottom) {
                 bottomInsetContent
             }
+            .overlay(alignment: .bottomTrailing) {
+                albumFilterButton
+                    .padding(.trailing, 20)
+                    .padding(.bottom, 72)
+            }
             .navigationTitle(selectedCategory.title)
             .toolbar {
                 splitToolbar
@@ -984,6 +1004,7 @@ struct VaultHomeView: View {
                 selectedCategory: $selectedCategory,
                 isInnerVaultActive: isInnerVaultActive,
                 profileAction: { showProfileCenter = true },
+                cameraAction: openQuickCamera,
                 importAction: openImportHub,
                 toggleInnerVaultAction: toggleInnerVault,
                 onTouchZoneFrameChange: { frame in
@@ -1087,6 +1108,12 @@ struct VaultHomeView: View {
             }
             .keyboardShortcut("i", modifiers: .command)
 
+            Button(action: openQuickCamera) {
+                Label(L.string("Take Photo or Video"), systemImage: "camera.viewfinder")
+            }
+            .keyboardShortcut("c", modifiers: .command)
+            .disabled(!PlatformCapabilities.supportsCameraCapture)
+
             if subscription.canImportAndSync, !selectableVisibleItems.isEmpty {
                 Button(action: selectAllVisibleItems) {
                     Label(L.string("Select All"), systemImage: "checkmark.circle")
@@ -1128,25 +1155,85 @@ struct VaultHomeView: View {
         }
     }
 
+    @ViewBuilder
     private var mediaGridContent: some View {
-        ZoomableMediaGrid(
-            items: visibleItems,
-            scale: mediaGridScaleBinding
-        ) { item in
-            mediaGridTile(for: item)
+        if selectedCategory == .album {
+            AlbumZoomableMediaGrid(
+                items: visibleItems,
+                scale: mediaGridScaleBinding,
+                isSelectionMode: selectionMode,
+                selectedItemIds: selectedItemIds,
+                thumbnailProvider: { vaultStore.thumbnail(for: $0) },
+                openAction: { open($0, in: visibleItems) },
+                toggleSelectionAction: toggleSelection,
+                enterSelectionAction: enterSelectionMode
+            )
+            .frame(maxWidth: .infinity, minHeight: MediaGridLayout.interactionMinHeight)
+            .task(id: mediaPreviewRepairKey) {
+                await repairVisibleMediaPreviewsIfNeeded()
+            }
+        } else {
+            ZoomableMediaGrid(
+                items: visibleItems,
+                scale: mediaGridScaleBinding
+            ) { item in
+                mediaGridTile(for: item)
+            }
+            .onPreferenceChange(MediaGridItemFramePreferenceKey.self) { frames in
+                mediaGridItemFrames = frames
+            }
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 0, coordinateSpace: .named(MediaGridLayout.coordinateSpaceName))
+                    .onChanged { value in
+                        handleSweepSelectionDrag(location: value.location, itemFrames: mediaGridItemFrames)
+                    }
+                    .onEnded { _ in
+                        endSweepSelection()
+                    }
+            )
         }
-        .onPreferenceChange(MediaGridItemFramePreferenceKey.self) { frames in
-            mediaGridItemFrames = frames
-        }
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 0, coordinateSpace: .named(MediaGridLayout.coordinateSpaceName))
-                .onChanged { value in
-                    handleSweepSelectionDrag(location: value.location, itemFrames: mediaGridItemFrames)
-                }
-                .onEnded { _ in
-                    endSweepSelection()
-                }
+    }
+
+    @MainActor
+    private func repairVisibleMediaPreviewsIfNeeded() async {
+        guard !mediaPreviewRepairKey.isEmpty else { return }
+        await vaultStore.ensureMediaPreviews(
+            for: visibleItems,
+            context: modelContext,
+            sync: sync,
+            syncAfterRepair: subscription.canImportAndSync
         )
+        if subscription.canImportAndSync {
+            await vaultStore.syncPendingChanges(context: modelContext, sync: sync)
+        }
+    }
+
+    @ViewBuilder
+    private var albumFilterButton: some View {
+        if selectedCategory == .album {
+            Menu {
+                ForEach(AlbumMediaFilter.allCases) { filter in
+                    Button {
+                        withAnimation(.snappy) {
+                            clearSelection()
+                            endLightPeek()
+                            albumMediaFilter = filter
+                        }
+                    } label: {
+                        Label(filter.title, systemImage: filter == albumMediaFilter ? "checkmark" : filter.systemImage)
+                    }
+                }
+            } label: {
+                Image(systemName: albumMediaFilter.systemImage)
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 48, height: 48)
+                    .background(.black.opacity(0.68))
+                    .clipShape(Circle())
+                    .shadow(color: .black.opacity(0.18), radius: 10, y: 5)
+            }
+            .buttonStyle(.plain)
+        }
     }
 
     private func mediaGridTile(for item: VaultItem) -> some View {
@@ -1270,6 +1357,28 @@ struct VaultHomeView: View {
         }
     }
 
+    private func openQuickCamera() {
+        guard canImportVaultItems(count: 1) else {
+            showMembership = true
+            return
+        }
+
+        guard PlatformCapabilities.supportsCameraCapture else {
+            openImportHub()
+            return
+        }
+
+        guard isInnerVaultActive else {
+            showQuickCamera = true
+            return
+        }
+
+        Task { @MainActor in
+            guard await vaultStore.ensureInnerVaultFolder(context: modelContext, sync: sync) != nil else { return }
+            showQuickCamera = true
+        }
+    }
+
     private func enterInnerVault() {
         guard subscription.canEnterVault else {
             showMembership = true
@@ -1309,15 +1418,7 @@ struct VaultHomeView: View {
         case .importHub:
             openImportHub()
         case .camera:
-            if canImportVaultItems(count: 1) {
-                if PlatformCapabilities.supportsCameraCapture {
-                    showQuickCamera = true
-                } else {
-                    openImportHub()
-                }
-            } else {
-                showMembership = true
-            }
+            openQuickCamera()
         case .recorder:
             if canImportVaultItems(count: 1) {
                 showQuickRecorder = true
@@ -1473,7 +1574,7 @@ struct VaultHomeView: View {
 
     private func beginLightPeek(for item: VaultItem) {
         guard !selectionMode,
-              item.kind.isVisualMedia,
+              item.kind == .image || item.kind == .livePhoto,
               peekTouchItemId != item.id else {
             return
         }
@@ -2394,6 +2495,41 @@ enum VaultCategory: String, CaseIterable, Identifiable {
             return kind == .document || kind == .archive || kind == .other
         case .links:
             return kind == .link
+        }
+    }
+}
+
+private enum AlbumMediaFilter: String, CaseIterable, Identifiable {
+    case all
+    case photos
+    case videos
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .all: L.string("All")
+        case .photos: L.string("Photos")
+        case .videos: L.string("Videos")
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .all: "line.3.horizontal.decrease.circle"
+        case .photos: "photo.on.rectangle"
+        case .videos: "video.fill"
+        }
+    }
+
+    func items(from items: [VaultItem]) -> [VaultItem] {
+        switch self {
+        case .all:
+            return items
+        case .photos:
+            return items.filter { $0.kind == .image || $0.kind == .livePhoto }
+        case .videos:
+            return items.filter { $0.kind == .video }
         }
     }
 }
@@ -4549,10 +4685,7 @@ private struct FullscreenMediaPage: View {
         if mediaPlayer != nil {
             MediaPreviewAudioSession.configure(currentPlayer)
         }
-        if isSelected {
-            MediaPreviewAudioSession.activateForPlayback()
-            currentPlayer.play()
-        } else {
+        if !isSelected {
             currentPlayer.pause()
         }
     }

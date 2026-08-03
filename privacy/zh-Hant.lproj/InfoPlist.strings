@@ -1,1 +1,2 @@
 "CFBundleDisplayName" = "墨層";
+"NSMicrophoneUsageDescription" = "用於錄製你直接保存到加密保險箱的語音備忘和影片聲音。";

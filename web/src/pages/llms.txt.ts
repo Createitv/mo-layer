@@ -13,7 +13,7 @@ Official website: ${base}/
 Default locale: ${base}/en-US/
 Simplified Chinese locale: ${base}/zh-Hans/
 App Store app ID: 6772853639
-App Store URL: https://apps.apple.com/app/id6772853639
+App Store URL: https://apps.apple.com/us/app/mo-layer/id6772853639?uo=4
 Author: 林逍遥
 Author website: https://lingxiaoyao.cn
 Author email: xfy150150@gmail.com

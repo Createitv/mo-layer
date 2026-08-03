@@ -1,14 +1,15 @@
 import type { APIRoute } from 'astro';
+import { getCollection } from 'astro:content';
 import { contentIndex } from '../content-index';
+import { generatedArticles } from '../generated-articles';
 import { defaultLocale, localeCodes, type LocaleCode } from '../i18n/locales';
 import { buildHreflangLinks, canonicalUrl, siteBase, type HreflangLink } from '../lib/seo';
+import { contentUpdateKey, resolveContentLastmod } from '../lib/sitemap';
 
 const staticPages = [
   { path: '/', updatedAt: '2026-06-05' },
   { path: '/content', updatedAt: '2026-06-05' }
 ];
-const defaultContentUpdatedAt = '2026-06-05';
-
 function renderUrlEntry(loc: string, updatedAt: string, hreflangLinks: HreflangLink[]) {
   const alternates = hreflangLinks
     .map((link) => `    <xhtml:link rel="alternate" hreflang="${link.hrefLang}" href="${link.href}" />`)
@@ -41,9 +42,18 @@ function articleHreflangLinks(base: string, translationKey: string) {
   return links;
 }
 
-export const GET: APIRoute = ({ site }) => {
+export const GET: APIRoute = async ({ site }) => {
   const base = siteBase(site);
   const entries: string[] = [];
+  const markdownArticles = await getCollection('articles');
+  const updatesByKey = new Map<string, string>();
+
+  for (const article of markdownArticles) {
+    updatesByKey.set(contentUpdateKey(article.data.locale, article.data.pageSlug), article.data.updatedAt);
+  }
+  for (const article of generatedArticles) {
+    updatesByKey.set(contentUpdateKey(article.locale, article.slug), article.updatedAt);
+  }
 
   for (const locale of localeCodes) {
     for (const page of staticPages) {
@@ -55,7 +65,7 @@ export const GET: APIRoute = ({ site }) => {
     entries.push(
       renderUrlEntry(
         canonicalUrl(base, item.locale, `/content/${item.slug}`),
-        defaultContentUpdatedAt,
+        item.updatedAt ?? resolveContentLastmod(item.locale, item.slug, updatesByKey),
         articleHreflangLinks(base, item.translationKey)
       )
     );

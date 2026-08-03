@@ -4,6 +4,8 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"]
-    }
-  }
+    },
+    "types": ["vitest/globals"]
+  },
+  "include": ["src", "tests", "astro.config.mjs"]
 }

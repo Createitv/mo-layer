@@ -4,3 +4,4 @@
 "NSPhotoLibraryAddUsageDescription" = "Wird verwendet, um exportierte Inhalte auf Wunsch in deiner Fotomediathek zu speichern.";
 "NSPhotoLibraryUsageDescription" = "Wird verwendet, um Fotos und Videos auszuwahlen, die verschlusselt in den privaten Tresor importiert werden.";
 "NSFaceIDUsageDescription" = "Wird als erste Entsperrebene verwendet, bevor deine private Geste den verschlusselten Tresor offnet.";
+"NSMicrophoneUsageDescription" = "Wird verwendet, um Audio fur Sprachnotizen und Videos aufzunehmen, die du direkt im verschlusselten Tresor speicherst.";

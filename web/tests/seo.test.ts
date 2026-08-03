@@ -3,7 +3,9 @@ import { defaultLocale, locales } from '../src/i18n/locales';
 import { buildHreflangLinks, canonicalUrl, localizedPath, officialSite, siteBase } from '../src/lib/seo';
 import { feedbackStatuses } from '../src/lib/feedback';
 import { contentIndex } from '../src/content-index';
+import { generatedContentIndex } from '../src/generated-articles';
 import { screenshotsForLocale } from '../src/i18n/screenshots';
+import { contentUpdateKey, resolveContentLastmod } from '../src/lib/sitemap';
 
 describe('localized SEO infrastructure', () => {
   it('defines the localized site locales and uses en-US as x-default', () => {
@@ -86,6 +88,13 @@ describe('localized SEO infrastructure', () => {
       'store-sensitive-documents-iphone'
     ])
     );
+  });
+
+  it('resolves content sitemap lastmod from article metadata', () => {
+    const updates = new Map([[contentUpdateKey('en-US', 'privacy-policy'), '2026-06-07']]);
+    expect(resolveContentLastmod('en-US', 'privacy-policy', updates)).toBe('2026-06-07');
+    expect(resolveContentLastmod('en-US', 'missing-article', updates)).toBe('2026-06-05');
+    expect(generatedContentIndex.every((entry) => entry.updatedAt === '2026-06-05')).toBe(true);
   });
 });
 

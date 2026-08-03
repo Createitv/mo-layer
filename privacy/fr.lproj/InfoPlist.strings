@@ -4,3 +4,4 @@
 "NSPhotoLibraryAddUsageDescription" = "Utilise pour enregistrer le contenu exporte dans votre phototheque lorsque vous choisissez d'exporter.";
 "NSPhotoLibraryUsageDescription" = "Utilise pour selectionner les photos et videos a chiffrer puis importer dans votre coffre prive.";
 "NSFaceIDUsageDescription" = "Utilise comme premier niveau de deverrouillage avant que votre geste prive ouvre le coffre chiffre.";
+"NSMicrophoneUsageDescription" = "Utilise pour enregistrer l'audio des memos vocaux et videos sauvegardes directement dans le coffre chiffre.";

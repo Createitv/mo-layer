@@ -49,6 +49,12 @@ enum VaultCloudAssetDownloadPolicy {
             && item.kind != .link
             && (item.assetState != .local || !VaultFileStore.fileExists(path: item.encryptedFilePath))
     }
+
+    static func needsLocalPreview(_ item: VaultItem) -> Bool {
+        item.deletedAt == nil
+            && item.kind.isVisualMedia
+            && (item.encryptedThumbPath?.isEmpty != false || !VaultFileStore.fileExists(path: item.encryptedThumbPath))
+    }
 }
 
 struct VaultImportPreparedItem {
@@ -513,6 +519,10 @@ final class VaultStore: ObservableObject {
     private func trimThumbnailCacheIfNeeded() {
         guard thumbnailCache.count > 320 else { return }
         thumbnailCache.removeAll(keepingCapacity: true)
+    }
+
+    func needsMediaPreviewRepair(_ item: VaultItem) -> Bool {
+        VaultCloudAssetDownloadPolicy.needsLocalPreview(item)
     }
 
     func decryptedTemporaryURL(for item: VaultItem) throws -> URL {
@@ -1174,7 +1184,51 @@ final class VaultStore: ObservableObject {
         item.assetState = .local
         item.downloadedAt = Date()
         item.lastDownloadError = nil
+        if VaultCloudAssetDownloadPolicy.needsLocalPreview(item),
+           let encryptedThumbPath = await makeEncryptedThumbnail(for: item) {
+            item.encryptedThumbPath = encryptedThumbPath
+        }
         try context.save()
+    }
+
+    func ensureMediaPreviews(
+        for items: [VaultItem],
+        context: ModelContext,
+        sync: CloudKitSyncService,
+        syncAfterRepair: Bool = false
+    ) async {
+        let candidates = items.filter(VaultCloudAssetDownloadPolicy.needsLocalPreview)
+        guard !candidates.isEmpty else { return }
+
+        var repairedCount = 0
+        for item in candidates {
+            do {
+                if VaultCloudAssetDownloadPolicy.shouldDownload(item) {
+                    try await downloadOriginalIfNeeded(for: item, context: context, sync: sync)
+                }
+
+                guard VaultCloudAssetDownloadPolicy.needsLocalPreview(item),
+                      let encryptedThumbPath = await makeEncryptedThumbnail(for: item) else {
+                    continue
+                }
+                item.encryptedThumbPath = encryptedThumbPath
+                item.updatedAt = Date()
+                if syncAfterRepair {
+                    item.localRevision += 1
+                    item.syncStatus = .pending
+                }
+                repairedCount += 1
+            } catch {
+                item.lastDownloadError = error.localizedDescription
+                logger.error("Media preview repair failed for item \(item.id, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            }
+        }
+
+        if repairedCount > 0 {
+            logger.info("Generated missing media previews for \(repairedCount, privacy: .public) vault items")
+            try? context.save()
+            objectWillChange.send()
+        }
     }
 
     @discardableResult
@@ -1284,6 +1338,10 @@ final class VaultStore: ObservableObject {
     }
 
     private func makeEncryptedVideoThumbnail(for item: VaultItem) async -> String? {
+        await makeEncryptedThumbnail(for: item)
+    }
+
+    private func makeEncryptedThumbnail(for item: VaultItem) async -> String? {
         do {
             let rootKey = try VaultCryptoService.ensureRootKey()
             let fileKey = try VaultCryptoService.unwrapFileKey(item.encryptedFileKey, rootKey: rootKey)
@@ -1296,7 +1354,7 @@ final class VaultStore: ObservableObject {
             )
             guard let thumbData = await makeThumbnailData(
                 from: data,
-                kind: .video,
+                kind: item.kind,
                 originalName: metadata?.originalName ?? "",
                 mimeType: metadata?.mimeType ?? ""
             ) else {
@@ -1306,7 +1364,7 @@ final class VaultStore: ObservableObject {
             let encryptedThumb = try VaultCryptoService.encrypt(thumbData, using: fileKey)
             return try VaultFileStore.writeEncryptedThumb(encryptedThumb, itemId: item.id)
         } catch {
-            logger.error("Video thumbnail repair failed for item \(item.id, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            logger.error("Thumbnail repair failed for item \(item.id, privacy: .public): \(error.localizedDescription, privacy: .public)")
             return nil
         }
     }

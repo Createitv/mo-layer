@@ -4,3 +4,4 @@
 "NSPhotoLibraryAddUsageDescription" = "Se usa para guardar contenido exportado en tu fototeca cuando eliges exportar.";
 "NSPhotoLibraryUsageDescription" = "Se usa para seleccionar fotos y videos que quieras cifrar e importar en tu caja privada.";
 "NSFaceIDUsageDescription" = "Se usa como primera capa de desbloqueo antes de que tu gesto privado abra la caja cifrada.";
+"NSMicrophoneUsageDescription" = "Se usa para grabar audio en notas de voz y videos que guardas directamente en la caja cifrada.";

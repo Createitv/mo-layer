@@ -1321,6 +1321,7 @@ final class VaultCameraViewController: UIViewController {
     private let ciContext = CIContext()
 
     private var videoDeviceInput: AVCaptureDeviceInput?
+    private var audioDeviceInput: AVCaptureDeviceInput?
     private var captureMode: CaptureMode = .photo
     private var cameraFilter: CameraFilter = .original
     private var timerDelay: TimerDelay = .off
@@ -1611,11 +1612,7 @@ final class VaultCameraViewController: UIViewController {
             self.session.addInput(videoInput)
             self.videoDeviceInput = videoInput
 
-            if let audioDevice = AVCaptureDevice.default(for: .audio),
-               let audioInput = try? AVCaptureDeviceInput(device: audioDevice),
-               self.session.canAddInput(audioInput) {
-                self.session.addInput(audioInput)
-            }
+            self.addAudioInputIfAuthorized()
 
             if self.session.canAddOutput(self.photoOutput) {
                 self.session.addOutput(self.photoOutput)
@@ -1641,6 +1638,18 @@ final class VaultCameraViewController: UIViewController {
             session.removeOutput(movieOutput)
             session.sessionPreset = .photo
         }
+    }
+
+    private func addAudioInputIfAuthorized() {
+        guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized,
+              audioDeviceInput == nil,
+              let audioDevice = AVCaptureDevice.default(for: .audio),
+              let audioInput = try? AVCaptureDeviceInput(device: audioDevice),
+              session.canAddInput(audioInput) else {
+            return
+        }
+        session.addInput(audioInput)
+        audioDeviceInput = audioInput
     }
 
     private func preferredDevice(position: AVCaptureDevice.Position) -> AVCaptureDevice? {
@@ -1784,16 +1793,42 @@ final class VaultCameraViewController: UIViewController {
 
     private func startRecording() {
         guard !movieOutput.isRecording else { return }
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .notDetermined:
+            shutterButton.isEnabled = false
+            AVCaptureDevice.requestAccess(for: .audio) { [weak self] _ in
+                DispatchQueue.main.async {
+                    self?.shutterButton.isEnabled = true
+                    self?.startRecording()
+                }
+            }
+            return
+        case .denied, .restricted:
+            statusLabel.text = L.string("Video will be recorded without audio.")
+        case .authorized:
+            break
+        @unknown default:
+            break
+        }
+
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("Video-\(Int(Date().timeIntervalSince1970))")
             .appendingPathExtension("mov")
         recordingURL = url
-        movieOutput.startRecording(to: url, recordingDelegate: self)
-        recordingStartedAt = Date()
-        recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
-            self?.updateRecordingStatus()
+        sessionQueue.async { [weak self] in
+            guard let self else { return }
+            self.session.beginConfiguration()
+            self.addAudioInputIfAuthorized()
+            self.session.commitConfiguration()
+            DispatchQueue.main.async {
+                self.movieOutput.startRecording(to: url, recordingDelegate: self)
+                self.recordingStartedAt = Date()
+                self.recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+                    self?.updateRecordingStatus()
+                }
+                self.updateButtons()
+            }
         }
-        updateButtons()
     }
 
     private func stopRecording() {
