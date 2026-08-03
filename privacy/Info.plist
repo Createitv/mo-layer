@@ -38,6 +38,8 @@
 	<string>Used as the first unlock layer before your private gesture can open the encrypted vault.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Used when you choose to record audio directly into the encrypted vault.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Used to save the capture location for photos and videos you take directly into the encrypted vault.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Used to save exported content back to your photo library when you choose to export.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
@@ -63,14 +65,6 @@
 			<string>Import</string>
 			<key>UIApplicationShortcutItemType</key>
 			<string>app.landlady.www.privacy.quick-import</string>
-		</dict>
-		<dict>
-			<key>UIApplicationShortcutItemIconType</key>
-			<string>UIApplicationShortcutIconTypeCapturePhoto</string>
-			<key>UIApplicationShortcutItemTitle</key>
-			<string>Quick Camera</string>
-			<key>UIApplicationShortcutItemType</key>
-			<string>app.landlady.www.privacy.quick-camera</string>
 		</dict>
 		<dict>
 			<key>UIApplicationShortcutItemIconSymbolName</key>

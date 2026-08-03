@@ -53,6 +53,67 @@ enum SecurityEventKind: String, Codable, CaseIterable {
     case cloudKitSynced
 }
 
+struct VaultCaptureLocation: Codable, Equatable {
+    var latitude: Double
+    var longitude: Double
+    var horizontalAccuracy: Double?
+    var altitude: Double?
+    var capturedAt: Date
+    var resolvedAddress: String? = nil
+
+    var coordinateText: String {
+        String(format: "%.5f, %.5f", latitude, longitude)
+    }
+}
+
+enum VaultMapCoordinatePolicy {
+    nonisolated static func mapCoordinate(latitude: Double, longitude: Double) -> (latitude: Double, longitude: Double) {
+        guard isInMainlandChina(latitude: latitude, longitude: longitude) else {
+            return (latitude, longitude)
+        }
+
+        let offset = gcj02Offset(latitude: latitude, longitude: longitude)
+        return (latitude + offset.latitude, longitude + offset.longitude)
+    }
+
+    private nonisolated static func isInMainlandChina(latitude: Double, longitude: Double) -> Bool {
+        latitude >= 3.86
+            && latitude <= 53.55
+            && longitude >= 73.66
+            && longitude <= 135.05
+    }
+
+    private nonisolated static func gcj02Offset(latitude: Double, longitude: Double) -> (latitude: Double, longitude: Double) {
+        let axis = 6378245.0
+        let eccentricity = 0.006693421622965943
+        var latitudeOffset = transformLatitude(longitude - 105, latitude - 35)
+        var longitudeOffset = transformLongitude(longitude - 105, latitude - 35)
+        let radianLatitude = latitude / 180 * Double.pi
+        var magic = sin(radianLatitude)
+        magic = 1 - eccentricity * magic * magic
+        let sqrtMagic = sqrt(magic)
+        latitudeOffset = (latitudeOffset * 180) / ((axis * (1 - eccentricity)) / (magic * sqrtMagic) * Double.pi)
+        longitudeOffset = (longitudeOffset * 180) / (axis / sqrtMagic * cos(radianLatitude) * Double.pi)
+        return (latitudeOffset, longitudeOffset)
+    }
+
+    private nonisolated static func transformLatitude(_ x: Double, _ y: Double) -> Double {
+        var result = -100 + 2 * x + 3 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * sqrt(abs(x))
+        result += (20 * sin(6 * x * Double.pi) + 20 * sin(2 * x * Double.pi)) * 2 / 3
+        result += (20 * sin(y * Double.pi) + 40 * sin(y / 3 * Double.pi)) * 2 / 3
+        result += (160 * sin(y / 12 * Double.pi) + 320 * sin(y * Double.pi / 30)) * 2 / 3
+        return result
+    }
+
+    private nonisolated static func transformLongitude(_ x: Double, _ y: Double) -> Double {
+        var result = 300 + x + 2 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * sqrt(abs(x))
+        result += (20 * sin(6 * x * Double.pi) + 20 * sin(2 * x * Double.pi)) * 2 / 3
+        result += (20 * sin(x * Double.pi) + 40 * sin(x / 3 * Double.pi)) * 2 / 3
+        result += (150 * sin(x / 12 * Double.pi) + 300 * sin(x / 30 * Double.pi)) * 2 / 3
+        return result
+    }
+}
+
 struct VaultMetadata: Codable {
     var originalName: String
     var mimeType: String
@@ -61,6 +122,8 @@ struct VaultMetadata: Codable {
     var importedAt: Date
     var remoteURL: String? = nil
     var originalExtension: String? = nil
+    var captureLocation: VaultCaptureLocation? = nil
+    var mediaDurationSeconds: Double? = nil
 }
 
 struct LivePhotoPackage: Codable {

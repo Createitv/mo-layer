@@ -1,6 +1,8 @@
 import Combine
 import AVFoundation
+import CoreLocation
 import Foundation
+import ImageIO
 import Photos
 import PhotosUI
 import SwiftData
@@ -114,6 +116,7 @@ enum ImportService {
 
             if let livePhotoImport = await livePhotoImport(from: item),
                let packageData = try? binaryPropertyListEncoder.encode(livePhotoImport.package) {
+                let captureLocation = await captureLocation(for: item, fallbackData: livePhotoImport.package.stillData)
                 progress?(.currentItem(VaultImportProgressItem(
                     displayName: livePhotoImport.originalName,
                     kind: .livePhoto,
@@ -131,7 +134,8 @@ enum ImportService {
                     sync: sync,
                     folderId: folderId,
                     syncAfterImport: syncAfterImport,
-                    saveImmediately: false
+                    saveImmediately: false,
+                    captureLocation: captureLocation
                 )
                 summary.record(result, kind: .livePhoto)
                 saveBatchIfNeeded(summary: summary, context: context)
@@ -146,6 +150,7 @@ enum ImportService {
             }
             let kind: VaultItemKind = contentType?.conforms(to: UTType.movie) == true ? .video : .image
             let name = "Photo-\(Date().timeIntervalSince1970).\(contentType?.preferredFilenameExtension ?? "dat")"
+            let captureLocation = await captureLocation(for: item, fallbackData: data)
             progress?(.currentItem(VaultImportProgressItem(
                 displayName: name,
                 kind: kind,
@@ -163,7 +168,8 @@ enum ImportService {
                 sync: sync,
                 folderId: folderId,
                 syncAfterImport: syncAfterImport,
-                saveImmediately: false
+                saveImmediately: false,
+                captureLocation: captureLocation
             )
             summary.record(result, kind: kind)
             saveBatchIfNeeded(summary: summary, context: context)
@@ -235,6 +241,163 @@ enum ImportService {
         }
     }
 
+    private struct ParsedGPSLocation {
+        let latitude: Double
+        let longitude: Double
+        let altitude: Double?
+        let capturedAt: Date?
+    }
+
+    private static func captureLocation(for item: PhotosPickerItem, fallbackData data: Data?) async -> VaultCaptureLocation? {
+        if let identifier = item.itemIdentifier {
+            let result = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil)
+            if let asset = result.firstObject,
+               let location = asset.location {
+                return await captureLocation(
+                    latitude: location.coordinate.latitude,
+                    longitude: location.coordinate.longitude,
+                    horizontalAccuracy: location.horizontalAccuracy >= 0 ? location.horizontalAccuracy : nil,
+                    altitude: location.verticalAccuracy >= 0 ? location.altitude : nil,
+                    capturedAt: asset.creationDate ?? location.timestamp
+                )
+            }
+        }
+
+        return await captureLocation(fromImageData: data)
+    }
+
+    private static func captureLocation(from data: Data, kind: VaultItemKind) async -> VaultCaptureLocation? {
+        if kind == .livePhoto,
+           let package = try? PropertyListDecoder().decode(LivePhotoPackage.self, from: data) {
+            return await captureLocation(fromImageData: package.stillData)
+        }
+        guard kind == .image else { return nil }
+        return await captureLocation(fromImageData: data)
+    }
+
+    private static func captureLocation(fromImageData data: Data?) async -> VaultCaptureLocation? {
+        guard let parsed = gpsLocation(fromImageData: data) else { return nil }
+        return await captureLocation(
+            latitude: parsed.latitude,
+            longitude: parsed.longitude,
+            horizontalAccuracy: nil,
+            altitude: parsed.altitude,
+            capturedAt: parsed.capturedAt ?? Date()
+        )
+    }
+
+    private static func captureLocation(
+        latitude: Double,
+        longitude: Double,
+        horizontalAccuracy: Double?,
+        altitude: Double?,
+        capturedAt: Date
+    ) async -> VaultCaptureLocation {
+        let location = CLLocation(latitude: latitude, longitude: longitude)
+        let address = await reverseGeocodedAddress(for: location)
+        return VaultCaptureLocation(
+            latitude: latitude,
+            longitude: longitude,
+            horizontalAccuracy: horizontalAccuracy,
+            altitude: altitude,
+            capturedAt: capturedAt,
+            resolvedAddress: address
+        )
+    }
+
+    private static func gpsLocation(fromImageData data: Data?) -> ParsedGPSLocation? {
+        guard let data,
+              let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let gps = properties[kCGImagePropertyGPSDictionary] as? [CFString: Any],
+              let latitude = signedCoordinate(
+                value: doubleValue(gps[kCGImagePropertyGPSLatitude]),
+                reference: gps[kCGImagePropertyGPSLatitudeRef],
+                negativeReference: "S"
+              ),
+              let longitude = signedCoordinate(
+                value: doubleValue(gps[kCGImagePropertyGPSLongitude]),
+                reference: gps[kCGImagePropertyGPSLongitudeRef],
+                negativeReference: "W"
+              ) else {
+            return nil
+        }
+
+        let altitudeValue = doubleValue(gps[kCGImagePropertyGPSAltitude])
+        let altitudeReference = doubleValue(gps[kCGImagePropertyGPSAltitudeRef])
+        let altitude = altitudeReference == 1 ? altitudeValue.map { -abs($0) } : altitudeValue
+        return ParsedGPSLocation(
+            latitude: latitude,
+            longitude: longitude,
+            altitude: altitude,
+            capturedAt: gpsTimestamp(from: gps)
+        )
+    }
+
+    private static func signedCoordinate(value: Double?, reference: Any?, negativeReference: String) -> Double? {
+        guard let value else { return nil }
+        let referenceText = reference.map { String(describing: $0).uppercased() } ?? ""
+        return referenceText == negativeReference ? -abs(value) : abs(value)
+    }
+
+    private static func doubleValue(_ value: Any?) -> Double? {
+        if let number = value as? NSNumber {
+            return number.doubleValue
+        }
+        if let string = value as? String {
+            return Double(string)
+        }
+        return nil
+    }
+
+    private static func gpsTimestamp(from gps: [CFString: Any]) -> Date? {
+        guard let dateStamp = gps[kCGImagePropertyGPSDateStamp].map({ String(describing: $0) }),
+              let timeStamp = gps[kCGImagePropertyGPSTimeStamp].map({ String(describing: $0) }) else {
+            return nil
+        }
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyy:MM:dd HH:mm:ss.SSS"
+        if let date = formatter.date(from: "\(dateStamp) \(timeStamp)") {
+            return date
+        }
+
+        formatter.dateFormat = "yyyy:MM:dd HH:mm:ss"
+        return formatter.date(from: "\(dateStamp) \(timeStamp)")
+    }
+
+    private static func reverseGeocodedAddress(for location: CLLocation) async -> String? {
+        await withCheckedContinuation { continuation in
+            let geocoder = CLGeocoder()
+            geocoder.reverseGeocodeLocation(location) { placemarks, _ in
+                continuation.resume(returning: placemarks?.first.flatMap(addressText))
+            }
+        }
+    }
+
+    private nonisolated static func addressText(from placemark: CLPlacemark) -> String? {
+        let parts = [
+            placemark.name,
+            placemark.subThoroughfare,
+            placemark.thoroughfare,
+            placemark.subLocality,
+            placemark.locality,
+            placemark.administrativeArea,
+            placemark.postalCode,
+            placemark.country
+        ]
+        var seen = Set<String>()
+        let uniqueParts = parts.compactMap { part -> String? in
+            let trimmed = part?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !trimmed.isEmpty, !seen.contains(trimmed) else { return nil }
+            seen.insert(trimmed)
+            return trimmed
+        }
+        return uniqueParts.isEmpty ? nil : uniqueParts.joined(separator: ", ")
+    }
+
     @MainActor
     @discardableResult
     static func importFile(
@@ -249,17 +412,20 @@ enum ImportService {
     ) async -> VaultImportResult {
         guard let data = await loadFileData(from: url) else { return .failed }
         let type = UTType(filenameExtension: url.pathExtension)
+        let kind = kind(for: type, fileExtension: url.pathExtension)
+        let captureLocation = await captureLocation(from: data, kind: kind)
         return await vaultStore.importData(
             data,
             originalName: url.lastPathComponent,
             mimeType: type?.preferredMIMEType ?? "application/octet-stream",
             source: source,
-            kind: kind(for: type, fileExtension: url.pathExtension),
+            kind: kind,
             context: context,
             sync: sync,
             folderId: folderId,
             syncAfterImport: syncAfterImport,
-            saveImmediately: saveImmediately
+            saveImmediately: saveImmediately,
+            captureLocation: captureLocation
         )
     }
 

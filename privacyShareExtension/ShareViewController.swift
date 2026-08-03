@@ -13,6 +13,7 @@ final class ShareViewController: UIViewController, UICollectionViewDataSource, U
     private var stagedItems: [SharedImportManifestItem] = []
     private var selectedItemIds = Set<String>()
     private var thumbnailCache: [String: UIImage] = [:]
+    private var pendingThumbnailItemIds = Set<String>()
 
     private let titleLabel = UILabel()
     private let statusLabel = UILabel()
@@ -274,8 +275,9 @@ final class ShareViewController: UIViewController, UICollectionViewDataSource, U
         let image: UIImage
         if type.conforms(to: .image), let url = fileURL(for: item), let loadedImage = imageThumbnail(from: url) {
             image = loadedImage
-        } else if type.conforms(to: .movie), let url = fileURL(for: item), let videoImage = videoThumbnail(from: url) {
-            image = videoImage
+        } else if type.conforms(to: .movie), let url = fileURL(for: item) {
+            startVideoThumbnailGeneration(for: item, url: url)
+            image = placeholderThumbnail(for: type)
         } else {
             image = placeholderThumbnail(for: type)
         }
@@ -294,15 +296,45 @@ final class ShareViewController: UIViewController, UICollectionViewDataSource, U
         return UIImage(data: data)
     }
 
-    private func videoThumbnail(from url: URL) -> UIImage? {
+    private func startVideoThumbnailGeneration(for item: SharedImportManifestItem, url: URL) {
+        guard !pendingThumbnailItemIds.contains(item.id) else { return }
+        pendingThumbnailItemIds.insert(item.id)
+
+        Task {
+            let image = await Self.videoThumbnail(from: url)
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.pendingThumbnailItemIds.remove(item.id)
+                guard let image else { return }
+                self.thumbnailCache[item.id] = image
+                if let index = self.stagedItems.firstIndex(where: { $0.id == item.id }) {
+                    self.collectionView.reloadItems(at: [IndexPath(item: index, section: 0)])
+                }
+            }
+        }
+    }
+
+    private static func videoThumbnail(from url: URL) async -> UIImage? {
         let asset = AVURLAsset(url: url)
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
         generator.maximumSize = CGSize(width: 360, height: 360)
-        guard let cgImage = try? generator.copyCGImage(at: .zero, actualTime: nil) else {
+        guard let cgImage = try? await generateImage(with: generator, at: .zero) else {
             return nil
         }
         return UIImage(cgImage: cgImage)
+    }
+
+    private static func generateImage(with generator: AVAssetImageGenerator, at time: CMTime) async throws -> CGImage {
+        try await withCheckedThrowingContinuation { continuation in
+            generator.generateCGImageAsynchronously(for: time) { image, _, error in
+                if let image {
+                    continuation.resume(returning: image)
+                } else {
+                    continuation.resume(throwing: error ?? CocoaError(.fileReadCorruptFile))
+                }
+            }
+        }
     }
 
     private func placeholderThumbnail(for type: UTType) -> UIImage {

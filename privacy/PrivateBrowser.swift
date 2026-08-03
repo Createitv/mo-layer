@@ -95,10 +95,30 @@ final class BrowserViewModel: NSObject, ObservableObject, WKNavigationDelegate, 
     nonisolated func download(_ download: WKDownload, decideDestinationUsing response: URLResponse, suggestedFilename: String) async -> URL? {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("PrivateBrowserDownloads", isDirectory: true)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        return directory.appendingPathComponent(suggestedFilename)
+        try? FileManager.default.setAttributes([.protectionKey: FileProtectionType.complete], ofItemAtPath: directory.path)
+        return directory.appendingPathComponent(Self.sanitizedDownloadFilename(suggestedFilename), isDirectory: false)
     }
 
     func downloadDidFinish(_ download: WKDownload) {}
+
+    nonisolated static func sanitizedDownloadFilename(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fallback = "\(UUID().uuidString).download"
+        guard !trimmed.isEmpty else { return fallback }
+
+        let lastComponent = URL(fileURLWithPath: trimmed).lastPathComponent
+        let invalidCharacters = CharacterSet(charactersIn: "/:\\")
+            .union(.controlCharacters)
+        let sanitized = lastComponent
+            .components(separatedBy: invalidCharacters)
+            .joined(separator: "-")
+            .trimmingCharacters(in: CharacterSet(charactersIn: ". ").union(.whitespacesAndNewlines))
+
+        guard !sanitized.isEmpty, sanitized != "." && sanitized != ".." else {
+            return fallback
+        }
+        return sanitized
+    }
 
     private func normalizedURLString(_ value: String) -> String {
         if value.hasPrefix("http://") || value.hasPrefix("https://") {

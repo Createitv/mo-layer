@@ -371,6 +371,8 @@
 "No network sync" = "不使用网络同步";
 "No Notes" = "没有备忘录";
 "No Results" = "没有结果";
+"No selected files could be exported." = "选中的文件无法导出。";
+"No selected photos or videos could be saved to Photos." = "选中的照片或视频无法保存到系统相册。";
 "Noir" = "黑白";
 "None" = "无";
 "Not Available" = "不可用";
@@ -409,6 +411,7 @@
 "Play" = "播放";
 "Playback Position" = "播放进度";
 "Replay" = "重新播放";
+"Retry Playback" = "重试播放";
 "Unmute" = "取消静音";
 "Volume" = "音量";
 "Original" = "原片";
@@ -509,6 +512,8 @@
 "Save to Vault" = "保存到保险箱";
 "Save unlimited photos, videos, and files" = "无限保存照片、视频和文件";
 "Save unlimited photos, videos, audio, and files" = "无限保存照片、视频、录音和文件";
+"Saved %d item(s) to Photos." = "已保存 %d 个项目到系统相册。";
+"Saved %d item(s) to Photos. %d item(s) could not be saved." = "已保存 %d 个项目到系统相册，%d 个项目保存失败。";
 "Saved to Photos" = "已保存到系统相册";
 "Saving" = "保存中";
 "Saving to Photos" = "正在保存到系统相册";
@@ -721,3 +726,20 @@
 "When enabled, opening the real vault requires drawing the private gesture." = "开启后，打开真实保险箱需要绘制私密轨迹。";
 "Unlock Checks" = "解锁检查";
 "You can turn off Face ID, gesture verification, or both. Turning both off opens the real vault without an unlock check." = "你可以关闭 Face ID、轨迹验证，或同时关闭两者。两者都关闭后，真实保险箱会不经过解锁检查直接打开。";
+"Release Local Space" = "释放本地空间";
+"Address" = "地址";
+"View on Map" = "查看地图";
+"Captured" = "拍摄时间";
+"Accuracy" = "精度";
+"Within %.0f m" = "%.0f 米内";
+"Altitude" = "海拔";
+"Coordinates" = "坐标";
+"Open in Apple Maps" = "在 Apple 地图中打开";
+"Map" = "地图";
+"Redeem Code" = "兑换码";
+"Opening" = "正在打开";
+"Code redemption is unavailable. Please try again later." = "暂时无法兑换，请稍后再试。";
+"Code redeemed. Pro is active." = "兑换成功，Pro 已生效。";
+"Code redemption opened. Complete the App Store prompt, then Pro will refresh automatically." = "兑换窗口已打开。请完成 App Store 提示，Pro 状态会自动刷新。";
+"Filter" = "筛选";
+"Play Live Photo" = "播放 Live Photo";

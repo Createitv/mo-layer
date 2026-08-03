@@ -1,5 +1,6 @@
 import AVFoundation
 import Combine
+import CoreLocation
 import CoreImage
 import CoreImage.CIFilterBuiltins
 import PhotosUI
@@ -24,7 +25,6 @@ struct ImportHubView: View {
     var onImported: (ImportSummary) -> Void = { _ in }
     @State private var pickerItems: [PhotosPickerItem] = []
     @State private var showFileImporter = false
-    @State private var showCamera = false
     @State private var showAudioRecorder = false
     @State private var showScanner = false
     @State private var showMembership = false
@@ -54,14 +54,6 @@ struct ImportHubView: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(!canImportVaultItems(count: 1))
-
-                    Button {
-                        showCamera = true
-                    } label: {
-                        ActionRow(icon: "camera.viewfinder", title: L.string("Take Photo or Video"), subtitle: L.string("Use the full-screen camera and save directly to the vault"))
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!canImportVaultItems(count: 1) || !PlatformCapabilities.supportsCameraCapture)
 
                     Button {
                         showAudioRecorder = true
@@ -125,19 +117,6 @@ struct ImportHubView: View {
                     }
                     if showsCloseButton {
                         dismiss()
-                    }
-                }
-            }
-            .fullScreenCover(isPresented: $showCamera) {
-                NativeCameraCaptureView { media in
-                    guard canImportVaultItems(count: 1) else {
-                        showMembership = true
-                        return
-                    }
-                    Task {
-                        vaultStore.setWriteAccess(true)
-                        let summary = await media.importSummary(context: modelContext, vaultStore: vaultStore, sync: sync, folderId: destinationFolderId, syncAfterImport: subscription.canImportAndSync)
-                        handleImported(summary)
                     }
                 }
             }
@@ -246,9 +225,9 @@ struct ImportHubView: View {
 }
 
 enum CapturedVaultMedia {
-    case photo(UIImage)
-    case video(URL)
-    case livePhoto(LivePhotoPackage, originalName: String)
+    case photo(UIImage, location: VaultCaptureLocation?)
+    case video(URL, location: VaultCaptureLocation?)
+    case livePhoto(LivePhotoPackage, originalName: String, location: VaultCaptureLocation?)
 
     @MainActor
     func importSummary(
@@ -261,7 +240,7 @@ enum CapturedVaultMedia {
     ) async -> ImportSummary {
         var summary = ImportSummary()
         switch self {
-        case .photo(let image):
+        case .photo(let image, let location):
             guard let data = image.jpegData(compressionQuality: 0.92) else {
                 summary.recordFailure()
                 return summary
@@ -275,21 +254,31 @@ enum CapturedVaultMedia {
                 context: context,
                 sync: sync,
                 folderId: folderId,
-                syncAfterImport: syncAfterImport
+                syncAfterImport: syncAfterImport,
+                captureLocation: location
             )
             summary.record(result, kind: .image)
-        case .video(let url):
-            summary = await ImportService.importFiles(
-                urls: [url],
-                context: context,
-                vaultStore: vaultStore,
-                sync: sync,
+        case .video(let url, let location):
+            guard let data = try? Data(contentsOf: url) else {
+                summary.recordFailure()
+                try? FileManager.default.removeItem(at: url)
+                return summary
+            }
+            let result = await vaultStore.importData(
+                data,
+                originalName: url.lastPathComponent,
+                mimeType: "video/quicktime",
                 source: source,
+                kind: .video,
+                context: context,
+                sync: sync,
                 folderId: folderId,
-                syncAfterImport: syncAfterImport
+                syncAfterImport: syncAfterImport,
+                captureLocation: location
             )
+            summary.record(result, kind: .video)
             try? FileManager.default.removeItem(at: url)
-        case .livePhoto(let package, let originalName):
+        case .livePhoto(let package, let originalName, let location):
             let encoder = PropertyListEncoder()
             encoder.outputFormat = .binary
             guard let data = try? encoder.encode(package) else {
@@ -305,7 +294,8 @@ enum CapturedVaultMedia {
                 context: context,
                 sync: sync,
                 folderId: folderId,
-                syncAfterImport: syncAfterImport
+                syncAfterImport: syncAfterImport,
+                captureLocation: location
             )
             summary.record(result, kind: .livePhoto)
         }
@@ -687,8 +677,9 @@ struct CloudSyncLogFileView: View {
                 Button {
                     UIPasteboard.general.string = logText
                 } label: {
-                    Label(L.string("Copy"), systemImage: "doc.on.doc")
+                    Image(systemName: "doc.on.doc")
                 }
+                .accessibilityLabel(L.string("Copy"))
                 .disabled(logText.isEmpty)
             }
         }
@@ -1261,6 +1252,62 @@ struct NativeCameraCaptureView: UIViewControllerRepresentable {
     func updateUIViewController(_ uiViewController: VaultCameraViewController, context: Context) {}
 }
 
+final class VaultCameraLocationProvider: NSObject, CLLocationManagerDelegate {
+    private let manager = CLLocationManager()
+    private var latestLocation: CLLocation?
+
+    override init() {
+        super.init()
+        manager.delegate = self
+        manager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
+    }
+
+    func start() {
+        switch manager.authorizationStatus {
+        case .authorizedAlways, .authorizedWhenInUse:
+            manager.startUpdatingLocation()
+        case .notDetermined:
+            manager.requestWhenInUseAuthorization()
+        case .denied, .restricted:
+            break
+        @unknown default:
+            break
+        }
+    }
+
+    func stop() {
+        manager.stopUpdatingLocation()
+    }
+
+    func captureLocation() -> VaultCaptureLocation? {
+        guard let location = latestLocation,
+              location.horizontalAccuracy >= 0,
+              abs(location.timestamp.timeIntervalSinceNow) <= 600 else {
+            return nil
+        }
+
+        return VaultCaptureLocation(
+            latitude: location.coordinate.latitude,
+            longitude: location.coordinate.longitude,
+            horizontalAccuracy: location.horizontalAccuracy,
+            altitude: location.verticalAccuracy >= 0 ? location.altitude : nil,
+            capturedAt: location.timestamp
+        )
+    }
+
+    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        start()
+    }
+
+    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        latestLocation = locations.last
+    }
+
+    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        latestLocation = nil
+    }
+}
+
 final class VaultCameraViewController: UIViewController {
     var onMedia: ((CapturedVaultMedia) -> Void)?
     var onCancel: (() -> Void)?
@@ -1319,6 +1366,7 @@ final class VaultCameraViewController: UIViewController {
     private let photoOutput = AVCapturePhotoOutput()
     private let movieOutput = AVCaptureMovieFileOutput()
     private let ciContext = CIContext()
+    private let locationProvider = VaultCameraLocationProvider()
 
     private var videoDeviceInput: AVCaptureDeviceInput?
     private var audioDeviceInput: AVCaptureDeviceInput?
@@ -1360,6 +1408,7 @@ final class VaultCameraViewController: UIViewController {
         view.backgroundColor = .black
         configureUI()
         configureGestures()
+        locationProvider.start()
         requestAccessAndConfigure()
     }
 
@@ -1372,6 +1421,7 @@ final class VaultCameraViewController: UIViewController {
         super.viewWillDisappear(animated)
         countdownTimer?.invalidate()
         recordingTimer?.invalidate()
+        locationProvider.stop()
         sessionQueue.async { [session] in
             if session.isRunning {
                 session.stopRunning()
@@ -1537,8 +1587,10 @@ final class VaultCameraViewController: UIViewController {
     private func configureControlButton(_ button: UIButton, systemName: String? = nil, title: String? = nil) {
         if let systemName {
             button.setImage(UIImage(systemName: systemName), for: .normal)
+            button.setTitle(nil, for: .normal)
         }
         if let title {
+            button.setImage(nil, for: .normal)
             button.setTitle(title, for: .normal)
             button.titleLabel?.font = .systemFont(ofSize: 12, weight: .bold)
         }
@@ -1944,8 +1996,15 @@ final class VaultCameraViewController: UIViewController {
         liveButton.backgroundColor = UIColor.black.withAlphaComponent(captureMode == .live ? 0.75 : 0.34)
         maxButton.backgroundColor = UIColor.black.withAlphaComponent(useMaxDimensions ? 0.75 : 0.34)
         gridButton.backgroundColor = UIColor.black.withAlphaComponent(isGridVisible ? 0.75 : 0.34)
-        timerButton.setTitle(timerDelay.title, for: .normal)
-        timerButton.setImage(timerDelay == .off ? UIImage(systemName: "timer") : nil, for: .normal)
+        if timerDelay == .off {
+            timerButton.setTitle(nil, for: .normal)
+            timerButton.setImage(UIImage(systemName: "timer"), for: .normal)
+            timerButton.accessibilityLabel = L.string("Timer")
+        } else {
+            timerButton.setImage(nil, for: .normal)
+            timerButton.setTitle(timerDelay.title, for: .normal)
+            timerButton.accessibilityLabel = timerDelay.title
+        }
         filterControl.isHidden = captureMode == .video
         shutterButton.backgroundColor = movieOutput.isRecording ? .systemRed : .white
         shutterButton.layer.cornerRadius = movieOutput.isRecording ? 12 : 36
@@ -2045,11 +2104,15 @@ extension VaultCameraViewController: AVCapturePhotoCaptureDelegate {
                     pairedVideoFilename: liveURL.lastPathComponent
                 )
                 try? FileManager.default.removeItem(at: liveURL)
-                self.onMedia?(.livePhoto(package, originalName: package.stillFilename))
+                self.onMedia?(.livePhoto(
+                    package,
+                    originalName: package.stillFilename,
+                    location: self.locationProvider.captureLocation()
+                ))
                 return
             }
             if let image = UIImage(data: data) {
-                self.onMedia?(.photo(image))
+                self.onMedia?(.photo(image, location: self.locationProvider.captureLocation()))
             } else {
                 self.statusLabel.text = L.string("Unable to capture photo.")
             }
@@ -2075,7 +2138,7 @@ extension VaultCameraViewController: AVCaptureFileOutputRecordingDelegate {
                 self.statusLabel.text = L.string("Unable to record video.")
                 return
             }
-            self.onMedia?(.video(outputFileURL))
+            self.onMedia?(.video(outputFileURL, location: self.locationProvider.captureLocation()))
         }
     }
 }

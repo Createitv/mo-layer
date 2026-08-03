@@ -9,6 +9,38 @@ import SwiftData
 import UIKit
 import UniformTypeIdentifiers
 
+struct VaultThumbnailLoadRequest: Sendable {
+    let cacheKey: String
+    let encryptedThumbPath: String
+    let encryptedFileKey: Data
+    let rootKey: SymmetricKey
+
+    nonisolated init(
+        cacheKey: String,
+        encryptedThumbPath: String,
+        encryptedFileKey: Data,
+        rootKey: SymmetricKey
+    ) {
+        self.cacheKey = cacheKey
+        self.encryptedThumbPath = encryptedThumbPath
+        self.encryptedFileKey = encryptedFileKey
+        self.rootKey = rootKey
+    }
+}
+
+actor VaultThumbnailDataLoader {
+    func decryptedData(for request: VaultThumbnailLoadRequest) throws -> Data {
+        try Task.checkCancellation()
+        let fileKey = try VaultCryptoService.unwrapFileKey(
+            request.encryptedFileKey,
+            rootKey: request.rootKey
+        )
+        let encrypted = try VaultFileStore.read(path: request.encryptedThumbPath)
+        try Task.checkCancellation()
+        return try VaultCryptoService.decrypt(encrypted, using: fileKey)
+    }
+}
+
 enum RemoteVaultRestoreCheck: Equatable {
     case noRemoteVault
     case needsRecoveryKey
@@ -38,9 +70,38 @@ struct CloudAssetDownloadSummary: Equatable {
 }
 
 enum VaultCloudToLocalSyncPolicy {
-    static let automaticDownloadsOriginals = true
-    static let manualRefreshDownloadsOriginals = true
+    nonisolated static let automaticDownloadsOriginals = false
+    nonisolated static let automaticDownloadsPreviews = false
+    nonisolated static let manualRefreshDownloadsOriginals = false
     static let syncedHomeCategories: [VaultCategory] = [.album, .audio, .documents]
+
+    nonisolated static func downloadsOriginals(explicitOverride: Bool?) -> Bool {
+        explicitOverride ?? automaticDownloadsOriginals
+    }
+}
+
+enum VaultOptimizedStoragePolicy {
+    static let isEnabledByDefault = true
+    static let maxLocalOriginalCacheBytes: Int64 = 300 * 1024 * 1024
+    static let targetLocalOriginalCacheBytes: Int64 = 200 * 1024 * 1024
+    static let immediateReleaseByteThreshold: Int64 = 25 * 1024 * 1024
+    static let lowDiskFreeBytes: Int64 = 1 * 1024 * 1024 * 1024
+    static let accessTimestampUpdateInterval: TimeInterval = 15 * 60
+
+    static func shouldReleaseAfterSuccessfulSync(_ item: VaultItem) -> Bool {
+        isEnabledByDefault
+            && item.deletedAt == nil
+            && item.kind != .link
+            && item.syncStatus == .synced
+            && item.assetState == .local
+            && item.byteSize >= immediateReleaseByteThreshold
+    }
+}
+
+private enum VaultOriginalReleaseTrigger {
+    case successfulSync
+    case cachePressure
+    case manual
 }
 
 enum VaultCloudAssetDownloadPolicy {
@@ -96,7 +157,8 @@ enum VaultImportArtifactBuilder {
         mimeType: String,
         source: String,
         kind: VaultItemKind,
-        importFingerprint: String?
+        importFingerprint: String?,
+        captureLocation: VaultCaptureLocation? = nil
     ) async throws -> VaultImportPreparedItem {
         let rootKey = try VaultCryptoService.ensureRootKey()
         let fileKey = VaultCryptoService.newFileKey()
@@ -125,7 +187,13 @@ enum VaultImportArtifactBuilder {
             note: "",
             importedAt: Date(),
             remoteURL: nil,
-            originalExtension: (originalName as NSString).pathExtension
+            originalExtension: (originalName as NSString).pathExtension,
+            captureLocation: captureLocation,
+            mediaDurationSeconds: await mediaDurationSeconds(
+                from: data,
+                kind: kind,
+                preferredExtension: videoFileExtension(originalName: originalName, mimeType: mimeType)
+            )
         )
         let encryptedMetadata = try VaultCryptoService.encryptCodable(metadata, using: rootKey)
         let encryptedFileKey = try VaultCryptoService.wrapFileKey(fileKey, rootKey: rootKey)
@@ -202,6 +270,23 @@ enum VaultImportArtifactBuilder {
         ]
     }
 
+    private static func mediaDurationSeconds(from data: Data, kind: VaultItemKind, preferredExtension: String?) async -> Double? {
+        guard kind == .video else { return nil }
+        let temporaryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension(preferredExtension ?? "mov")
+        do {
+            try data.write(to: temporaryURL, options: .atomic)
+            defer { try? FileManager.default.removeItem(at: temporaryURL) }
+            let asset = AVURLAsset(url: temporaryURL)
+            let seconds = try await asset.load(.duration).seconds
+            guard seconds.isFinite, seconds > 0 else { return nil }
+            return seconds
+        } catch {
+            return nil
+        }
+    }
+
     private static func videoFileExtension(originalName: String, mimeType: String) -> String? {
         let nameExtension = (originalName as NSString).pathExtension.trimmingCharacters(in: .whitespacesAndNewlines)
         if !nameExtension.isEmpty {
@@ -240,7 +325,16 @@ enum VaultImportArtifactBuilder {
 final class VaultStore: ObservableObject {
     static let innerVaultFolderId = "system.innerVault"
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "app.landlady.www.privacy", category: "VaultStore")
-    private var thumbnailCache: [String: UIImage] = [:]
+    private let thumbnailCache: NSCache<NSString, UIImage> = {
+        let cache = NSCache<NSString, UIImage>()
+        cache.countLimit = 240
+        cache.totalCostLimit = 64 * 1024 * 1024
+        return cache
+    }()
+    private let thumbnailDataLoader = VaultThumbnailDataLoader()
+    private var thumbnailRootKey: SymmetricKey?
+    private var thumbnailDownloadTasks: [String: Task<Bool, Never>] = [:]
+    private var originalDownloadTasks: [String: Task<Void, Error>] = [:]
     @Published var lastError: String?
     @Published var restoreStatusMessage: String?
     @Published private(set) var allowsVaultWrites = false
@@ -294,8 +388,13 @@ final class VaultStore: ObservableObject {
             if try context.fetch(descriptor).isEmpty {
                 if allowsCloudSync, let remoteManifest = await sync.fetchRemoteManifest() {
                     if try restoreRemoteManifestUsingAvailableKey(remoteManifest, context: context) {
-                        await pullCloudDecoyNotes(context: context, sync: sync)
-                        let summary = await downloadAllCloudAssets(context: context, sync: sync)
+                        let summary = await syncCloudToLocal(
+                            context: context,
+                            sync: sync,
+                            allowsCloudSync: allowsCloudSync,
+                            allowsCloudWrite: canWriteCloud,
+                            downloadsOriginals: VaultCloudToLocalSyncPolicy.automaticDownloadsOriginals
+                        )
                         restoreStatusMessage = summary.displayText
                     } else {
                         lastError = L.string("An existing iCloud vault was found. Restore it with iCloud Keychain or your recovery key before creating a new vault.")
@@ -340,8 +439,11 @@ final class VaultStore: ObservableObject {
             context.insert(manifest)
             try context.save()
             try? VaultCryptoService.syncRootKeyToICloudKeychain()
-            await pullCloudDecoyNotes(context: context, sync: sync)
-            let summary = await downloadAllCloudAssets(context: context, sync: sync)
+            let summary = await syncCloudToLocal(
+                context: context,
+                sync: sync,
+                downloadsOriginals: VaultCloudToLocalSyncPolicy.automaticDownloadsOriginals
+            )
             restoreStatusMessage = summary.displayText
             return true
         } catch {
@@ -364,8 +466,11 @@ final class VaultStore: ObservableObject {
 
             if try restoreRemoteManifestUsingAvailableKey(remoteManifest, context: context) {
                 restoreStatusMessage = L.string("Existing iCloud vault found. Restoring encrypted index...")
-                await pullCloudDecoyNotes(context: context, sync: sync)
-                let summary = await downloadAllCloudAssets(context: context, sync: sync)
+                let summary = await syncCloudToLocal(
+                    context: context,
+                    sync: sync,
+                    downloadsOriginals: VaultCloudToLocalSyncPolicy.automaticDownloadsOriginals
+                )
                 restoreStatusMessage = summary.displayText
                 return .restoredAutomatically(summary)
             }
@@ -391,7 +496,8 @@ final class VaultStore: ObservableObject {
         sync: CloudKitSyncService,
         folderId: String? = nil,
         syncAfterImport: Bool = true,
-        saveImmediately: Bool = true
+        saveImmediately: Bool = true,
+        captureLocation: VaultCaptureLocation? = nil
     ) async -> VaultImportResult {
         guard requireWriteAccess() else { return .failed }
         do {
@@ -407,7 +513,8 @@ final class VaultStore: ObservableObject {
                 mimeType: mimeType,
                 source: source,
                 kind: kind,
-                importFingerprint: importFingerprint
+                importFingerprint: importFingerprint,
+                captureLocation: captureLocation
             )
 
             let item = VaultItem(
@@ -427,7 +534,11 @@ final class VaultStore: ObservableObject {
             }
             logger.info("Imported item \(prepared.itemId, privacy: .public), kind \(kind.rawValue, privacy: .public), file \(prepared.encryptedFilePath, privacy: .public), thumb \(prepared.encryptedThumbPath ?? "none", privacy: .public)")
             if syncAfterImport {
-                _ = await sync.syncItem(item)
+                let synced = await sync.syncItem(item)
+                if synced {
+                    releaseLocalOriginalIfBackedUp(for: item)
+                    _ = offloadOriginalsIfNeeded(context: context)
+                }
                 try? context.save()
             }
             return .imported
@@ -489,36 +600,103 @@ final class VaultStore: ObservableObject {
     }
 
     func thumbnail(for item: VaultItem) -> UIImage? {
-        guard let thumbPath = item.encryptedThumbPath,
-              !thumbPath.isEmpty else {
-            return nil
-        }
-        let cacheKey = "\(item.id):\(thumbPath):\(item.updatedAt.timeIntervalSince1970)"
-        if let cached = thumbnailCache[cacheKey] {
+        guard let request = try? thumbnailLoadRequest(for: item) else { return nil }
+        if let cached = cachedThumbnail(forKey: request.cacheKey) {
             return cached
         }
 
         do {
-            let rootKey = try VaultCryptoService.ensureRootKey()
-            let wrapped = try VaultCryptoService.unwrapFileKey(item.encryptedFileKey, rootKey: rootKey)
-            let encrypted = try VaultFileStore.read(path: thumbPath)
-            let data = try VaultCryptoService.decrypt(encrypted, using: wrapped)
+            let fileKey = try VaultCryptoService.unwrapFileKey(
+                request.encryptedFileKey,
+                rootKey: request.rootKey
+            )
+            let encrypted = try VaultFileStore.read(path: request.encryptedThumbPath)
+            let data = try VaultCryptoService.decrypt(encrypted, using: fileKey)
             guard let image = UIImage(data: data) else {
                 logger.error("Thumbnail data could not decode for item \(item.id, privacy: .public)")
                 return nil
             }
-            thumbnailCache[cacheKey] = image
-            trimThumbnailCacheIfNeeded()
+            cacheThumbnail(image, forKey: request.cacheKey)
             return image
         } catch {
-            logger.error("Thumbnail load failed for item \(item.id, privacy: .public), path \(thumbPath, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            logger.error("Thumbnail load failed for item \(item.id, privacy: .public): \(error.localizedDescription, privacy: .public)")
             return nil
         }
     }
 
-    private func trimThumbnailCacheIfNeeded() {
-        guard thumbnailCache.count > 320 else { return }
-        thumbnailCache.removeAll(keepingCapacity: true)
+    func cachedThumbnail(for item: VaultItem) -> UIImage? {
+        guard let cacheKey = thumbnailCacheKey(for: item) else { return nil }
+        return cachedThumbnail(forKey: cacheKey)
+    }
+
+    func loadThumbnail(for item: VaultItem) async -> UIImage? {
+        guard let request = try? thumbnailLoadRequest(for: item) else { return nil }
+        if let cached = cachedThumbnail(forKey: request.cacheKey) {
+            return cached
+        }
+
+        let startedAt = CFAbsoluteTimeGetCurrent()
+        do {
+            let data = try await thumbnailDataLoader.decryptedData(for: request)
+            try Task.checkCancellation()
+            guard let image = UIImage(data: data) else {
+                logger.error("Thumbnail data could not decode for item \(item.id, privacy: .public)")
+                return nil
+            }
+            let displayImage = await image.byPreparingForDisplay() ?? image
+            try Task.checkCancellation()
+            cacheThumbnail(displayImage, forKey: request.cacheKey)
+            let elapsedMs = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
+            if elapsedMs > 500 {
+                logger.debug("Thumbnail loaded asynchronously kind=\(item.kind.rawValue, privacy: .public) bytes=\(data.count, privacy: .public) elapsedMs=\(String(format: "%.1f", elapsedMs), privacy: .public)")
+            }
+            return displayImage
+        } catch is CancellationError {
+            return nil
+        } catch {
+            logger.error("Asynchronous thumbnail load failed for item \(item.id, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
+    private func thumbnailLoadRequest(for item: VaultItem) throws -> VaultThumbnailLoadRequest? {
+        guard let thumbPath = item.encryptedThumbPath, !thumbPath.isEmpty,
+              let cacheKey = thumbnailCacheKey(for: item) else {
+            return nil
+        }
+        let rootKey: SymmetricKey
+        if let thumbnailRootKey {
+            rootKey = thumbnailRootKey
+        } else {
+            let loadedRootKey = try VaultCryptoService.ensureRootKey()
+            thumbnailRootKey = loadedRootKey
+            rootKey = loadedRootKey
+        }
+        return VaultThumbnailLoadRequest(
+            cacheKey: cacheKey,
+            encryptedThumbPath: thumbPath,
+            encryptedFileKey: item.encryptedFileKey,
+            rootKey: rootKey
+        )
+    }
+
+    private func thumbnailCacheKey(for item: VaultItem) -> String? {
+        guard let thumbPath = item.encryptedThumbPath, !thumbPath.isEmpty else { return nil }
+        return "\(item.id):\(thumbPath):\(item.updatedAt.timeIntervalSince1970)"
+    }
+
+    private func cachedThumbnail(forKey cacheKey: String) -> UIImage? {
+        thumbnailCache.object(forKey: cacheKey as NSString)
+    }
+
+    private func cacheThumbnail(_ image: UIImage, forKey cacheKey: String) {
+        let cost: Int
+        if let cgImage = image.cgImage {
+            cost = cgImage.bytesPerRow * cgImage.height
+        } else {
+            cost = Int(image.size.width * image.size.height * image.scale * image.scale * 4)
+        }
+        thumbnailCache.setObject(image, forKey: cacheKey as NSString, cost: max(cost, 1))
     }
 
     func needsMediaPreviewRepair(_ item: VaultItem) -> Bool {
@@ -544,6 +722,8 @@ final class VaultStore: ObservableObject {
 
         if !VaultFileStore.fileExists(path: item.encryptedFilePath) || item.assetState == .cloudOnly {
             try await downloadOriginalIfNeeded(for: item, context: context, sync: sync)
+        } else {
+            markLocalOriginalAccessed(for: item, context: context)
         }
         return try decryptedTemporaryURL(for: item)
     }
@@ -1049,16 +1229,19 @@ final class VaultStore: ObservableObject {
         sync: CloudKitSyncService,
         allowsCloudSync: Bool = true,
         allowsCloudWrite: Bool? = nil,
-        downloadsOriginals: Bool = true
+        downloadsOriginals: Bool? = nil
     ) async -> CloudAssetDownloadSummary {
         guard allowsCloudSync else { return CloudAssetDownloadSummary() }
         let canWriteCloud = allowsCloudWrite ?? allowsCloudSync
+        let shouldDownloadOriginals = VaultCloudToLocalSyncPolicy.downloadsOriginals(
+            explicitOverride: downloadsOriginals
+        )
 
         let indexedCount = await pullCloudIndex(context: context, sync: sync, allowsCloudSync: allowsCloudSync)
         await pullCloudDecoyNotes(context: context, sync: sync)
         await syncPendingChanges(context: context, sync: sync, allowsCloudSync: canWriteCloud)
 
-        guard downloadsOriginals else {
+        guard shouldDownloadOriginals else {
             let summary = CloudAssetDownloadSummary(indexedItems: indexedCount)
             restoreStatusMessage = summary.displayText
             return summary
@@ -1086,7 +1269,7 @@ final class VaultStore: ObservableObject {
         do {
             let rootKey = try VaultCryptoService.ensureRootKey()
             await pullCloudFolders(context: context, sync: sync)
-            let remoteRecords = await sync.fetchRemoteItems()
+            let remoteRecords = await sync.fetchRemoteItemsForIndex()
             let existingItems = try context.fetch(FetchDescriptor<VaultItem>())
             var itemsById = Dictionary(uniqueKeysWithValues: existingItems.map { ($0.id, $0) })
             var indexedCount = 0
@@ -1173,6 +1356,20 @@ final class VaultStore: ObservableObject {
             return
         }
 
+        if let existingTask = originalDownloadTasks[item.id] {
+            try await existingTask.value
+            return
+        }
+
+        let task: Task<Void, Error> = Task { @MainActor in
+            try await self.performOriginalDownload(for: item, context: context, sync: sync)
+        }
+        originalDownloadTasks[item.id] = task
+        defer { originalDownloadTasks[item.id] = nil }
+        try await task.value
+    }
+
+    private func performOriginalDownload(for item: VaultItem, context: ModelContext, sync: CloudKitSyncService) async throws {
         let assets = await sync.downloadAssets(for: item)
         guard let fileURL = assets.fileURL else {
             throw VaultCryptoService.CryptoError.missingRootKey
@@ -1191,37 +1388,72 @@ final class VaultStore: ObservableObject {
         try context.save()
     }
 
+    @discardableResult
+    func downloadThumbnailIfAvailable(for item: VaultItem, sync: CloudKitSyncService) async -> Bool {
+        guard item.deletedAt == nil, item.kind.isVisualMedia else { return false }
+        guard VaultCloudAssetDownloadPolicy.needsLocalPreview(item) else { return true }
+        if let existingTask = thumbnailDownloadTasks[item.id] {
+            return await existingTask.value
+        }
+
+        let task = Task { @MainActor in
+            await self.performThumbnailDownload(for: item, sync: sync)
+        }
+        thumbnailDownloadTasks[item.id] = task
+        let result = await task.value
+        thumbnailDownloadTasks[item.id] = nil
+        return result
+    }
+
+    private func performThumbnailDownload(for item: VaultItem, sync: CloudKitSyncService) async -> Bool {
+        guard let thumbURL = await sync.downloadThumbnail(for: item) else { return false }
+        do {
+            item.encryptedThumbPath = try VaultFileStore.copyEncryptedThumb(from: thumbURL, itemId: item.id)
+            item.lastDownloadError = nil
+            return true
+        } catch {
+            item.lastDownloadError = error.localizedDescription
+            return false
+        }
+    }
+
+    @discardableResult
     func ensureMediaPreviews(
         for items: [VaultItem],
         context: ModelContext,
         sync: CloudKitSyncService,
         syncAfterRepair: Bool = false
-    ) async {
+    ) async -> Bool {
         let candidates = items.filter(VaultCloudAssetDownloadPolicy.needsLocalPreview)
-        guard !candidates.isEmpty else { return }
+        guard !candidates.isEmpty else { return false }
 
         var repairedCount = 0
+        var generatedPreviewNeedsSync = false
         for item in candidates {
-            do {
-                if VaultCloudAssetDownloadPolicy.shouldDownload(item) {
-                    try await downloadOriginalIfNeeded(for: item, context: context, sync: sync)
-                }
-
-                guard VaultCloudAssetDownloadPolicy.needsLocalPreview(item),
-                      let encryptedThumbPath = await makeEncryptedThumbnail(for: item) else {
-                    continue
-                }
-                item.encryptedThumbPath = encryptedThumbPath
-                item.updatedAt = Date()
-                if syncAfterRepair {
-                    item.localRevision += 1
-                    item.syncStatus = .pending
-                }
+            if await downloadThumbnailIfAvailable(for: item, sync: sync) {
                 repairedCount += 1
-            } catch {
-                item.lastDownloadError = error.localizedDescription
-                logger.error("Media preview repair failed for item \(item.id, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                continue
             }
+
+            guard VaultFileStore.fileExists(path: item.encryptedFilePath), item.assetState == .local else {
+                continue
+            }
+
+            guard VaultCloudAssetDownloadPolicy.needsLocalPreview(item),
+                  let encryptedThumbPath = await makeEncryptedThumbnail(for: item) else {
+                continue
+            }
+            item.encryptedThumbPath = encryptedThumbPath
+            item.updatedAt = Date()
+            if syncAfterRepair {
+                item.localRevision += 1
+                item.syncStatus = .pending
+                generatedPreviewNeedsSync = true
+            }
+            if item.syncStatus == .synced {
+                releaseLocalOriginalIfBackedUp(for: item)
+            }
+            repairedCount += 1
         }
 
         if repairedCount > 0 {
@@ -1229,6 +1461,7 @@ final class VaultStore: ObservableObject {
             try? context.save()
             objectWillChange.send()
         }
+        return generatedPreviewNeedsSync
     }
 
     @discardableResult
@@ -1275,6 +1508,131 @@ final class VaultStore: ObservableObject {
 
         restoreStatusMessage = summary.displayText
         return summary
+    }
+
+    @discardableResult
+    func releaseLocalOriginal(for item: VaultItem, context: ModelContext) -> Bool {
+        let released = releaseLocalOriginalIfBackedUp(for: item, trigger: .manual)
+        if released {
+            try? context.save()
+            objectWillChange.send()
+        }
+        return released
+    }
+
+    @discardableResult
+    func releaseLocalOriginals(for items: [VaultItem], context: ModelContext) -> Int {
+        let count = items.reduce(0) { partial, item in
+            partial + (releaseLocalOriginalIfBackedUp(for: item, trigger: .manual) ? 1 : 0)
+        }
+        if count > 0 {
+            try? context.save()
+            objectWillChange.send()
+        }
+        return count
+    }
+
+    @discardableResult
+    func offloadOriginalsIfNeeded(context: ModelContext) -> Int {
+        guard VaultOptimizedStoragePolicy.isEnabledByDefault else { return 0 }
+        let objectBytes = VaultFileStore.encryptedObjectBytes()
+        let availableBytes = VaultFileStore.availableCapacityForImportantUsage()
+        guard objectBytes > VaultOptimizedStoragePolicy.maxLocalOriginalCacheBytes
+                || availableBytes < VaultOptimizedStoragePolicy.lowDiskFreeBytes else {
+            return 0
+        }
+
+        let items = (try? context.fetch(FetchDescriptor<VaultItem>())) ?? []
+        let candidates = items
+            .filter { item in
+                item.deletedAt == nil
+                    && item.kind != .link
+                    && item.syncStatus == .synced
+                    && item.assetState == .local
+                    && VaultFileStore.fileExists(path: item.encryptedFilePath)
+            }
+            .sorted { lhs, rhs in
+                if lhs.isFavorite != rhs.isFavorite {
+                    return !lhs.isFavorite
+                }
+                let lhsLarge = lhs.byteSize >= VaultOptimizedStoragePolicy.immediateReleaseByteThreshold
+                let rhsLarge = rhs.byteSize >= VaultOptimizedStoragePolicy.immediateReleaseByteThreshold
+                if lhsLarge != rhsLarge {
+                    return lhsLarge
+                }
+                let lhsDate = lhs.downloadedAt ?? VaultFileStore.fileModifiedAt(path: lhs.encryptedFilePath) ?? lhs.updatedAt
+                let rhsDate = rhs.downloadedAt ?? VaultFileStore.fileModifiedAt(path: rhs.encryptedFilePath) ?? rhs.updatedAt
+                if lhsDate != rhsDate {
+                    return lhsDate < rhsDate
+                }
+                return lhs.byteSize > rhs.byteSize
+            }
+
+        var released = 0
+        var remainingBytes = objectBytes
+        let targetBytes = objectBytes > VaultOptimizedStoragePolicy.maxLocalOriginalCacheBytes
+            ? VaultOptimizedStoragePolicy.targetLocalOriginalCacheBytes
+            : VaultOptimizedStoragePolicy.maxLocalOriginalCacheBytes
+        for item in candidates {
+            guard remainingBytes > targetBytes
+                    || VaultFileStore.availableCapacityForImportantUsage() < VaultOptimizedStoragePolicy.lowDiskFreeBytes else {
+                break
+            }
+            let size = VaultFileStore.fileSize(path: item.encryptedFilePath)
+            if releaseLocalOriginalIfBackedUp(for: item, trigger: .cachePressure) {
+                remainingBytes -= size
+                released += 1
+            }
+        }
+
+        if released > 0 {
+            try? context.save()
+            objectWillChange.send()
+        }
+        return released
+    }
+
+    @discardableResult
+    private func releaseLocalOriginalIfBackedUp(
+        for item: VaultItem,
+        trigger: VaultOriginalReleaseTrigger = .successfulSync
+    ) -> Bool {
+        guard VaultOptimizedStoragePolicy.isEnabledByDefault,
+              item.deletedAt == nil,
+              item.kind != .link,
+              item.syncStatus == .synced,
+              item.assetState == .local,
+              VaultFileStore.fileExists(path: item.encryptedFilePath) else {
+            return false
+        }
+
+        if trigger == .successfulSync,
+           !VaultOptimizedStoragePolicy.shouldReleaseAfterSuccessfulSync(item) {
+            return false
+        }
+
+        VaultFileStore.remove(path: item.encryptedFilePath)
+        item.assetState = .cloudOnly
+        item.downloadedAt = nil
+        item.lastDownloadError = nil
+        return true
+    }
+
+    private func markLocalOriginalAccessed(for item: VaultItem, context: ModelContext) {
+        guard item.deletedAt == nil,
+              item.kind != .link,
+              item.assetState == .local,
+              VaultFileStore.fileExists(path: item.encryptedFilePath) else {
+            return
+        }
+
+        let now = Date()
+        if let downloadedAt = item.downloadedAt,
+           now.timeIntervalSince(downloadedAt) < VaultOptimizedStoragePolicy.accessTimestampUpdateInterval {
+            return
+        }
+        item.downloadedAt = now
+        try? context.save()
     }
 
     private func repairStoredFileReferences(context: ModelContext) throws {
@@ -1426,10 +1784,14 @@ final class VaultStore: ObservableObject {
 
             for item in itemsToSync {
                 let success = await sync.syncItem(item)
+                if success {
+                    releaseLocalOriginalIfBackedUp(for: item)
+                }
                 if manualRun {
                     sync.recordItemSync(success: success, failure: success ? nil : item.lastSyncError ?? sync.lastSyncError)
                 }
             }
+            _ = offloadOriginalsIfNeeded(context: context)
             try context.save()
             if manualRun {
                 sync.finishSyncRun()

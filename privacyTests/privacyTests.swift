@@ -46,6 +46,12 @@ struct privacyTests {
         #expect(!modelContainer.usesPersistentStore)
     }
 
+    @Test func appModelStoreRequiresFreeSpaceBeforeOpeningPersistentStore() {
+        #expect(AppModelStore.minimumPersistentStoreFreeBytes >= 50 * 1024 * 1024)
+        #expect(!AppModelStore.shouldUsePersistentStore(protectedDataAvailable: false))
+        #expect(AppModelStore.availableCapacityForPersistentStore() >= 0)
+    }
+
     @Test func encryptDecryptRoundTrip() async throws {
         let key = SymmetricKey(size: .bits256)
         let plaintext = Data("private vault payload".utf8)
@@ -708,8 +714,151 @@ struct privacyTests {
         #expect(MediaGridLayout.columnCount(for: 390, scale: MediaGridLayout.maximumScale) == 1)
         #expect(MediaGridLayout.spacing == 6)
         #expect(MediaGridLayout.interactionMinHeight == 560)
+        #expect(MediaGridLayout.albumViewportHeight(for: 200) == MediaGridLayout.interactionMinHeight)
+        #expect(MediaGridLayout.albumViewportHeight(for: 1_000) == 720)
         #expect(MediaGridLayout.persistedScale(0.01) == MediaGridLayout.minimumScale)
         #expect(MediaGridLayout.storedScale(10) == Double(MediaGridLayout.maximumScale))
+    }
+
+    @Test func albumGridDefersExpensiveLayoutChangesUntilPinchSettles() {
+        #expect(
+            MediaGridLayout.layoutScale(
+                committedScale: 1,
+                proposedScale: 2.2,
+                isPinching: true
+            ) == 1
+        )
+        #expect(
+            MediaGridLayout.layoutScale(
+                committedScale: 1,
+                proposedScale: 2.2,
+                isPinching: false
+            ) == 2.2
+        )
+    }
+
+    @Test @MainActor func thumbnailDataLoaderDecryptsTheStoredThumbnail() async throws {
+        let pngData = try #require(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="))
+        let rootKey = SymmetricKey(size: .bits256)
+        let fileKey = SymmetricKey(size: .bits256)
+        let itemID = "thumbnail-test-\(UUID().uuidString)"
+        let encryptedThumbnail = try VaultCryptoService.encrypt(pngData, using: fileKey)
+        let path = try VaultFileStore.writeEncryptedThumb(encryptedThumbnail, itemId: itemID)
+        defer { VaultFileStore.remove(path: path) }
+
+        let request = VaultThumbnailLoadRequest(
+            cacheKey: itemID,
+            encryptedThumbPath: path,
+            encryptedFileKey: try VaultCryptoService.wrapFileKey(fileKey, rootKey: rootKey),
+            rootKey: rootKey
+        )
+        let data = try await VaultThumbnailDataLoader().decryptedData(for: request)
+
+        #expect(data == pngData)
+    }
+
+    @Test func mediaPreviewRepairCandidatesStayLimitedToVisibleItems() {
+        let orderedIDs = ["1", "2", "3", "4", "5"]
+        let candidates = MediaPreviewRepairBatchPolicy.candidateIDs(
+            orderedItemIDs: orderedIDs,
+            visibleItemIDs: ["2", "4", "5"],
+            repairNeededItemIDs: ["1", "2", "3", "4"],
+            limit: 2
+        )
+
+        #expect(candidates == ["2", "4"])
+    }
+
+    @Test @MainActor func albumGridReconfiguresOnlyChangedVisibleItems() {
+        let previous = [
+            AlbumGridItemRenderState(id: "1", thumbnailIdentity: "thumb-1", statusIdentity: "synced", isSelected: false),
+            AlbumGridItemRenderState(id: "2", thumbnailIdentity: "", statusIdentity: "cloud", isSelected: false)
+        ]
+        let next = [
+            previous[0],
+            AlbumGridItemRenderState(id: "2", thumbnailIdentity: "thumb-2", statusIdentity: "cloud", isSelected: false)
+        ]
+
+        #expect(AlbumGridUpdatePolicy.plan(previous: previous, next: next) == .reconfigure([1]))
+        #expect(AlbumGridUpdatePolicy.plan(previous: previous, next: Array(next.reversed())) == .reloadAll)
+    }
+
+    @Test func albumVideoDurationFormatterAdaptsToAvailableSpace() {
+        #expect(AlbumVideoDurationFormatter.text(for: 65) == "1:05")
+        #expect(AlbumVideoDurationFormatter.text(for: 3661) == "1:01:01")
+        #expect(AlbumVideoDurationFormatter.text(for: 3661, compact: true) == "1h")
+        #expect(AlbumVideoDurationFormatter.text(for: 65, compact: true) == "1m")
+    }
+
+    @Test @MainActor func vaultMetadataDecodesWithoutMediaDurationForExistingItems() throws {
+        let json = """
+        {
+          "originalName": "old.mov",
+          "mimeType": "video/quicktime",
+          "source": "Photos",
+          "note": "",
+          "importedAt": 0,
+          "originalExtension": "mov"
+        }
+        """.data(using: .utf8)!
+
+        let metadata = try JSONDecoder().decode(VaultMetadata.self, from: json)
+
+        #expect(metadata.originalName == "old.mov")
+        #expect(metadata.mediaDurationSeconds == nil)
+    }
+
+    @Test func mediaPreviewRepairTaskKeyDependsOnViewportInsteadOfRepairProgress() {
+        let key = MediaPreviewRepairBatchPolicy.taskKey(
+            scope: "default:album:all",
+            visibleItemIDs: ["3", "1", "2"]
+        )
+
+        #expect(key == "default:album:all:1,2,3")
+    }
+
+    @Test func fullscreenPreviewLoadsOriginalOnlyForSelectedPage() {
+        #expect(FullscreenMediaLoadingPolicy.shouldLoadOriginal(isSelected: true))
+        #expect(!FullscreenMediaLoadingPolicy.shouldLoadOriginal(isSelected: false))
+    }
+
+    @Test func fullscreenPreviewPreloadsStableOriginalImagesForSwipeNeighbors() {
+        #expect(FullscreenMediaLoadingPolicy.loadMode(itemIndex: 4, selectedIndex: 4, itemKind: .image) == .original)
+        #expect(FullscreenMediaLoadingPolicy.loadMode(itemIndex: 3, selectedIndex: 4, itemKind: .image) == .original)
+        #expect(FullscreenMediaLoadingPolicy.loadMode(itemIndex: 5, selectedIndex: 4, itemKind: .livePhoto) == .original)
+        #expect(FullscreenMediaLoadingPolicy.loadMode(itemIndex: 3, selectedIndex: 4, itemKind: .video) == .thumbnail)
+        #expect(FullscreenMediaLoadingPolicy.loadMode(itemIndex: 2, selectedIndex: 4, itemKind: .image) == .none)
+        #expect(FullscreenMediaLoadingPolicy.loadMode(itemIndex: 6, selectedIndex: 4, itemKind: .image) == .none)
+        #expect(FullscreenMediaLoadingPolicy.loadMode(itemIndex: 0, selectedIndex: nil, itemKind: .image) == .none)
+    }
+
+    @Test func fullscreenOriginalImagePreviewDoesNotStageCroppedThumbnail() {
+        #expect(!FullscreenMediaStagingPolicy.shouldShowThumbnailBeforeOriginal(kind: .image))
+        #expect(!FullscreenMediaStagingPolicy.shouldShowThumbnailBeforeOriginal(kind: .livePhoto))
+        #expect(FullscreenMediaStagingPolicy.shouldShowThumbnailBeforeOriginal(kind: .video))
+    }
+
+    @Test func activeVideoPlaybackPreventsIdleSleepOnlyWhileVisible() {
+        #expect(VideoPlayerIdleTimerPolicy.shouldDisableIdleTimer(isPlaying: true, isVisible: true))
+        #expect(!VideoPlayerIdleTimerPolicy.shouldDisableIdleTimer(isPlaying: false, isVisible: true))
+        #expect(!VideoPlayerIdleTimerPolicy.shouldDisableIdleTimer(isPlaying: true, isVisible: false))
+    }
+
+    @Test func videoPreviewUsesStableLazyPagingAndCenteredTransportControls() throws {
+        let source = try String(
+            contentsOf: repositoryRoot()
+                .appendingPathComponent("privacy")
+                .appendingPathComponent("MainViews.swift"),
+            encoding: .utf8
+        )
+
+        #expect(source.contains("LazyHStack(spacing: 0)"))
+        #expect(source.contains(".scrollTargetBehavior(.paging)"))
+        #expect(source.contains("VideoPlayerTransportControls("))
+        #expect(source.contains("alignment: .center"))
+        #expect(source.contains("AVPlayerItemFailedToPlayToEndTimeErrorKey"))
+        #expect(source.contains(".AVPlayerItemPlaybackStalled"))
+        #expect(!source.contains("ForEach(previewWindowItems)"))
     }
 
     @Test func mediaGridScaleStorageSeparatesHomeCategories() {
@@ -719,10 +868,230 @@ struct privacyTests {
         #expect(MediaGridScaleStorage.defaultStoredScale == Double(MediaGridLayout.defaultScale))
     }
 
-    @Test func cloudToLocalSyncDownloadsOriginalsForAutomaticAndManualRefreshRuns() {
-        #expect(VaultCloudToLocalSyncPolicy.automaticDownloadsOriginals)
-        #expect(VaultCloudToLocalSyncPolicy.manualRefreshDownloadsOriginals)
+    @Test func albumMediaGridKeepsCellReuseDuringScrollAndPinch() throws {
+        let source = try String(
+            contentsOf: repositoryRoot()
+                .appendingPathComponent("privacy")
+                .appendingPathComponent("MediaGridViews.swift"),
+            encoding: .utf8
+        )
+
+        #expect(source.contains("collectionView.isScrollEnabled = true"))
+        #expect(source.contains("context.coordinator.reloadDataIfNeeded(collectionView)"))
+        #expect(source.contains("private var transientScale"))
+        #expect(source.contains("MediaGridLayout.albumViewportHeight()"))
+
+        let pinchStart = try #require(source.range(of: "@objc func handlePinch"))
+        let longPressStart = try #require(source.range(of: "@objc func handleLongPress"))
+        let pinchSource = source[pinchStart.lowerBound..<longPressStart.lowerBound]
+        let changedStart = try #require(pinchSource.range(of: "case .changed:"))
+        let endedStart = try #require(pinchSource.range(of: "case .ended, .cancelled, .failed:"))
+        let changedSource = pinchSource[changedStart.lowerBound..<endedStart.lowerBound]
+
+        #expect(changedSource.contains("transientScale ="))
+        #expect(!changedSource.contains("parent.scale ="))
+    }
+
+    @Test func cloudToLocalSyncKeepsOriginalsOnDemandForAutomaticAndManualRefreshRuns() {
+        #expect(!VaultCloudToLocalSyncPolicy.automaticDownloadsOriginals)
+        #expect(!VaultCloudToLocalSyncPolicy.automaticDownloadsPreviews)
+        #expect(!VaultCloudToLocalSyncPolicy.manualRefreshDownloadsOriginals)
+        #expect(!VaultCloudToLocalSyncPolicy.downloadsOriginals(explicitOverride: nil))
+        #expect(VaultCloudToLocalSyncPolicy.downloadsOriginals(explicitOverride: true))
         #expect(VaultCloudToLocalSyncPolicy.syncedHomeCategories == [.album, .audio, .documents])
+    }
+
+    @Test func optimizedStoragePolicyKeepsBoundedLocalOriginalCache() {
+        #expect(VaultOptimizedStoragePolicy.isEnabledByDefault)
+        #expect(VaultOptimizedStoragePolicy.maxLocalOriginalCacheBytes == 300 * 1024 * 1024)
+        #expect(VaultOptimizedStoragePolicy.targetLocalOriginalCacheBytes == 200 * 1024 * 1024)
+        #expect(VaultOptimizedStoragePolicy.immediateReleaseByteThreshold == 25 * 1024 * 1024)
+        #expect(VaultOptimizedStoragePolicy.lowDiskFreeBytes == 1 * 1024 * 1024 * 1024)
+    }
+
+    @Test func optimizedStorageAppliesTheSameLargeOriginalRuleAcrossFileKinds() {
+        let fileKinds: [VaultItemKind] = [.image, .livePhoto, .video, .audio, .document, .archive, .other]
+
+        for kind in fileKinds {
+            let smallItem = VaultItem(
+                kind: kind,
+                encryptedFilePath: "objects/small-\(kind.rawValue).enc",
+                encryptedMetadata: Data(),
+                byteSize: VaultOptimizedStoragePolicy.immediateReleaseByteThreshold - 1,
+                assetState: .local
+            )
+            smallItem.syncStatus = VaultSyncStatus.synced
+
+            let largeItem = VaultItem(
+                kind: kind,
+                encryptedFilePath: "objects/large-\(kind.rawValue).enc",
+                encryptedMetadata: Data(),
+                byteSize: VaultOptimizedStoragePolicy.immediateReleaseByteThreshold,
+                assetState: .local
+            )
+            largeItem.syncStatus = VaultSyncStatus.synced
+
+            #expect(!VaultOptimizedStoragePolicy.shouldReleaseAfterSuccessfulSync(smallItem))
+            #expect(VaultOptimizedStoragePolicy.shouldReleaseAfterSuccessfulSync(largeItem))
+        }
+    }
+
+    @Test func cloudIndexRefreshAvoidsOriginalAssetFetches() throws {
+        let cloudServiceSource = try String(
+            contentsOf: repositoryRoot()
+                .appendingPathComponent("privacy")
+                .appendingPathComponent("CloudKitSyncService.swift"),
+            encoding: .utf8
+        )
+        let vaultStoreSource = try String(
+            contentsOf: repositoryRoot()
+                .appendingPathComponent("privacy")
+                .appendingPathComponent("VaultStore.swift"),
+            encoding: .utf8
+        )
+
+        #expect(cloudServiceSource.contains("func fetchRemoteItemsForIndex() async -> [CKRecord]"))
+        #expect(cloudServiceSource.contains("\"thumbAsset\""))
+        #expect(!cloudServiceSource.contains("""
+            "fileAsset",
+                            "thumbAsset"
+            """))
+        #expect(vaultStoreSource.contains("let remoteRecords = await sync.fetchRemoteItemsForIndex()"))
+    }
+
+    @Test func optimizedStorageOffloadsOriginalsAfterSuccessfulItemSync() throws {
+        let vaultStoreSource = try String(
+            contentsOf: repositoryRoot()
+                .appendingPathComponent("privacy")
+                .appendingPathComponent("VaultStore.swift"),
+            encoding: .utf8
+        )
+
+        #expect(vaultStoreSource.contains("let synced = await sync.syncItem(item)"))
+        #expect(vaultStoreSource.contains("if synced {"))
+        #expect(vaultStoreSource.contains("releaseLocalOriginalIfBackedUp(for: item)"))
+        #expect(vaultStoreSource.contains("item.assetState = .cloudOnly"))
+        #expect(vaultStoreSource.contains("VaultFileStore.remove(path: item.encryptedFilePath)"))
+    }
+
+    @Test func mediaPreviewRepairDoesNotDownloadOriginalsForGridThumbnails() throws {
+        let source = try String(
+            contentsOf: repositoryRoot()
+                .appendingPathComponent("privacy")
+                .appendingPathComponent("VaultStore.swift"),
+            encoding: .utf8
+        )
+        let start = try #require(source.range(of: "func ensureMediaPreviews("))
+        let end = try #require(source.range(of: "@discardableResult\n    func downloadAllCloudAssets"))
+        let ensureMediaPreviewsSource = source[start.lowerBound..<end.lowerBound]
+
+        #expect(ensureMediaPreviewsSource.contains("downloadThumbnailIfAvailable"))
+        #expect(ensureMediaPreviewsSource.contains("VaultFileStore.fileExists(path: item.encryptedFilePath)"))
+        #expect(!ensureMediaPreviewsSource.contains("downloadOriginalIfNeeded"))
+    }
+
+    @Test func cloudOnlyMetadataSyncPreservesRemoteFileAssetWithoutLocalOriginal() throws {
+        let source = try String(
+            contentsOf: repositoryRoot()
+                .appendingPathComponent("privacy")
+                .appendingPathComponent("CloudKitSyncService.swift"),
+            encoding: .utf8
+        )
+
+        #expect(source.contains("let canPreserveRemoteFileAsset = requiresFileAsset"))
+        #expect(source.contains("item.assetState == .cloudOnly"))
+        #expect(source.contains("canPreserveRemoteFileAsset || VaultFileStore.fileExists(path: item.encryptedFilePath)"))
+        #expect(source.contains("if requiresFileAsset, VaultFileStore.fileExists(path: item.encryptedFilePath)"))
+    }
+
+    @MainActor
+    @Test func vaultMetadataRoundTripsCaptureLocation() throws {
+        let location = VaultCaptureLocation(
+            latitude: 31.2304,
+            longitude: 121.4737,
+            horizontalAccuracy: 8,
+            altitude: 12,
+            capturedAt: Date(timeIntervalSince1970: 1_800_000_000),
+            resolvedAddress: "Shanghai, Huangpu"
+        )
+        let metadata = VaultMetadata(
+            originalName: "Photo.jpg",
+            mimeType: "image/jpeg",
+            source: "Camera",
+            note: "",
+            importedAt: Date(timeIntervalSince1970: 1_800_000_001),
+            captureLocation: location
+        )
+
+        let data = try JSONEncoder().encode(metadata)
+        let decoded = try JSONDecoder().decode(VaultMetadata.self, from: data)
+
+        #expect(decoded.captureLocation == location)
+        #expect(decoded.captureLocation?.coordinateText == "31.23040, 121.47370")
+        #expect(decoded.captureLocation?.resolvedAddress == "Shanghai, Huangpu")
+    }
+
+    @Test func mapCoordinatePolicyOffsetsMainlandChinaLocationsForMapKit() {
+        let shanghai = VaultMapCoordinatePolicy.mapCoordinate(latitude: 31.2304, longitude: 121.4737)
+        let sanFrancisco = VaultMapCoordinatePolicy.mapCoordinate(latitude: 37.7749, longitude: -122.4194)
+
+        #expect(abs(shanghai.latitude - 31.22846) < 0.0001)
+        #expect(abs(shanghai.longitude - 121.47822) < 0.0001)
+        #expect(sanFrancisco.latitude == 37.7749)
+        #expect(sanFrancisco.longitude == -122.4194)
+    }
+
+    @Test func cameraCaptureImportsPersistCaptureLocationMetadata() throws {
+        let featureSource = try String(
+            contentsOf: repositoryRoot()
+                .appendingPathComponent("privacy")
+                .appendingPathComponent("FeatureViews.swift"),
+            encoding: .utf8
+        )
+        let vaultStoreSource = try String(
+            contentsOf: repositoryRoot()
+                .appendingPathComponent("privacy")
+                .appendingPathComponent("VaultStore.swift"),
+            encoding: .utf8
+        )
+
+        #expect(featureSource.contains("locationProvider.captureLocation()"))
+        #expect(featureSource.contains("case .photo(let image, let location)"))
+        #expect(featureSource.contains("case .video(let url, let location)"))
+        #expect(featureSource.contains("captureLocation: location"))
+        #expect(vaultStoreSource.contains("captureLocation: VaultCaptureLocation? = nil"))
+        #expect(vaultStoreSource.contains("captureLocation: captureLocation"))
+    }
+
+    @Test func photoLibraryImportPersistsOriginalAssetLocationAndResolvedAddress() throws {
+        let source = try String(
+            contentsOf: repositoryRoot()
+                .appendingPathComponent("privacy")
+                .appendingPathComponent("ImportService.swift"),
+            encoding: .utf8
+        )
+
+        #expect(source.contains("captureLocation(for: item, fallbackData:"))
+        #expect(source.contains("PHAsset.fetchAssets(withLocalIdentifiers"))
+        #expect(source.contains("CGImagePropertyGPSDictionary"))
+        #expect(source.contains("reverseGeocodeLocation"))
+        #expect(source.contains("captureLocation: captureLocation"))
+    }
+
+    @Test func mediaDetailsExposeCaptureLocationMapCard() throws {
+        let source = try String(
+            contentsOf: repositoryRoot()
+                .appendingPathComponent("privacy")
+                .appendingPathComponent("MainViews.swift"),
+            encoding: .utf8
+        )
+
+        #expect(source.contains("if let location = metadata?.captureLocation"))
+        #expect(source.contains("Text(location.resolvedAddress ?? location.coordinateText)"))
+        #expect(source.contains("detailRow(L.string(\"Address\"), location.resolvedAddress)"))
+        #expect(source.contains("VaultLocationMapView"))
+        #expect(source.contains("Map(position: .constant(.region(region)))"))
+        #expect(source.contains("Open in Apple Maps"))
     }
 
     @Test func cloudAssetDownloadPolicySelectsOnlyMissingNonLinkItems() throws {
@@ -785,8 +1154,9 @@ struct privacyTests {
         #expect(VaultCategoryCarouselLayout.iconFontSize == 22)
     }
 
-    @Test func photoLibraryExportSupportsOnlyImagesAndVideos() {
+    @Test func photoLibraryExportSupportsPhotosLivePhotosAndVideos() {
         #expect(PhotoLibraryExportService.canSaveToPhotoLibrary(kind: .image))
+        #expect(PhotoLibraryExportService.canSaveToPhotoLibrary(kind: .livePhoto))
         #expect(PhotoLibraryExportService.canSaveToPhotoLibrary(kind: .video))
         #expect(!PhotoLibraryExportService.canSaveToPhotoLibrary(kind: .audio))
         #expect(!PhotoLibraryExportService.canSaveToPhotoLibrary(kind: .document))
@@ -989,6 +1359,17 @@ struct privacyTests {
         await manager.restorePurchases()
 
         #expect(manager.statusText == L.string("Restore purchase failed. Please try again."))
+    }
+
+    @MainActor
+    @Test func redeemOfferCodeWithoutRevenueCatShowsUnavailableFeedback() async {
+        let manager = SubscriptionManager()
+        manager.configureRevenueCat(apiKey: nil)
+
+        await manager.redeemOfferCode()
+
+        #expect(manager.statusText == L.string("Code redemption is unavailable. Please try again later."))
+        #expect(manager.restoreFeedback?.message == L.string("Code redemption is unavailable. Please try again later."))
     }
 
     @MainActor
@@ -1267,15 +1648,18 @@ struct privacyTests {
             "DecoyNote"
         ])
         let seedNamesAreInternal = descriptors.allSatisfy { descriptor in
-            descriptor.recordName.hasPrefix("__privacy_schema_seed_")
+            descriptor.recordName.hasPrefix(CloudKitSyncService.internalRecordNamePrefix)
+                && !descriptor.recordName.hasPrefix("_")
         }
         #expect(seedNamesAreInternal)
+        #expect(CloudKitSyncService.isInternalRecordName("__privacy_schema_seed_vault_item"))
     }
 
     @MainActor
     @Test func cloudKitWritableProbeUsesProductionSchemaRecordType() {
         #expect(CloudKitSyncService.writableProbeRecordType == "VaultManifest")
         #expect(CloudKitSyncService.writableProbeRecordName.hasPrefix(CloudKitSyncService.internalRecordNamePrefix))
+        #expect(!CloudKitSyncService.writableProbeRecordName.hasPrefix("_"))
         #expect(CloudKitSyncService.changeSubscriptionDescriptors.map(\.recordType).contains(CloudKitSyncService.writableProbeRecordType))
     }
 

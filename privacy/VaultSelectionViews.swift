@@ -4,10 +4,16 @@ import UIKit
 struct VaultSelectionToolbar: View {
     let selectedCount: Int
     let isDeleting: Bool
+    let isExporting: Bool
+    let isSavingToPhotos: Bool
     let canDelete: Bool
+    let canExport: Bool
+    let canSaveToPhotos: Bool
     let moveTitle: String?
     let moveSystemImage: String
     let cancelAction: () -> Void
+    let exportAction: () -> Void
+    let saveToPhotosAction: () -> Void
     let moveAction: () -> Void
     let deleteAction: () -> Void
 
@@ -26,22 +32,48 @@ struct VaultSelectionToolbar: View {
 
             Spacer()
 
-            if let moveTitle {
-                Button(action: moveAction) {
-                    Label(moveTitle, systemImage: moveSystemImage)
+            if canExport {
+                Button(action: exportAction) {
+                    Image(systemName: isExporting ? "hourglass" : "square.and.arrow.up")
                         .font(.subheadline.weight(.semibold))
+                        .frame(width: 32, height: 32)
                 }
                 .buttonStyle(.plain)
-                .disabled(selectedCount == 0 || isDeleting)
+                .disabled(selectedCount == 0 || isExporting || isSavingToPhotos || isDeleting)
+                .accessibilityLabel(L.string("Export"))
+            }
+
+            if canSaveToPhotos {
+                Button(action: saveToPhotosAction) {
+                    Image(systemName: isSavingToPhotos ? "hourglass" : "square.and.arrow.down")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(width: 32, height: 32)
+                }
+                .buttonStyle(.plain)
+                .disabled(selectedCount == 0 || isSavingToPhotos || isExporting || isDeleting)
+                .accessibilityLabel(isSavingToPhotos ? L.string("Saving to Photos") : L.string("Save to Photos"))
+            }
+
+            if let moveTitle {
+                Button(action: moveAction) {
+                    Image(systemName: moveSystemImage)
+                        .font(.subheadline.weight(.semibold))
+                        .frame(width: 32, height: 32)
+                }
+                .buttonStyle(.plain)
+                .disabled(selectedCount == 0 || isDeleting || isExporting || isSavingToPhotos)
+                .accessibilityLabel(moveTitle)
             }
 
             if canDelete {
                 Button(role: .destructive, action: deleteAction) {
-                    Label(isDeleting ? L.string("Deleting") : L.string("Delete"), systemImage: "trash")
+                    Image(systemName: isDeleting ? "hourglass" : "trash")
                         .font(.subheadline.weight(.semibold))
+                        .frame(width: 32, height: 32)
                 }
                 .buttonStyle(.plain)
-                .disabled(selectedCount == 0 || isDeleting)
+                .disabled(selectedCount == 0 || isDeleting || isExporting || isSavingToPhotos)
+                .accessibilityLabel(isDeleting ? L.string("Deleting") : L.string("Delete"))
             }
         }
         .foregroundStyle(.white)

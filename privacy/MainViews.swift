@@ -1,5 +1,6 @@
 import AVFoundation
 import ImageIO
+import MapKit
 import MarkdownUI
 import Photos
 import PhotosUI
@@ -18,6 +19,33 @@ private enum VaultHaptics {
         PlatformCapabilities.successNotification()
     }
 }
+
+enum MediaPreviewRepairBatchPolicy {
+    nonisolated static let maxAutomaticRepairCount = 48
+
+    nonisolated static func candidateIDs(
+        orderedItemIDs: [String],
+        visibleItemIDs: Set<String>,
+        repairNeededItemIDs: Set<String>,
+        limit: Int = maxAutomaticRepairCount
+    ) -> [String] {
+        guard limit > 0 else { return [] }
+        return Array(
+            orderedItemIDs.lazy.filter {
+                visibleItemIDs.contains($0) && repairNeededItemIDs.contains($0)
+            }.prefix(limit)
+        )
+    }
+
+    nonisolated static func taskKey(scope: String, visibleItemIDs: Set<String>) -> String {
+        "\(scope):\(visibleItemIDs.sorted().joined(separator: ","))"
+    }
+}
+
+private let vaultHomePerformanceLogger = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "app.landlady.www.privacy",
+    category: "VaultHomePerformance"
+)
 
 struct MainAppView: View {
     @Environment(\.modelContext) private var modelContext
@@ -53,6 +81,7 @@ struct MainAppView: View {
                 auth.lock()
             } else if phase == .active {
                 vaultStore.setWriteAccess(subscription.canImportAndSync)
+                _ = vaultStore.offloadOriginalsIfNeeded(context: modelContext)
                 refreshPendingSharedImports()
                 Task {
                     await vaultStore.syncCloudToLocal(
@@ -703,22 +732,31 @@ struct VaultHomeView: View {
     @State private var audioDetailItem: VaultItem?
     @State private var documentDetailItem: VaultItem?
     @State private var desktopDetailItem: VaultItem?
+    @State private var sharePayload: SharePayload?
     @State private var splitVisibility: NavigationSplitViewVisibility = .all
     @State private var showProfileCenter = false
     @State private var showImportHub = false
-    @State private var showQuickCamera = false
     @State private var showQuickRecorder = false
     @State private var showMembership = false
     @State private var selectedCategory: VaultCategory = .album
     @State private var albumMediaFilter: AlbumMediaFilter = .all
+    @State private var isAlbumFilterPickerPresented = false
     @State private var importSummary: ImportSummary?
     @State private var selectionMode = false
     @State private var selectedItemIds: Set<String> = []
     @State private var confirmBulkDelete = false
     @State private var isDeletingSelection = false
+    @State private var isExportingSelection = false
+    @State private var isSavingSelectionToPhotos = false
+    @State private var photoSaveAlert: PhotoSaveAlert?
+    @State private var photoSaveToast: AppToast?
+    @State private var photoSaveToastDismissTask: Task<Void, Never>?
     @State private var isInnerVaultActive = false
     @State private var sweepSelectionAnchorId: String?
     @State private var mediaGridItemFrames: [AnyHashable: CGRect] = [:]
+    @State private var albumGridContentHeight: CGFloat = 1
+    @State private var isRepairingMediaPreviews = false
+    @State private var visibleAlbumItemIDs = Set<String>()
     @State private var peekItem: VaultItem?
     @State private var peekTouchItemId: String?
     @State private var peekTask: Task<Void, Never>?
@@ -743,15 +781,45 @@ struct VaultHomeView: View {
         guard selectedCategory == .album else { return categoryItems }
         return albumMediaFilter.items(from: categoryItems)
     }
+    private var mediaPreviewRepairCandidates: [VaultItem] {
+        guard selectedCategory == .album else { return [] }
+        let visibleItemsOnScreen = visibleItems.filter { visibleAlbumItemIDs.contains($0.id) }
+        let repairNeededIDs = Set(
+            visibleItemsOnScreen.lazy
+                .filter { vaultStore.needsMediaPreviewRepair($0) }
+                .map(\.id)
+        )
+        let candidateIDs = MediaPreviewRepairBatchPolicy.candidateIDs(
+            orderedItemIDs: visibleItemsOnScreen.map(\.id),
+            visibleItemIDs: visibleAlbumItemIDs,
+            repairNeededItemIDs: repairNeededIDs
+        )
+        let itemsByID = Dictionary(uniqueKeysWithValues: visibleItemsOnScreen.map { ($0.id, $0) })
+        return candidateIDs.compactMap { itemsByID[$0] }
+    }
     private var mediaPreviewRepairKey: String {
-        guard selectedCategory == .album else { return "" }
-        return visibleItems
-            .filter { vaultStore.needsMediaPreviewRepair($0) }
-            .map(\.id)
-            .joined(separator: ",")
+        MediaPreviewRepairBatchPolicy.taskKey(
+            scope: "\(isInnerVaultActive ? "inner" : "default"):\(selectedCategory.rawValue):\(albumMediaFilter.rawValue)",
+            visibleItemIDs: visibleAlbumItemIDs
+        )
     }
     private var selectableVisibleItems: [VaultItem] {
         VaultSelectionPolicy.selectableItems(in: visibleItems, category: selectedCategory)
+    }
+    private var selectedVisibleItems: [VaultItem] {
+        visibleItems.filter { selectedItemIds.contains($0.id) }
+    }
+    private var selectedItemsCanSaveToPhotos: Bool {
+        selectedVisibleItems.contains { PhotoLibraryExportService.canSaveToPhotoLibrary(kind: $0.kind) }
+    }
+    private var selectionWorkStatusText: String? {
+        if isSavingSelectionToPhotos {
+            return L.string("Saving to Photos")
+        }
+        if isExportingSelection {
+            return L.string("Preparing")
+        }
+        return nil
     }
     private var freeImportItemCount: Int {
         VaultFreeImportPolicy.countedItemCount(in: activeItems)
@@ -822,29 +890,6 @@ struct VaultHomeView: View {
             .environmentObject(vaultStore)
             .environmentObject(importQueue)
         }
-        .fullScreenCover(isPresented: $showQuickCamera) {
-            NativeCameraCaptureView { media in
-                guard canImportVaultItems(count: 1) else {
-                    showMembership = true
-                    return
-                }
-                Task {
-                    vaultStore.setWriteAccess(true)
-                    let summary = await media.importSummary(
-                        context: modelContext,
-                        vaultStore: vaultStore,
-                        sync: sync,
-                        source: "Quick Camera",
-                        folderId: importDestinationFolderId,
-                        syncAfterImport: subscription.canImportAndSync
-                    )
-                    if subscription.canImportAndSync {
-                        await vaultStore.syncPendingChanges(context: modelContext, sync: sync)
-                    }
-                    handleImportCompletion(summary)
-                }
-            }
-        }
         .fullScreenCover(isPresented: $showQuickRecorder) {
             AudioRecorderView { url, completion in
                 guard canImportVaultItems(count: 1) else {
@@ -913,6 +958,16 @@ struct VaultHomeView: View {
                 dismissButton: .default(Text(L.string("OK")))
             )
         }
+        .sheet(item: $sharePayload) { payload in
+            ShareSheet(items: payload.items)
+        }
+        .alert(item: $photoSaveAlert) { alert in
+            Alert(
+                title: Text(alert.title),
+                message: Text(alert.message),
+                dismissButton: .default(Text(L.string("OK")))
+            )
+        }
         .alert(L.string("Delete Selected Items?"), isPresented: $confirmBulkDelete) {
             Button(L.string("Cancel"), role: .cancel) {}
             Button(L.string("Delete"), role: .destructive) {
@@ -932,6 +987,14 @@ struct VaultHomeView: View {
                 .transition(.opacity.combined(with: .scale(scale: 0.98)))
             }
         }
+        .overlay(alignment: .top) {
+            if let photoSaveToast {
+                AppToastView(toast: photoSaveToast)
+                    .padding(.horizontal, 18)
+                    .padding(.top, 12)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
     }
 
     private var compactHomeContent: some View {
@@ -947,7 +1010,7 @@ struct VaultHomeView: View {
             .overlay(alignment: .bottomTrailing) {
                 albumFilterButton
                     .padding(.trailing, 18)
-                    .padding(.bottom, 74)
+                    .padding(.bottom, 38)
             }
             .overlay {
                 if let peekItem {
@@ -980,7 +1043,7 @@ struct VaultHomeView: View {
             .overlay(alignment: .bottomTrailing) {
                 albumFilterButton
                     .padding(.trailing, 20)
-                    .padding(.bottom, 72)
+                    .padding(.bottom, 38)
             }
             .navigationTitle(selectedCategory.title)
             .toolbar {
@@ -1004,7 +1067,6 @@ struct VaultHomeView: View {
                 selectedCategory: $selectedCategory,
                 isInnerVaultActive: isInnerVaultActive,
                 profileAction: { showProfileCenter = true },
-                cameraAction: openQuickCamera,
                 importAction: openImportHub,
                 toggleInnerVaultAction: toggleInnerVault,
                 onTouchZoneFrameChange: { frame in
@@ -1030,6 +1092,8 @@ struct VaultHomeView: View {
                         .allowsHitTesting(false)
                 }
             }
+
+            VaultCategorySummaryFooter(category: selectedCategory, count: visibleItems.count)
         }
         .padding()
     }
@@ -1054,6 +1118,8 @@ struct VaultHomeView: View {
                         .allowsHitTesting(false)
                 }
             }
+
+            VaultCategorySummaryFooter(category: selectedCategory, count: visibleItems.count)
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 16)
@@ -1088,36 +1154,31 @@ struct VaultHomeView: View {
             Button {
                 toggleInnerVault()
             } label: {
-                Label(
-                    isInnerVaultActive ? L.string("Restore") : L.string("Mo Layer"),
-                    systemImage: isInnerVaultActive ? "arrow.uturn.left" : "lock.fill"
-                )
+                Image(systemName: isInnerVaultActive ? "arrow.uturn.left" : "lock.fill")
             }
+            .accessibilityLabel(isInnerVaultActive ? L.string("Restore") : L.string("Mo Layer"))
         }
 
         ToolbarItemGroup(placement: .topBarTrailing) {
             Button {
                 Task { await refreshVaultFromCloud() }
             } label: {
-                Label(L.string("Refresh"), systemImage: "arrow.clockwise")
+                Image(systemName: "arrow.clockwise")
             }
+            .accessibilityLabel(L.string("Refresh"))
             .keyboardShortcut("r", modifiers: .command)
 
             Button(action: openImportHub) {
-                Label(L.string("Import"), systemImage: folderContextStyle.importSystemImage)
+                Image(systemName: folderContextStyle.importSystemImage)
             }
+            .accessibilityLabel(L.string("Import"))
             .keyboardShortcut("i", modifiers: .command)
-
-            Button(action: openQuickCamera) {
-                Label(L.string("Take Photo or Video"), systemImage: "camera.viewfinder")
-            }
-            .keyboardShortcut("c", modifiers: .command)
-            .disabled(!PlatformCapabilities.supportsCameraCapture)
 
             if subscription.canImportAndSync, !selectableVisibleItems.isEmpty {
                 Button(action: selectAllVisibleItems) {
-                    Label(L.string("Select All"), systemImage: "checkmark.circle")
+                    Image(systemName: "checkmark.circle")
                 }
+                .accessibilityLabel(L.string("Select All"))
                 .keyboardShortcut("a", modifiers: .command)
             }
 
@@ -1125,8 +1186,9 @@ struct VaultHomeView: View {
                 Button {
                     showProfileCenter = true
                 } label: {
-                    Label(L.string("Profile"), systemImage: folderContextStyle.profileSystemImage)
+                    Image(systemName: folderContextStyle.profileSystemImage)
                 }
+                .accessibilityLabel(L.string("Profile"))
                 .keyboardShortcut(",", modifiers: .command)
             }
         }
@@ -1161,14 +1223,23 @@ struct VaultHomeView: View {
             AlbumZoomableMediaGrid(
                 items: visibleItems,
                 scale: mediaGridScaleBinding,
+                contentHeight: $albumGridContentHeight,
                 isSelectionMode: selectionMode,
                 selectedItemIds: selectedItemIds,
-                thumbnailProvider: { vaultStore.thumbnail(for: $0) },
+                cachedThumbnailProvider: { vaultStore.cachedThumbnail(for: $0) },
+                videoDurationProvider: { vaultStore.metadata(for: $0)?.mediaDurationSeconds },
+                thumbnailProvider: { await vaultStore.loadThumbnail(for: $0) },
+                visibleItemIDsDidChange: { itemIDs in
+                    if visibleAlbumItemIDs != itemIDs {
+                        visibleAlbumItemIDs = itemIDs
+                    }
+                },
                 openAction: { open($0, in: visibleItems) },
                 toggleSelectionAction: toggleSelection,
                 enterSelectionAction: enterSelectionMode
             )
-            .frame(maxWidth: .infinity, minHeight: MediaGridLayout.interactionMinHeight)
+            .frame(maxWidth: .infinity, minHeight: 1)
+            .frame(height: albumGridContentHeight)
             .task(id: mediaPreviewRepairKey) {
                 await repairVisibleMediaPreviewsIfNeeded()
             }
@@ -1196,14 +1267,31 @@ struct VaultHomeView: View {
 
     @MainActor
     private func repairVisibleMediaPreviewsIfNeeded() async {
-        guard !mediaPreviewRepairKey.isEmpty else { return }
-        await vaultStore.ensureMediaPreviews(
-            for: visibleItems,
+        let candidates = mediaPreviewRepairCandidates
+        guard !candidates.isEmpty else { return }
+        guard !isRepairingMediaPreviews else {
+            vaultHomePerformanceLogger.debug("Skipped overlapping media preview repair candidateCount=\(candidates.count, privacy: .public) visibleCount=\(self.visibleItems.count, privacy: .public)")
+            return
+        }
+
+        isRepairingMediaPreviews = true
+        let startedAt = CFAbsoluteTimeGetCurrent()
+        vaultHomePerformanceLogger.info("Media preview repair started candidateCount=\(candidates.count, privacy: .public) visibleCount=\(self.visibleItems.count, privacy: .public)")
+        defer {
+            isRepairingMediaPreviews = false
+            let elapsedMs = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
+            if elapsedMs > 100 {
+                vaultHomePerformanceLogger.info("Media preview repair finished candidateCount=\(candidates.count, privacy: .public) visibleCount=\(self.visibleItems.count, privacy: .public) elapsedMs=\(String(format: "%.1f", elapsedMs), privacy: .public)")
+            }
+        }
+
+        let generatedPreviewNeedsSync = await vaultStore.ensureMediaPreviews(
+            for: candidates,
             context: modelContext,
             sync: sync,
             syncAfterRepair: subscription.canImportAndSync
         )
-        if subscription.canImportAndSync {
+        if generatedPreviewNeedsSync {
             await vaultStore.syncPendingChanges(context: modelContext, sync: sync)
         }
     }
@@ -1211,28 +1299,70 @@ struct VaultHomeView: View {
     @ViewBuilder
     private var albumFilterButton: some View {
         if selectedCategory == .album {
-            Menu {
-                ForEach(AlbumMediaFilter.allCases) { filter in
-                    Button {
-                        withAnimation(.snappy) {
-                            clearSelection()
-                            endLightPeek()
-                            albumMediaFilter = filter
+            let contextStyle = folderContextStyle
+            VStack(alignment: .trailing, spacing: 10) {
+                if isAlbumFilterPickerPresented {
+                    HStack(spacing: 8) {
+                        ForEach(AlbumMediaFilter.allCases) { filter in
+                            Button {
+                                selectAlbumMediaFilter(filter)
+                            } label: {
+                                Image(systemName: filter == albumMediaFilter ? "checkmark.circle.fill" : filter.systemImage)
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .foregroundStyle(contextStyle.actionForeground)
+                                    .frame(width: 38, height: 38)
+                                    .background(
+                                        Circle()
+                                            .fill(filter == albumMediaFilter ? contextStyle.actionForeground.opacity(0.16) : Color.clear)
+                                    )
+                                    .contentShape(Circle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(filter.title)
                         }
-                    } label: {
-                        Label(filter.title, systemImage: filter == albumMediaFilter ? "checkmark" : filter.systemImage)
                     }
+                    .padding(8)
+                    .background(contextStyle.actionBackground)
+                    .clipShape(Capsule())
+                    .shadow(color: contextStyle.actionForeground.opacity(0.18), radius: 10, y: 5)
+                    .transition(.opacity.combined(with: .scale(scale: 0.94, anchor: .bottomTrailing)))
                 }
-            } label: {
-                Image(systemName: albumMediaFilter.systemImage)
-                    .font(.headline.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 48, height: 48)
-                    .background(.black.opacity(0.68))
-                    .clipShape(Circle())
-                    .shadow(color: .black.opacity(0.18), radius: 10, y: 5)
+
+                Button {
+                    withAnimation(.snappy(duration: 0.16)) {
+                        isAlbumFilterPickerPresented.toggle()
+                    }
+                } label: {
+                    Image(systemName: albumMediaFilter.systemImage)
+                        .font(.headline.weight(.semibold))
+                        .foregroundStyle(contextStyle.actionForeground)
+                        .frame(width: 48, height: 48)
+                        .background(contextStyle.actionBackground)
+                        .clipShape(Circle())
+                        .contentShape(Circle())
+                        .shadow(color: contextStyle.actionForeground.opacity(0.22), radius: 10, y: 5)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(L.string("Filter"))
+                .accessibilityValue(albumMediaFilter.title)
             }
-            .buttonStyle(.plain)
+            .zIndex(20)
+        }
+    }
+
+    private func selectAlbumMediaFilter(_ filter: AlbumMediaFilter) {
+        if albumMediaFilter != filter {
+            if selectionMode || !selectedItemIds.isEmpty {
+                clearSelection()
+            }
+            if peekItem != nil || peekTouchItemId != nil {
+                endLightPeek()
+            }
+            visibleAlbumItemIDs.removeAll()
+            albumMediaFilter = filter
+        }
+        withAnimation(.snappy(duration: 0.14)) {
+            isAlbumFilterPickerPresented = false
         }
     }
 
@@ -1300,24 +1430,47 @@ struct VaultHomeView: View {
         )
     }
 
+    @ViewBuilder
     private var bottomInsetContent: some View {
         VStack(spacing: 8) {
             if selectionMode {
+                if let selectionWorkStatusText {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(.white)
+                        Text(selectionWorkStatusText)
+                            .font(.footnote.weight(.semibold))
+                            .lineLimit(1)
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(.black.opacity(0.72))
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .padding(.horizontal, 12)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+
                 VaultSelectionToolbar(
                     selectedCount: selectedItemIds.count,
                     isDeleting: isDeletingSelection,
+                    isExporting: isExportingSelection,
+                    isSavingToPhotos: isSavingSelectionToPhotos,
                     canDelete: subscription.canImportAndSync,
+                    canExport: !selectedVisibleItems.isEmpty,
+                    canSaveToPhotos: selectedItemsCanSaveToPhotos,
                     moveTitle: subscription.canImportAndSync ? (isInnerVaultActive ? L.string("Restore") : L.string("Hide")) : nil,
                     moveSystemImage: isInnerVaultActive ? "arrow.uturn.left" : "lock.fill",
                     cancelAction: clearSelection,
+                    exportAction: { Task { await exportSelectedItems() } },
+                    saveToPhotosAction: { Task { await saveSelectedItemsToPhotos() } },
                     moveAction: { Task { await moveSelectedItemsBetweenSpaces() } },
                     deleteAction: { confirmBulkDelete = true }
                 )
                 .padding(.horizontal, 12)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-
-            VaultCategorySummaryFooter(category: selectedCategory, count: visibleItems.count)
         }
     }
 
@@ -1357,41 +1510,28 @@ struct VaultHomeView: View {
         }
     }
 
-    private func openQuickCamera() {
-        guard canImportVaultItems(count: 1) else {
-            showMembership = true
-            return
-        }
-
-        guard PlatformCapabilities.supportsCameraCapture else {
-            openImportHub()
-            return
-        }
-
-        guard isInnerVaultActive else {
-            showQuickCamera = true
-            return
-        }
-
-        Task { @MainActor in
-            guard await vaultStore.ensureInnerVaultFolder(context: modelContext, sync: sync) != nil else { return }
-            showQuickCamera = true
-        }
-    }
-
     private func enterInnerVault() {
         guard subscription.canEnterVault else {
             showMembership = true
             return
         }
 
+        let requestedAt = CFAbsoluteTimeGetCurrent()
+        let targetCount = activeItems.reduce(0) { count, item in
+            count + (item.folderId == VaultStore.innerVaultFolderId ? 1 : 0)
+        }
+        vaultHomePerformanceLogger.info("Mo Layer enter requested activeItems=\(self.activeItems.count, privacy: .public) currentVisible=\(self.visibleItems.count, privacy: .public) targetSpaceItems=\(targetCount, privacy: .public)")
         Task { @MainActor in
+            let folderStartedAt = CFAbsoluteTimeGetCurrent()
             guard await vaultStore.ensureInnerVaultFolder(context: modelContext, sync: sync) != nil else { return }
+            let folderMs = (CFAbsoluteTimeGetCurrent() - folderStartedAt) * 1000
             withAnimation(.snappy) {
                 clearSelection()
                 endLightPeek()
                 isInnerVaultActive = true
             }
+            let elapsedMs = (CFAbsoluteTimeGetCurrent() - requestedAt) * 1000
+            vaultHomePerformanceLogger.info("Mo Layer enter committed targetSpaceItems=\(targetCount, privacy: .public) ensureFolderMs=\(String(format: "%.1f", folderMs), privacy: .public) elapsedMs=\(String(format: "%.1f", elapsedMs), privacy: .public)")
         }
     }
 
@@ -1405,11 +1545,18 @@ struct VaultHomeView: View {
 
     private func exitInnerVault() {
         guard isInnerVaultActive else { return }
+        let startedAt = CFAbsoluteTimeGetCurrent()
+        let targetCount = activeItems.reduce(0) { count, item in
+            count + (item.folderId != VaultStore.innerVaultFolderId ? 1 : 0)
+        }
+        vaultHomePerformanceLogger.info("Mo Layer exit requested activeItems=\(self.activeItems.count, privacy: .public) currentVisible=\(self.visibleItems.count, privacy: .public) targetSpaceItems=\(targetCount, privacy: .public)")
         withAnimation(.snappy) {
             clearSelection()
             endLightPeek()
             isInnerVaultActive = false
         }
+        let elapsedMs = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
+        vaultHomePerformanceLogger.info("Mo Layer exit committed targetSpaceItems=\(targetCount, privacy: .public) elapsedMs=\(String(format: "%.1f", elapsedMs), privacy: .public)")
     }
 
     private func handleQuickAction(_ action: QuickAction?) {
@@ -1418,7 +1565,7 @@ struct VaultHomeView: View {
         case .importHub:
             openImportHub()
         case .camera:
-            openQuickCamera()
+            openImportHub()
         case .recorder:
             if canImportVaultItems(count: 1) {
                 showQuickRecorder = true
@@ -1626,6 +1773,91 @@ struct VaultHomeView: View {
             return
         }
         await vaultStore.deleteImmediately(item, context: modelContext, sync: sync)
+    }
+
+    @MainActor
+    private func exportSelectedItems() async {
+        guard !isExportingSelection else { return }
+        let selectedItems = selectedVisibleItems
+        guard !selectedItems.isEmpty else { return }
+
+        isExportingSelection = true
+        defer { isExportingSelection = false }
+        let urls = await vaultStore.decryptedTemporaryURLs(for: selectedItems, context: modelContext, sync: sync)
+        guard !urls.isEmpty else {
+            photoSaveAlert = PhotoSaveAlert(
+                title: L.string("Unable to Save"),
+                message: L.string("No selected files could be exported.")
+            )
+            clearSelection()
+            return
+        }
+        sharePayload = SharePayload(items: urls)
+        clearSelection()
+    }
+
+    @MainActor
+    private func saveSelectedItemsToPhotos() async {
+        guard !isSavingSelectionToPhotos else { return }
+        let selectedItems = selectedVisibleItems
+        guard selectedItems.contains(where: { PhotoLibraryExportService.canSaveToPhotoLibrary(kind: $0.kind) }) else {
+            photoSaveAlert = PhotoSaveAlert(
+                title: L.string("Unable to Save"),
+                message: L.string("No selected photos or videos could be saved to Photos.")
+            )
+            return
+        }
+
+        withAnimation(.snappy) {
+            isSavingSelectionToPhotos = true
+        }
+        defer {
+            withAnimation(.snappy) {
+                isSavingSelectionToPhotos = false
+            }
+        }
+        let result = await PhotoLibraryExportService.save(
+            items: selectedItems,
+            vaultStore: vaultStore,
+            context: modelContext,
+            sync: sync
+        )
+        presentPhotoSaveResult(result)
+        clearSelection()
+    }
+
+    @MainActor
+    private func presentPhotoSaveResult(_ result: PhotoLibraryExportResult) {
+        switch result {
+        case .saved, .savedMultiple:
+            showPhotoSaveToast(
+                AppToast(
+                    title: result.title,
+                    message: result.message,
+                    systemImage: "checkmark.circle.fill"
+                )
+            )
+        case .partiallySaved, .unsupported, .permissionDenied, .failed:
+            photoSaveAlert = PhotoSaveAlert(result: result)
+        }
+    }
+
+    @MainActor
+    private func showPhotoSaveToast(_ toast: AppToast) {
+        photoSaveToastDismissTask?.cancel()
+        withAnimation(.snappy) {
+            photoSaveToast = toast
+        }
+        photoSaveToastDismissTask = Task {
+            try? await Task.sleep(nanoseconds: 2_200_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard photoSaveToast?.id == toast.id else { return }
+                withAnimation(.snappy) {
+                    photoSaveToast = nil
+                }
+            }
+        }
     }
 
     @MainActor
@@ -3645,13 +3877,8 @@ struct CategoryCard: View {
 }
 
 struct VaultItemTile: View {
-    @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var vaultStore: VaultStore
-    @EnvironmentObject private var sync: CloudKitSyncService
     let item: VaultItem
-    @State private var livePhoto: PHLivePhoto?
-    @State private var isLivePhotoPressed = false
-    @State private var isLoadingLivePhoto = false
 
     var body: some View {
         GeometryReader { proxy in
@@ -3687,12 +3914,6 @@ struct VaultItemTile: View {
                     }
                 }
 
-                if item.kind == .livePhoto, isLivePhotoPressed, let livePhoto {
-                    LivePhotoPlaybackView(livePhoto: livePhoto, playbackStyle: .full)
-                        .frame(width: proxy.size.width, height: proxy.size.height)
-                        .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
-                }
-
                 MediaThumbnailOverlay(kind: item.kind, tileSize: tileSize, cornerRadius: cornerRadius)
 
                 VStack {
@@ -3718,18 +3939,6 @@ struct VaultItemTile: View {
         }
         .aspectRatio(1, contentMode: .fit)
         .clipped()
-        .onLongPressGesture(
-            minimumDuration: 0.25,
-            maximumDistance: 18,
-            pressing: { pressing in
-                guard item.kind == .livePhoto else { return }
-                isLivePhotoPressed = pressing
-                if pressing {
-                    loadLivePhotoIfNeeded()
-                }
-            },
-            perform: {}
-        )
     }
 
     private var icon: String {
@@ -3745,17 +3954,6 @@ struct VaultItemTile: View {
         }
     }
 
-    private func loadLivePhotoIfNeeded() {
-        guard livePhoto == nil, !isLoadingLivePhoto else { return }
-        isLoadingLivePhoto = true
-        Task {
-            let loaded = await makeLivePhoto(for: item, vaultStore: vaultStore, context: modelContext, sync: sync)
-            await MainActor.run {
-                livePhoto = loaded
-                isLoadingLivePhoto = false
-            }
-        }
-    }
 }
 
 private struct MediaThumbnailOverlay: View {
@@ -3862,7 +4060,12 @@ private struct VaultMediaGridContextMenu: ViewModifier {
 
 private struct LivePhotoPlaybackView: UIViewRepresentable {
     let livePhoto: PHLivePhoto
-    let playbackStyle: PHLivePhotoViewPlaybackStyle?
+    let playbackTrigger: Int
+    let playbackStyle: PHLivePhotoViewPlaybackStyle
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
 
     func makeUIView(context: Context) -> PHLivePhotoView {
         let view = PHLivePhotoView()
@@ -3873,11 +4076,14 @@ private struct LivePhotoPlaybackView: UIViewRepresentable {
 
     func updateUIView(_ uiView: PHLivePhotoView, context: Context) {
         uiView.livePhoto = livePhoto
-        if let playbackStyle {
+        if playbackTrigger > 0, context.coordinator.lastPlaybackTrigger != playbackTrigger {
+            context.coordinator.lastPlaybackTrigger = playbackTrigger
             uiView.startPlayback(with: playbackStyle)
-        } else {
-            uiView.stopPlayback()
         }
+    }
+
+    final class Coordinator {
+        var lastPlaybackTrigger = 0
     }
 }
 
@@ -3920,6 +4126,7 @@ struct VaultMediaPreviewView: View {
     let initialItemId: String
     let isInnerVaultActive: Bool
     @State private var selectedId: String
+    @State private var scrollPosition: String?
     @State private var previewItems: [VaultItem]
     @State private var sharePayload: SharePayload?
     @State private var detailItem: VaultItem?
@@ -3929,12 +4136,14 @@ struct VaultMediaPreviewView: View {
     @State private var isDeletingSelectedItem = false
     @State private var photoSaveAlert: PhotoSaveAlert?
     @State private var originalScreenBrightness: CGFloat?
+    @State private var livePhotoPlaybackTriggers: [String: Int] = [:]
 
     init(items: [VaultItem], initialItemId: String, isInnerVaultActive: Bool) {
         self.items = items
         self.initialItemId = initialItemId
         self.isInnerVaultActive = isInnerVaultActive
         _selectedId = State(initialValue: initialItemId)
+        _scrollPosition = State(initialValue: initialItemId)
         _previewItems = State(initialValue: items)
     }
 
@@ -3942,13 +4151,39 @@ struct VaultMediaPreviewView: View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            TabView(selection: $selectedId) {
-                ForEach(previewItems) { item in
-                    FullscreenMediaPage(item: item, isSelected: item.id == selectedId)
-                        .tag(item.id)
+            GeometryReader { proxy in
+                ScrollView(.horizontal) {
+                    LazyHStack(spacing: 0) {
+                        ForEach(Array(previewItems.enumerated()), id: \.element.id) { index, item in
+                            FullscreenMediaPage(
+                                item: item,
+                                loadMode: FullscreenMediaLoadingPolicy.loadMode(
+                                    itemIndex: index,
+                                    selectedIndex: selectedIndex,
+                                    itemKind: item.kind
+                                ),
+                                livePhotoPlaybackTrigger: livePhotoPlaybackTriggers[item.id, default: 0]
+                            )
+                            .frame(width: proxy.size.width, height: proxy.size.height)
+                            .id(item.id)
+                        }
+                    }
+                    .scrollTargetLayout()
+                }
+                .scrollIndicators(.hidden)
+                .scrollTargetBehavior(.paging)
+                .scrollPosition(id: $scrollPosition)
+                .onChange(of: scrollPosition) { _, newValue in
+                    guard let newValue,
+                          previewItems.contains(where: { $0.id == newValue }) else { return }
+                    selectedId = newValue
+                }
+                .onChange(of: selectedId) { _, newValue in
+                    if scrollPosition != newValue {
+                        scrollPosition = newValue
+                    }
                 }
             }
-            .tabViewStyle(.page(indexDisplayMode: .never))
             .ignoresSafeArea()
 
             VStack(spacing: 0) {
@@ -4022,6 +4257,13 @@ struct VaultMediaPreviewView: View {
 
                 Spacer()
             }
+
+            if selectedItem?.kind == .livePhoto {
+                livePhotoPlaybackButton
+                    .padding(.trailing, 18)
+                    .padding(.bottom, 36)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+            }
         }
         .sheet(item: $sharePayload) { payload in
             ShareSheet(items: payload.items)
@@ -4042,6 +4284,9 @@ struct VaultMediaPreviewView: View {
             }
             MediaPreviewAudioSession.activateForPlayback()
         }
+        .onChange(of: selectedId) { _, newValue in
+            livePhotoPlaybackTriggers[newValue] = 0
+        }
         .onDisappear {
             if let originalScreenBrightness {
                 UIScreen.main.brightness = originalScreenBrightness
@@ -4054,8 +4299,26 @@ struct VaultMediaPreviewView: View {
         previewItems.first { $0.id == selectedId }
     }
 
+    private var selectedIndex: Int? {
+        previewItems.firstIndex { $0.id == selectedId }
+    }
+
     private var canSaveSelectedItemToPhotos: Bool {
         selectedItem.map { PhotoLibraryExportService.canSaveToPhotoLibrary(kind: $0.kind) } ?? false
+    }
+
+    private var livePhotoPlaybackButton: some View {
+        Button {
+            livePhotoPlaybackTriggers[selectedId, default: 0] += 1
+        } label: {
+            Image(systemName: "livephoto.play")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.white)
+                .frame(width: 46, height: 46)
+                .background(.black.opacity(0.42))
+                .clipShape(Circle())
+        }
+        .accessibilityLabel(L.string("Play Live Photo"))
     }
 
     @MainActor
@@ -4093,6 +4356,7 @@ struct VaultMediaPreviewView: View {
         await vaultStore.deleteImmediately(selectedItem, context: modelContext, sync: sync)
         if let nextSelection {
             selectedId = nextSelection
+            scrollPosition = nextSelection
             await Task.yield()
             previewItems.removeAll { $0.id == selectedItem.id }
         } else {
@@ -4114,6 +4378,7 @@ struct VaultMediaPreviewView: View {
         VaultHaptics.moLayerTransferSucceeded()
         if let nextSelection {
             selectedId = nextSelection
+            scrollPosition = nextSelection
             await Task.yield()
             previewItems.removeAll { $0.id == selectedItem.id }
         } else {
@@ -4157,6 +4422,38 @@ private struct MediaPreviewDetailSheet: View {
                     }
                 }
 
+                if let location = metadata?.captureLocation {
+                    Section(L.string("Location")) {
+                        NavigationLink {
+                            VaultLocationMapView(
+                                location: location,
+                                title: metadata?.originalName ?? L.string("Private Item")
+                            )
+                        } label: {
+                            Label {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(location.resolvedAddress ?? location.coordinateText)
+                                        .foregroundStyle(AppTheme.ink)
+                                    Text(L.string("View on Map"))
+                                        .font(.caption)
+                                        .foregroundStyle(AppTheme.secondaryText)
+                                }
+                            } icon: {
+                                Image(systemName: "mappin.and.ellipse")
+                                    .foregroundStyle(AppTheme.primary)
+                            }
+                        }
+                        detailRow(L.string("Address"), location.resolvedAddress)
+                        detailRow(L.string("Captured"), location.capturedAt.formatted(date: .abbreviated, time: .shortened))
+                        if let accuracy = location.horizontalAccuracy {
+                            detailRow(L.string("Accuracy"), L.format("Within %.0f m", accuracy))
+                        }
+                        if let altitude = location.altitude {
+                            detailRow(L.string("Altitude"), L.format("%.0f m", altitude))
+                        }
+                    }
+                }
+
                 Section(L.string("Media")) {
                     if isLoadingTechnicalDetails {
                         ProgressView()
@@ -4178,6 +4475,13 @@ private struct MediaPreviewDetailSheet: View {
                     }
                     if item.assetState == .failed {
                         detailRow(L.string("Download Failure"), item.lastDownloadError)
+                    }
+                    if item.assetState == .local, VaultFileStore.fileExists(path: item.encryptedFilePath) {
+                        Button {
+                            _ = vaultStore.releaseLocalOriginal(for: item, context: modelContext)
+                        } label: {
+                            Label(L.string("Release Local Space"), systemImage: "icloud.and.arrow.up")
+                        }
                     }
                     Text(L.string("Items are encrypted on this device before optional iCloud sync."))
                         .font(.caption)
@@ -4301,6 +4605,82 @@ private struct MediaDetailRow: Identifiable {
     let id = UUID()
     let title: String
     let value: String?
+}
+
+private struct VaultLocationMapView: View {
+    let location: VaultCaptureLocation
+    let title: String
+
+    private var coordinate: CLLocationCoordinate2D {
+        let mapCoordinate = VaultMapCoordinatePolicy.mapCoordinate(
+            latitude: location.latitude,
+            longitude: location.longitude
+        )
+        return CLLocationCoordinate2D(latitude: mapCoordinate.latitude, longitude: mapCoordinate.longitude)
+    }
+
+    private var region: MKCoordinateRegion {
+        MKCoordinateRegion(
+            center: coordinate,
+            span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
+        )
+    }
+
+    var body: some View {
+        List {
+            Section {
+                Map(position: .constant(.region(region))) {
+                    Marker(title, coordinate: coordinate)
+                }
+                .mapStyle(.standard(elevation: .realistic))
+                .frame(height: 280)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .listRowInsets(EdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 16))
+            }
+
+            Section(L.string("Location")) {
+                detailRow(L.string("Address"), location.resolvedAddress)
+                detailRow(L.string("Coordinates"), location.coordinateText)
+                detailRow(L.string("Captured"), location.capturedAt.formatted(date: .abbreviated, time: .shortened))
+                if let accuracy = location.horizontalAccuracy {
+                    detailRow(L.string("Accuracy"), L.format("Within %.0f m", accuracy))
+                }
+                if let altitude = location.altitude {
+                    detailRow(L.string("Altitude"), L.format("%.0f m", altitude))
+                }
+                Button {
+                    openInMaps()
+                } label: {
+                    Label(L.string("Open in Apple Maps"), systemImage: "map")
+                }
+            }
+        }
+        .navigationTitle(L.string("Map"))
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    @ViewBuilder
+    private func detailRow(_ title: String, _ value: String?) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Text(title)
+                .foregroundStyle(AppTheme.secondaryText)
+            Spacer(minLength: 16)
+            Text(value?.isEmpty == false ? value! : L.string("Not Available"))
+                .multilineTextAlignment(.trailing)
+                .foregroundStyle(AppTheme.ink)
+                .textSelection(.enabled)
+        }
+    }
+
+    private func openInMaps() {
+        let placemark = MKPlacemark(coordinate: coordinate)
+        let mapItem = MKMapItem(placemark: placemark)
+        mapItem.name = title
+        mapItem.openInMaps(launchOptions: [
+            MKLaunchOptionsMapCenterKey: NSValue(mkCoordinate: coordinate),
+            MKLaunchOptionsMapSpanKey: NSValue(mkCoordinateSpan: region.span)
+        ])
+    }
 }
 
 private struct AudioDetailPlayerView: View {
@@ -4543,9 +4923,52 @@ private struct PhotoSaveAlert: Identifiable {
     let title: String
     let message: String
 
+    init(title: String, message: String) {
+        self.title = title
+        self.message = message
+    }
+
     init(result: PhotoLibraryExportResult) {
         self.title = result.title
         self.message = result.message
+    }
+}
+
+private struct AppToast: Identifiable, Equatable {
+    let id = UUID()
+    let title: String
+    let message: String
+    let systemImage: String
+}
+
+private struct AppToastView: View {
+    let toast: AppToast
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Image(systemName: toast.systemImage)
+                .font(.headline.weight(.semibold))
+                .foregroundStyle(AppTheme.primary)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(toast.title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(AppTheme.ink)
+                Text(toast.message)
+                    .font(.caption)
+                    .foregroundStyle(AppTheme.secondaryText)
+                    .lineLimit(2)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(AppTheme.line.opacity(0.65)))
+        .shadow(color: .black.opacity(0.12), radius: 14, y: 8)
+        .frame(maxWidth: 360)
     }
 }
 
@@ -4596,9 +5019,43 @@ private struct VaultPeekPreviewOverlay: View {
             Color.black.opacity(0.96)
                 .ignoresSafeArea()
 
-            FullscreenMediaPage(item: item, isSelected: true)
+            FullscreenMediaPage(item: item, loadMode: .original, livePhotoPlaybackTrigger: 0)
                 .ignoresSafeArea()
         }
+    }
+}
+
+enum FullscreenMediaLoadMode: String, Equatable {
+    case none
+    case thumbnail
+    case original
+}
+
+enum FullscreenMediaLoadingPolicy {
+    nonisolated static func shouldLoadOriginal(isSelected: Bool) -> Bool {
+        isSelected
+    }
+
+    nonisolated static func loadMode(
+        itemIndex: Int,
+        selectedIndex: Int?,
+        itemKind: VaultItemKind,
+        preloadRadius: Int = 1
+    ) -> FullscreenMediaLoadMode {
+        guard let selectedIndex else { return .none }
+        if itemIndex == selectedIndex {
+            return .original
+        }
+        guard abs(itemIndex - selectedIndex) <= max(preloadRadius, 0) else {
+            return .none
+        }
+        return itemKind.isStillImageMedia ? .original : .thumbnail
+    }
+}
+
+enum FullscreenMediaStagingPolicy {
+    nonisolated static func shouldShowThumbnailBeforeOriginal(kind: VaultItemKind) -> Bool {
+        !kind.isStillImageMedia
     }
 }
 
@@ -4608,26 +5065,39 @@ private struct FullscreenMediaPage: View {
     @EnvironmentObject private var vaultStore: VaultStore
     @EnvironmentObject private var sync: CloudKitSyncService
     let item: VaultItem
-    let isSelected: Bool
+    let loadMode: FullscreenMediaLoadMode
+    let livePhotoPlaybackTrigger: Int
     @State private var image: UIImage?
     @State private var livePhoto: PHLivePhoto?
     @State private var player: AVPlayer?
     @State private var previewURL: URL?
     @State private var previewTitle = ""
     @State private var isLoading = true
+    @State private var playbackReloadGeneration = 0
+
+    private var isSelected: Bool {
+        loadMode == .original
+    }
 
     var body: some View {
         ZStack {
             if item.kind == .livePhoto, let livePhoto {
-                LivePhotoPlaybackView(livePhoto: livePhoto, playbackStyle: isSelected ? .hint : nil)
+                LivePhotoPlaybackView(
+                    livePhoto: livePhoto,
+                    playbackTrigger: livePhotoPlaybackTrigger,
+                    playbackStyle: .full
+                )
                     .ignoresSafeArea()
-            } else if item.kind == .image, let image {
-                ZoomableImagePreview(image: image)
             } else if item.kind == .video, let player {
-                ZoomableVideoPreview(player: player)
+                ZoomableVideoPreview(
+                    player: player,
+                    reloadAction: { playbackReloadGeneration += 1 }
+                )
                     .onAppear { updateVideoPlayback() }
                     .onChange(of: isSelected) { _, _ in updateVideoPlayback() }
                     .onDisappear { player.pause() }
+            } else if let image {
+                ZoomableImagePreview(image: image)
             } else if item.kind == .audio, let player {
                 AudioPreviewPanel(title: previewTitle, player: player)
             } else if item.kind.isDocumentPreview, let previewURL {
@@ -4640,21 +5110,64 @@ private struct FullscreenMediaPage: View {
                 UnsupportedPreviewState(kind: item.kind)
             }
         }
-        .task(id: item.id) {
-            await load()
+        .task(id: "\(item.id):\(loadMode.rawValue):\(playbackReloadGeneration)") {
+            switch loadMode {
+            case .original:
+                await loadOriginal()
+            case .thumbnail:
+                await loadThumbnailOnly()
+            case .none:
+                unload()
+            }
         }
     }
 
     @MainActor
-    private func load() async {
-        isLoading = true
+    private func unload() {
+        isLoading = false
         image = nil
         livePhoto = nil
         player?.pause()
         player = nil
         previewURL = nil
+        previewTitle = ""
+    }
+
+    @MainActor
+    private func loadThumbnailOnly() async {
+        isLoading = true
+        livePhoto = nil
+        player?.pause()
+        player = nil
+        previewURL = nil
         previewTitle = vaultStore.metadata(for: item)?.originalName ?? L.string("Private Item")
+        image = item.kind.isVisualMedia ? await vaultStore.loadThumbnail(for: item) : nil
+        guard !Task.isCancelled else { return }
+        isLoading = false
+    }
+
+    @MainActor
+    private func loadOriginal() async {
+        isLoading = true
+        livePhoto = nil
+        player?.pause()
+        player = nil
+        previewURL = nil
+        previewTitle = vaultStore.metadata(for: item)?.originalName ?? L.string("Private Item")
+        if FullscreenMediaStagingPolicy.shouldShowThumbnailBeforeOriginal(kind: item.kind),
+           item.kind.isVisualMedia {
+            image = await vaultStore.loadThumbnail(for: item)
+        }
+        guard !Task.isCancelled else { return }
         defer { isLoading = false }
+
+        if item.kind == .livePhoto {
+            let loadedLivePhoto = await makeLivePhoto(for: item, vaultStore: vaultStore, context: modelContext, sync: sync)
+            guard !Task.isCancelled else { return }
+            livePhoto = loadedLivePhoto
+            return
+        }
+
         let url: URL
         do {
             url = try await vaultStore.decryptedTemporaryURL(for: item, context: modelContext, sync: sync)
@@ -4662,9 +5175,9 @@ private struct FullscreenMediaPage: View {
             Self.logger.error("Preview decrypt failed for item \(item.id, privacy: .public): \(error.localizedDescription, privacy: .public)")
             return
         }
-        if item.kind == .livePhoto {
-            livePhoto = await makeLivePhoto(for: item, vaultStore: vaultStore, context: modelContext, sync: sync)
-        } else if item.kind == .image, let data = try? Data(contentsOf: url), let loaded = UIImage(data: data) {
+        guard !Task.isCancelled else { return }
+        if item.kind == .image, let loaded = await Self.decodedImage(at: url) {
+            guard !Task.isCancelled else { return }
             image = loaded
         } else if item.kind == .video || item.kind == .audio {
             previewURL = url
@@ -4675,6 +5188,22 @@ private struct FullscreenMediaPage: View {
             previewURL = url
         } else {
             Self.logger.error("Preview data could not decode for item \(item.id, privacy: .public), kind \(item.kind.rawValue, privacy: .public)")
+        }
+    }
+
+    private static func decodedImage(at url: URL) async -> UIImage? {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                autoreleasepool {
+                    let options = [kCGImageSourceShouldCacheImmediately: true] as CFDictionary
+                    guard let source = CGImageSourceCreateWithURL(url as CFURL, options),
+                          let cgImage = CGImageSourceCreateImageAtIndex(source, 0, options) else {
+                        continuation.resume(returning: nil)
+                        return
+                    }
+                    continuation.resume(returning: UIImage(cgImage: cgImage))
+                }
+            }
         }
     }
 
@@ -4726,10 +5255,21 @@ enum VideoPlayerGesturePolicy {
     }
 }
 
+enum VideoPlayerIdleTimerPolicy {
+    nonisolated static func shouldDisableIdleTimer(isPlaying: Bool, isVisible: Bool) -> Bool {
+        isPlaying && isVisible
+    }
+}
+
 private struct ZoomableVideoPreview: View {
+    private static let logger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "app.landlady.www.privacy",
+        category: "VideoPlayer"
+    )
     private static let controlsAutoHideDelay: UInt64 = 3_000_000_000
 
     let player: AVPlayer
+    let reloadAction: () -> Void
     @State private var scale: CGFloat = 1
     @State private var committedOffset: CGSize = .zero
     @State private var controlsVisible = true
@@ -4740,6 +5280,8 @@ private struct ZoomableVideoPreview: View {
     @State private var wasPlayingBeforeScrub = false
     @State private var isPlaying = false
     @State private var didReachEnd = false
+    @State private var playbackFailed = false
+    @State private var isVisible = false
     @State private var isMuted = false
     @State private var volume: Double = 1
     @State private var brightness = Double(UIScreen.main.brightness)
@@ -4782,12 +5324,14 @@ private struct ZoomableVideoPreview: View {
                     VideoPlayerControlsOverlay(
                         isPlaying: isPlaying,
                         didReachEnd: didReachEnd,
+                        playbackFailed: playbackFailed,
                         currentTime: currentTime,
                         duration: duration,
                         isMuted: isMuted,
                         scrubTime: $scrubTime,
                         isScrubbing: $isScrubbing,
                         playPauseAction: togglePlayback,
+                        retryAction: retryPlayback,
                         backwardAction: { jump(by: -10) },
                         forwardAction: { jump(by: 10) },
                         scrubEditingChanged: scrubEditingChanged,
@@ -4808,12 +5352,17 @@ private struct ZoomableVideoPreview: View {
         }
         .ignoresSafeArea()
         .onAppear {
+            isVisible = true
             installTimeObserver()
             syncPlayerState()
+            updateIdleTimer()
             showControlsAndScheduleHide()
         }
         .onDisappear {
             player.pause()
+            isPlaying = false
+            isVisible = false
+            updateIdleTimer()
             removeTimeObserver()
             hideControlsTask?.cancel()
             hideAdjustmentTask?.cancel()
@@ -4823,6 +5372,25 @@ private struct ZoomableVideoPreview: View {
             didReachEnd = true
             isPlaying = false
             currentTime = duration
+            updateIdleTimer()
+            showControls()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .AVPlayerItemPlaybackStalled)) { notification in
+            guard notification.object as? AVPlayerItem === player.currentItem else { return }
+            Self.logger.notice("Video playback stalled")
+            syncPlayerState()
+            showControls()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .AVPlayerItemFailedToPlayToEndTime)) { notification in
+            guard notification.object as? AVPlayerItem === player.currentItem else { return }
+            let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? NSError
+            Self.logger.error(
+                "Video playback failed domain=\(error?.domain ?? "unknown", privacy: .public) code=\(error?.code ?? -1, privacy: .public)"
+            )
+            player.pause()
+            playbackFailed = true
+            isPlaying = false
+            updateIdleTimer()
             showControls()
         }
     }
@@ -4962,12 +5530,17 @@ private struct ZoomableVideoPreview: View {
         isMuted = player.isMuted
         volume = Double(player.volume)
         brightness = Double(UIScreen.main.brightness)
+        updateIdleTimer()
         if isPlaying && !wasPlaying {
             scheduleControlsAutoHide()
         }
     }
 
     private func togglePlayback() {
+        guard !playbackFailed else {
+            retryPlayback()
+            return
+        }
         MediaPreviewAudioSession.activateForPlayback()
         showControlsAndScheduleHide()
         if didReachEnd {
@@ -4984,6 +5557,15 @@ private struct ZoomableVideoPreview: View {
             player.play()
             isPlaying = true
         }
+        updateIdleTimer()
+    }
+
+    private func retryPlayback() {
+        player.pause()
+        playbackFailed = false
+        isPlaying = false
+        updateIdleTimer()
+        reloadAction()
     }
 
     private func jump(by seconds: Double) {
@@ -5025,6 +5607,7 @@ private struct ZoomableVideoPreview: View {
                     MediaPreviewAudioSession.activateForPlayback()
                     player.play()
                     isPlaying = true
+                    updateIdleTimer()
                 }
             }
         }
@@ -5114,10 +5697,10 @@ private struct ZoomableVideoPreview: View {
 
     private func scheduleControlsAutoHide() {
         hideControlsTask?.cancel()
-        guard isPlaying, !isScrubbing, !didReachEnd else { return }
+        guard isPlaying, !isScrubbing, !didReachEnd, !playbackFailed else { return }
         hideControlsTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: Self.controlsAutoHideDelay)
-            guard !Task.isCancelled, isPlaying, !isScrubbing, !didReachEnd else { return }
+            guard !Task.isCancelled, isPlaying, !isScrubbing, !didReachEnd, !playbackFailed else { return }
             withAnimation(.easeInOut(duration: 0.2)) {
                 controlsVisible = false
             }
@@ -5127,6 +5710,13 @@ private struct ZoomableVideoPreview: View {
     private func clampedTime(_ value: Double) -> Double {
         guard duration.isFinite, duration > 0 else { return max(value, 0) }
         return min(max(value, 0), duration)
+    }
+
+    private func updateIdleTimer() {
+        UIApplication.shared.isIdleTimerDisabled = VideoPlayerIdleTimerPolicy.shouldDisableIdleTimer(
+            isPlaying: isPlaying,
+            isVisible: isVisible
+        )
     }
 }
 
@@ -5203,12 +5793,14 @@ private final class PlayerLayerContainerView: UIView {
 private struct VideoPlayerControlsOverlay: View {
     let isPlaying: Bool
     let didReachEnd: Bool
+    let playbackFailed: Bool
     let currentTime: Double
     let duration: Double
     let isMuted: Bool
     @Binding var scrubTime: Double
     @Binding var isScrubbing: Bool
     let playPauseAction: () -> Void
+    let retryAction: () -> Void
     let backwardAction: () -> Void
     let forwardAction: () -> Void
     let scrubEditingChanged: (Bool) -> Void
@@ -5221,38 +5813,30 @@ private struct VideoPlayerControlsOverlay: View {
     }
 
     var body: some View {
-        VStack {
-            Spacer()
+        ZStack {
+            VideoPlayerTransportControls(
+                isPlaying: isPlaying,
+                didReachEnd: didReachEnd,
+                playbackFailed: playbackFailed,
+                playPauseAction: playPauseAction,
+                retryAction: retryAction,
+                backwardAction: backwardAction,
+                forwardAction: forwardAction,
+                interactionAction: interactionAction
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
 
-            VStack(spacing: 8) {
-                VideoPlayerProgressControl(
-                    displayedTime: displayedTime,
-                    duration: duration,
-                    scrubTime: $scrubTime,
-                    scrubChanged: scrubChanged,
-                    scrubEditingChanged: scrubEditingChanged
-                )
+            VStack {
+                Spacer()
 
-                HStack(spacing: 20) {
-                    controlButton(
-                        systemImage: "gobackward.10",
-                        accessibilityLabel: L.string("Back 10 Seconds"),
-                        action: backwardAction
+                HStack(spacing: 8) {
+                    VideoPlayerProgressControl(
+                        displayedTime: displayedTime,
+                        duration: duration,
+                        scrubTime: $scrubTime,
+                        scrubChanged: scrubChanged,
+                        scrubEditingChanged: scrubEditingChanged
                     )
-
-                    controlButton(
-                        systemImage: didReachEnd ? "gobackward" : (isPlaying ? "pause.fill" : "play.fill"),
-                        accessibilityLabel: didReachEnd ? L.string("Replay") : L.string(isPlaying ? "Pause" : "Play"),
-                        action: playPauseAction
-                    )
-
-                    controlButton(
-                        systemImage: "goforward.10",
-                        accessibilityLabel: L.string("Forward 10 Seconds"),
-                        action: forwardAction
-                    )
-
-                    Spacer(minLength: 12)
 
                     controlButton(
                         systemImage: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill",
@@ -5260,14 +5844,13 @@ private struct VideoPlayerControlsOverlay: View {
                         action: muteAction
                     )
                 }
-                .padding(.horizontal, 2)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(.black.opacity(0.62))
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .padding(.horizontal, 14)
+                .padding(.bottom, 34)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(.black.opacity(0.62))
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .padding(.horizontal, 14)
-            .padding(.bottom, 34)
         }
     }
 
@@ -5282,6 +5865,84 @@ private struct VideoPlayerControlsOverlay: View {
                 .frame(width: 34, height: 34)
                 .contentShape(Rectangle())
         }
+        .accessibilityLabel(accessibilityLabel)
+    }
+}
+
+private struct VideoPlayerTransportControls: View {
+    let isPlaying: Bool
+    let didReachEnd: Bool
+    let playbackFailed: Bool
+    let playPauseAction: () -> Void
+    let retryAction: () -> Void
+    let backwardAction: () -> Void
+    let forwardAction: () -> Void
+    let interactionAction: () -> Void
+
+    var body: some View {
+        HStack(spacing: 28) {
+            transportButton(
+                systemImage: "gobackward.10",
+                accessibilityLabel: L.string("Back 10 Seconds"),
+                size: 52,
+                action: backwardAction
+            )
+
+            transportButton(
+                systemImage: primarySystemImage,
+                accessibilityLabel: primaryAccessibilityLabel,
+                size: 66,
+                action: playbackFailed ? retryAction : playPauseAction
+            )
+
+            transportButton(
+                systemImage: "goforward.10",
+                accessibilityLabel: L.string("Forward 10 Seconds"),
+                size: 52,
+                action: forwardAction
+            )
+        }
+    }
+
+    private var primarySystemImage: String {
+        if playbackFailed {
+            return "arrow.clockwise"
+        }
+        if didReachEnd {
+            return "gobackward"
+        }
+        return isPlaying ? "pause.fill" : "play.fill"
+    }
+
+    private var primaryAccessibilityLabel: String {
+        if playbackFailed {
+            return L.string("Retry Playback")
+        }
+        if didReachEnd {
+            return L.string("Replay")
+        }
+        return L.string(isPlaying ? "Pause" : "Play")
+    }
+
+    private func transportButton(
+        systemImage: String,
+        accessibilityLabel: String,
+        size: CGFloat,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button {
+            interactionAction()
+            action()
+        } label: {
+            Image(systemName: systemImage)
+                .font(.system(size: size == 66 ? 27 : 21, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: size, height: size)
+                .background(.black.opacity(0.56))
+                .clipShape(Circle())
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
         .accessibilityLabel(accessibilityLabel)
     }
 }
@@ -5666,8 +6327,12 @@ extension VaultItemKind {
         self == .document || self == .archive || self == .other
     }
 
-    var isVisualMedia: Bool {
+    nonisolated var isVisualMedia: Bool {
         self == .image || self == .livePhoto || self == .video
+    }
+
+    nonisolated var isStillImageMedia: Bool {
+        self == .image || self == .livePhoto
     }
 
     nonisolated var isCategorySelectionItem: Bool {

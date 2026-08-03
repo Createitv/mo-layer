@@ -113,7 +113,7 @@ enum VaultCryptoService {
         return combined
     }
 
-    static func decrypt(_ data: Data, using key: SymmetricKey) throws -> Data {
+    nonisolated static func decrypt(_ data: Data, using key: SymmetricKey) throws -> Data {
         let box = try AES.GCM.SealedBox(combined: data)
         return try AES.GCM.open(box, using: key)
     }
@@ -149,14 +149,16 @@ enum VaultCryptoService {
         return try encrypt(data, using: rootKey)
     }
 
-    static func unwrapFileKey(_ wrapped: Data, rootKey: SymmetricKey) throws -> SymmetricKey {
+    nonisolated static func unwrapFileKey(_ wrapped: Data, rootKey: SymmetricKey) throws -> SymmetricKey {
         let data = try decrypt(wrapped, using: rootKey)
         return SymmetricKey(data: data)
     }
 
     static func randomData(count: Int) -> Data {
+        precondition(count > 0, "Random byte count must be positive")
         var bytes = [UInt8](repeating: 0, count: count)
-        _ = SecRandomCopyBytes(kSecRandomDefault, count, &bytes)
+        let status = SecRandomCopyBytes(kSecRandomDefault, count, &bytes)
+        precondition(status == errSecSuccess, "Secure random generation failed with status \(status)")
         return Data(bytes)
     }
 

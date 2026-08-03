@@ -2,14 +2,14 @@ import Foundation
 import OSLog
 
 enum VaultFileStore {
-    private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "app.landlady.www.privacy", category: "VaultFileStore")
+    private nonisolated static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "app.landlady.www.privacy", category: "VaultFileStore")
     static let encryptedFileProtection: FileProtectionType = .completeUntilFirstUserAuthentication
     static let encryptedDataWritingOptions: Data.WritingOptions = [
         .atomic,
         .completeFileProtectionUntilFirstUserAuthentication
     ]
 
-    static var vaultDirectory: URL {
+    nonisolated static var vaultDirectory: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return base.appendingPathComponent("Vault", isDirectory: true)
     }
@@ -66,7 +66,7 @@ enum VaultFileStore {
         return relativePath(for: destination)
     }
 
-    static func read(path: String) throws -> Data {
+    nonisolated static func read(path: String) throws -> Data {
         let url = resolvedURL(for: path)
         do {
             return try Data(contentsOf: url)
@@ -79,6 +79,38 @@ enum VaultFileStore {
     static func fileExists(path: String?) -> Bool {
         guard let path, !path.isEmpty else { return false }
         return FileManager.default.fileExists(atPath: resolvedURL(for: path).path)
+    }
+
+    static func fileSize(path: String?) -> Int64 {
+        guard let path, !path.isEmpty else { return 0 }
+        let url = resolvedURL(for: path)
+        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value
+        return size ?? 0
+    }
+
+    static func fileModifiedAt(path: String?) -> Date? {
+        guard let path, !path.isEmpty else { return nil }
+        let url = resolvedURL(for: path)
+        return try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date
+    }
+
+    static func encryptedObjectBytes() -> Int64 {
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: objectsDirectory,
+            includingPropertiesForKeys: [.fileSizeKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return 0
+        }
+        return files.reduce(Int64(0)) { total, url in
+            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            return total + Int64(size)
+        }
+    }
+
+    static func availableCapacityForImportantUsage() -> Int64 {
+        let values = try? vaultDirectory.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+        return values?.volumeAvailableCapacityForImportantUsage ?? 0
     }
 
     static func assetURL(for path: String) -> URL {
@@ -99,7 +131,7 @@ enum VaultFileStore {
         return "exists=\(FileManager.default.fileExists(atPath: url.path)) size=\(size?.int64Value ?? -1) protection=\(protection?.rawValue ?? "unknown") path=\(storedPathForLog(path))"
     }
 
-    static func normalizedStoredPath(_ path: String?) -> String? {
+    nonisolated static func normalizedStoredPath(_ path: String?) -> String? {
         guard let path, !path.isEmpty else { return path }
         if path.hasPrefix("/") {
             if let range = path.range(of: "/Vault/") {
@@ -147,16 +179,23 @@ enum VaultFileStore {
         try FileManager.default.setAttributes([.protectionKey: encryptedFileProtection], ofItemAtPath: url.path)
     }
 
-    private static func resolvedURL(for storedPath: String) -> URL {
+    private nonisolated static func resolvedURL(for storedPath: String) -> URL {
+        let candidate: URL
         if let normalized = normalizedStoredPath(storedPath), normalized != storedPath {
-            return vaultDirectory.appendingPathComponent(normalized)
+            candidate = vaultDirectory.appendingPathComponent(normalized)
+        } else if storedPath.hasPrefix("/") {
+            candidate = URL(fileURLWithPath: storedPath)
+        } else {
+            candidate = vaultDirectory.appendingPathComponent(storedPath)
         }
 
-        if storedPath.hasPrefix("/") {
-            return URL(fileURLWithPath: storedPath)
+        let resolved = candidate.standardizedFileURL
+        let vault = vaultDirectory.standardizedFileURL
+        guard resolved.path == vault.path || resolved.path.hasPrefix(vault.path + "/") else {
+            return vault.appendingPathComponent(resolved.lastPathComponent)
         }
 
-        return vaultDirectory.appendingPathComponent(storedPath)
+        return resolved
     }
 
     private static func relativePath(for url: URL) -> String {
@@ -168,7 +207,7 @@ enum VaultFileStore {
         return String(path.dropFirst(vaultPath.count + 1))
     }
 
-    private static func storedPathForLog(_ path: String) -> String {
+    private nonisolated static func storedPathForLog(_ path: String) -> String {
         normalizedStoredPath(path) ?? path
     }
 }

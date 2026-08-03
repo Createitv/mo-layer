@@ -56,6 +56,17 @@ struct RestorePurchaseFeedback: Equatable {
     static func failed() -> RestorePurchaseFeedback {
         RestorePurchaseFeedback(kind: .warning, message: L.string("Restore purchase failed. Please try again."))
     }
+
+    static func codeRedemptionUnavailable() -> RestorePurchaseFeedback {
+        RestorePurchaseFeedback(kind: .warning, message: L.string("Code redemption is unavailable. Please try again later."))
+    }
+
+    static func codeRedemptionOpened(hasActivePro: Bool) -> RestorePurchaseFeedback {
+        if hasActivePro {
+            return RestorePurchaseFeedback(kind: .success, message: L.string("Code redeemed. Pro is active."))
+        }
+        return RestorePurchaseFeedback(kind: .warning, message: L.string("Code redemption opened. Complete the App Store prompt, then Pro will refresh automatically."))
+    }
 }
 
 enum VaultFreeImportPolicy {
@@ -358,6 +369,39 @@ final class SubscriptionManager: NSObject, ObservableObject {
             statusText = feedback.message
             applyDeveloperAccessIfNeeded()
         }
+    }
+
+    func redeemOfferCode() async {
+        restoreFeedback = nil
+        guard isRevenueCatReady else {
+            let feedback = RestorePurchaseFeedback.codeRedemptionUnavailable()
+            restoreFeedback = feedback
+            statusText = feedback.message
+            applyDeveloperAccessIfNeeded()
+            return
+        }
+        guard #available(iOS 14.0, *) else {
+            let feedback = RestorePurchaseFeedback.codeRedemptionUnavailable()
+            restoreFeedback = feedback
+            statusText = feedback.message
+            applyDeveloperAccessIfNeeded()
+            return
+        }
+
+#if targetEnvironment(macCatalyst)
+        let feedback = RestorePurchaseFeedback.codeRedemptionUnavailable()
+        restoreFeedback = feedback
+        statusText = feedback.message
+        applyDeveloperAccessIfNeeded()
+        return
+#else
+        Purchases.shared.presentCodeRedemptionSheet()
+        statusText = L.string("Code redemption opened. Complete the App Store prompt, then Pro will refresh automatically.")
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+        await refreshEntitlements()
+        restoreFeedback = RestorePurchaseFeedback.codeRedemptionOpened(hasActivePro: isPro)
+        applyDeveloperAccessIfNeeded()
+#endif
     }
 
     func refreshEntitlements() async {

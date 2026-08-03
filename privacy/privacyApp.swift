@@ -13,6 +13,7 @@ enum AppModelStore {
     static let appGroupIdentifier = "group.app.landlady.www.privacy"
     static let storeFileName = "default.store"
     static let fileProtection: FileProtectionType = .completeUntilFirstUserAuthentication
+    static let minimumPersistentStoreFreeBytes: Int64 = 50 * 1024 * 1024
 
     static var schema: Schema {
         Schema([
@@ -51,22 +52,46 @@ enum AppModelStore {
 
     static func makeContainer(protectedDataAvailable: Bool = isProtectedDataAvailable) throws -> AppModelContainer {
         let schema = schema
-        guard protectedDataAvailable else {
-            let configuration = ModelConfiguration(
-                schema: schema,
-                isStoredInMemoryOnly: true,
-                cloudKitDatabase: .none
-            )
-            return AppModelContainer(
-                container: try ModelContainer(for: schema, configurations: [configuration]),
-                usesPersistentStore: false
-            )
+        guard shouldUsePersistentStore(protectedDataAvailable: protectedDataAvailable) else {
+            return try makeInMemoryContainer(schema: schema)
         }
 
         let configuration = try makePersistentConfiguration(schema: schema)
         return AppModelContainer(
             container: try ModelContainer(for: schema, configurations: [configuration]),
             usesPersistentStore: true
+        )
+    }
+
+    static func shouldUsePersistentStore(protectedDataAvailable: Bool = isProtectedDataAvailable) -> Bool {
+        protectedDataAvailable && hasSufficientFreeSpaceForPersistentStore()
+    }
+
+    static func hasSufficientFreeSpaceForPersistentStore() -> Bool {
+        availableCapacityForPersistentStore() >= minimumPersistentStoreFreeBytes
+    }
+
+    static func availableCapacityForPersistentStore() -> Int64 {
+        let url = applicationSupportDirectory
+        let values = try? url.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey, .volumeAvailableCapacityKey])
+        if let importantCapacity = values?.volumeAvailableCapacityForImportantUsage {
+            return importantCapacity
+        }
+        if let capacity = values?.volumeAvailableCapacity {
+            return Int64(capacity)
+        }
+        return minimumPersistentStoreFreeBytes
+    }
+
+    static func makeInMemoryContainer(schema: Schema) throws -> AppModelContainer {
+        let configuration = ModelConfiguration(
+            schema: schema,
+            isStoredInMemoryOnly: true,
+            cloudKitDatabase: .none
+        )
+        return AppModelContainer(
+            container: try ModelContainer(for: schema, configurations: [configuration]),
+            usesPersistentStore: false
         )
     }
 
@@ -127,7 +152,10 @@ final class AppModelContainerController: ObservableObject {
     }
 
     func usePersistentStoreWhenProtectedDataIsAvailable() {
-        guard !usesPersistentStore, AppModelStore.isProtectedDataAvailable else { return }
+        guard !usesPersistentStore,
+              AppModelStore.shouldUsePersistentStore() else {
+            return
+        }
         do {
             let schema = AppModelStore.schema
             let configuration = try AppModelStore.makePersistentConfiguration(schema: schema)
@@ -171,6 +199,9 @@ struct privacyApp: App {
                     .environmentObject(remoteChanges)
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.protectedDataDidBecomeAvailableNotification)) { _ in
+                modelContainerController.usePersistentStoreWhenProtectedDataIsAvailable()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
                 modelContainerController.usePersistentStoreWhenProtectedDataIsAvailable()
             }
         }

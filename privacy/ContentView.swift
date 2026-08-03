@@ -123,6 +123,7 @@ struct ContentView: View {
                 hasRecoverableVaultData = true
             }
             vaultStore.setWriteAccess(subscription.canImportAndSync)
+            _ = vaultStore.offloadOriginalsIfNeeded(context: modelContext)
             refreshRecoverableVaultData()
             handleStoredQuickRecordingRequest()
             Task {

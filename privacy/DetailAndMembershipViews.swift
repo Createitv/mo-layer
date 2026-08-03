@@ -157,6 +157,7 @@ struct MembershipView: View {
     var isRequiredBeforeUse = false
     @State private var selectedProductID = SubscriptionManager.yearly
     @State private var isRestoringPurchases = false
+    @State private var isRedeemingOfferCode = false
 
     init(isRequiredBeforeUse: Bool = false) {
         self.isRequiredBeforeUse = isRequiredBeforeUse
@@ -248,15 +249,26 @@ struct MembershipView: View {
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(AppTheme.primary)
 
-                        Button {
-                            restorePurchases()
-                        } label: {
-                            Label(isRestoringPurchases ? L.string("Restoring") : L.string("Restore Purchases"), systemImage: "arrow.clockwise")
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(AppTheme.primary)
+                        HStack(spacing: 18) {
+                            Button {
+                                redeemOfferCode()
+                            } label: {
+                                Label(isRedeemingOfferCode ? L.string("Opening") : L.string("Redeem Code"), systemImage: "ticket.fill")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(AppTheme.primary)
+                            }
+                            .disabled(isRedeemingOfferCode || isRestoringPurchases)
+
+                            Button {
+                                restorePurchases()
+                            } label: {
+                                Label(isRestoringPurchases ? L.string("Restoring") : L.string("Restore Purchases"), systemImage: "arrow.clockwise")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(AppTheme.primary)
+                            }
+                            .disabled(isRestoringPurchases || isRedeemingOfferCode)
                         }
                         .padding(.top, 2)
-                        .disabled(isRestoringPurchases)
 
                         if let restoreFeedback = subscription.restoreFeedback {
                             RestorePurchaseFeedbackView(feedback: restoreFeedback)
@@ -289,6 +301,15 @@ struct MembershipView: View {
         Task { @MainActor in
             await subscription.restorePurchases()
             isRestoringPurchases = false
+        }
+    }
+
+    private func redeemOfferCode() {
+        guard !isRedeemingOfferCode else { return }
+        isRedeemingOfferCode = true
+        Task { @MainActor in
+            await subscription.redeemOfferCode()
+            isRedeemingOfferCode = false
         }
     }
 

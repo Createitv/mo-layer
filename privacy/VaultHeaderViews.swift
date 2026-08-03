@@ -60,7 +60,6 @@ struct VaultHomeHeader: View {
     @Binding var selectedCategory: VaultCategory
     let isInnerVaultActive: Bool
     let profileAction: () -> Void
-    let cameraAction: () -> Void
     let importAction: () -> Void
     let toggleInnerVaultAction: () -> Void
     var onTouchZoneFrameChange: (CGRect) -> Void = { _ in }
@@ -101,13 +100,6 @@ struct VaultHomeHeader: View {
                     action: profileAction
                 )
             }
-
-            headerIconButton(
-                systemName: "camera.viewfinder",
-                accessibilityLabel: L.string("Take Photo or Video"),
-                contextStyle: contextStyle,
-                action: cameraAction
-            )
 
             headerIconButton(
                 systemName: contextStyle.importSystemImage,

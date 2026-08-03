@@ -300,13 +300,14 @@ final class CloudKitSyncService: ObservableObject {
         CloudKitChangeSubscriptionDescriptor(recordType: "DecoyNote", subscriptionID: "privacy.vault.change.DecoyNote", sendsSilentPush: true)
     ]
     static let schemaSeedDescriptors: [CloudKitSchemaSeedDescriptor] = [
-        CloudKitSchemaSeedDescriptor(recordType: "VaultFolder", recordName: "__privacy_schema_seed_vault_folder"),
-        CloudKitSchemaSeedDescriptor(recordType: "VaultItem", recordName: "__privacy_schema_seed_vault_item"),
-        CloudKitSchemaSeedDescriptor(recordType: "DecoyNote", recordName: "__privacy_schema_seed_decoy_note")
+        CloudKitSchemaSeedDescriptor(recordType: "VaultFolder", recordName: "privacy-internal-schema-seed-vault-folder"),
+        CloudKitSchemaSeedDescriptor(recordType: "VaultItem", recordName: "privacy-internal-schema-seed-vault-item"),
+        CloudKitSchemaSeedDescriptor(recordType: "DecoyNote", recordName: "privacy-internal-schema-seed-decoy-note")
     ]
     static let writableProbeRecordType = "VaultManifest"
-    static let writableProbeRecordName = "__privacy_writable_probe"
-    static let internalRecordNamePrefix = "__privacy_"
+    static let writableProbeRecordName = "privacy-internal-writable-probe"
+    static let internalRecordNamePrefix = "privacy-internal-"
+    static let legacyInternalRecordNamePrefix = "__privacy_"
 
     static var cloudKitEnvironment: String {
         #if DEBUG
@@ -368,7 +369,7 @@ final class CloudKitSyncService: ObservableObject {
     }
 
     static func isInternalRecordName(_ recordName: String) -> Bool {
-        recordName.hasPrefix(internalRecordNamePrefix)
+        recordName.hasPrefix(internalRecordNamePrefix) || recordName.hasPrefix(legacyInternalRecordNamePrefix)
     }
 
     static func userRecords(from records: [CKRecord]) -> [CKRecord] {
@@ -480,7 +481,7 @@ final class CloudKitSyncService: ObservableObject {
             record["encryptedMetadata"] = Data("schema-seed-item".utf8)
             record["encryptedFileKey"] = Data("schema-seed-key".utf8)
             record["byteSize"] = Int64(0)
-            record["folderId"] = "__privacy_schema_seed_vault_folder"
+            record["folderId"] = Self.schemaSeedDescriptors.first { $0.recordType == "VaultFolder" }?.recordName ?? "privacy-internal-schema-seed-vault-folder"
             record["favorite"] = 0
             record["createdAt"] = now
             record["assetState"] = VaultAssetState.cloudOnly.rawValue
@@ -709,8 +710,11 @@ final class CloudKitSyncService: ObservableObject {
         state = .syncing
         let fileURL = VaultFileStore.assetURL(for: item.encryptedFilePath)
         let requiresFileAsset = item.kind != .link && item.deletedAt == nil
+        let canPreserveRemoteFileAsset = requiresFileAsset
+            && item.assetState == .cloudOnly
+            && item.cloudRecordName?.isEmpty == false
         appendLog("Syncing VaultItem id=\(item.id) kind=\(item.kind.rawValue) bytes=\(item.byteSize) requiresFileAsset=\(requiresFileAsset) file=\(VaultFileStore.encryptedFileAttributesForLog(path: item.encryptedFilePath)) thumb=\(VaultFileStore.encryptedFileAttributesForLog(path: item.encryptedThumbPath))")
-        guard !requiresFileAsset || VaultFileStore.fileExists(path: item.encryptedFilePath) else {
+        guard !requiresFileAsset || canPreserveRemoteFileAsset || VaultFileStore.fileExists(path: item.encryptedFilePath) else {
             return failItemSync(item, reason: L.string("Local encrypted file is missing; cannot upload to iCloud."))
         }
 
@@ -718,7 +722,7 @@ final class CloudKitSyncService: ObservableObject {
         var fileAsset: CKAsset?
         var thumbAsset: CKAsset?
 
-        if requiresFileAsset {
+        if requiresFileAsset, VaultFileStore.fileExists(path: item.encryptedFilePath) {
             do {
                 try VaultFileStore.prepareForCloudAssetUpload(path: item.encryptedFilePath)
             } catch {
@@ -787,6 +791,34 @@ final class CloudKitSyncService: ObservableObject {
         let records = Self.userRecords(from: await fetchRecords(recordType: "VaultItem"))
         state = .synced(Date())
         lastSyncError = nil
+        return records
+    }
+
+    func fetchRemoteItemsForIndex() async -> [CKRecord] {
+        guard await ensureCloudAvailable() else { return [] }
+
+        state = .syncing
+        let records = Self.userRecords(from: await fetchRecords(
+            recordType: "VaultItem",
+            desiredKeys: [
+                "itemId",
+                "type",
+                "encryptedMetadata",
+                "encryptedFileKey",
+                "byteSize",
+                "folderId",
+                "favorite",
+                "createdAt",
+                "updatedAt",
+                "deletedAt",
+                "localRevision",
+                "assetState",
+                "importFingerprint"
+            ]
+        ))
+        state = .synced(Date())
+        lastSyncError = nil
+        appendLog("Fetched VaultItem index records count=\(records.count)")
         return records
     }
 
@@ -884,6 +916,29 @@ final class CloudKitSyncService: ObservableObject {
         }
     }
 
+    func downloadThumbnail(for item: VaultItem) async -> URL? {
+        guard await ensureCloudAvailable() else {
+            item.lastDownloadError = lastSyncError
+            return nil
+        }
+
+        state = .syncing
+        let recordID = CKRecord.ID(recordName: item.cloudRecordName ?? item.id)
+        do {
+            let results = try await database.records(for: [recordID], desiredKeys: ["thumbAsset"])
+            let record = try results[recordID]?.get()
+            let thumbURL = (record?["thumbAsset"] as? CKAsset)?.fileURL
+            state = .synced(Date())
+            lastSyncError = nil
+            appendLog("Downloaded thumbnail for VaultItem id=\(item.id) thumb=\(thumbURL != nil)")
+            return thumbURL
+        } catch {
+            let detail = describe(error, context: "VaultItem thumbnail download failed id=\(item.id)")
+            appendLog(detail)
+            return nil
+        }
+    }
+
     func deleteItem(_ item: VaultItem) async -> Bool {
         guard await ensureCloudAvailable() else {
             item.syncStatus = .pending
@@ -974,42 +1029,44 @@ final class CloudKitSyncService: ObservableObject {
         return false
     }
 
-    private func fetchRecords(recordType: String) async -> [CKRecord] {
+    private func fetchRecords(recordType: String, desiredKeys: [String]? = nil) async -> [CKRecord] {
         let query = CKQuery(recordType: recordType, predicate: NSPredicate(value: true))
-        let (records, cursor) = await fetchRecords(query: query, recordType: recordType)
+        let (records, cursor) = await fetchRecords(query: query, recordType: recordType, desiredKeys: desiredKeys)
         guard let cursor else { return records }
-        return await fetchRemainingRecords(cursor: cursor, recordType: recordType, accumulated: records)
+        return await fetchRemainingRecords(cursor: cursor, recordType: recordType, desiredKeys: desiredKeys, accumulated: records)
     }
 
-    private func fetchRecords(query: CKQuery, recordType: String) async -> ([CKRecord], CKQueryOperation.Cursor?) {
+    private func fetchRecords(query: CKQuery, recordType: String, desiredKeys: [String]? = nil) async -> ([CKRecord], CKQueryOperation.Cursor?) {
         await withCheckedContinuation { continuation in
             let operation = CKQueryOperation(query: query)
-            configure(operation: operation, recordType: recordType, continuation: continuation)
+            configure(operation: operation, recordType: recordType, desiredKeys: desiredKeys, continuation: continuation)
             database.add(operation)
         }
     }
 
-    private func fetchRecords(cursor: CKQueryOperation.Cursor, recordType: String) async -> ([CKRecord], CKQueryOperation.Cursor?) {
+    private func fetchRecords(cursor: CKQueryOperation.Cursor, recordType: String, desiredKeys: [String]? = nil) async -> ([CKRecord], CKQueryOperation.Cursor?) {
         await withCheckedContinuation { continuation in
             let operation = CKQueryOperation(cursor: cursor)
-            configure(operation: operation, recordType: recordType, continuation: continuation)
+            configure(operation: operation, recordType: recordType, desiredKeys: desiredKeys, continuation: continuation)
             database.add(operation)
         }
     }
 
-    private func fetchRemainingRecords(cursor: CKQueryOperation.Cursor, recordType: String, accumulated: [CKRecord]) async -> [CKRecord] {
-        let (records, nextCursor) = await fetchRecords(cursor: cursor, recordType: recordType)
+    private func fetchRemainingRecords(cursor: CKQueryOperation.Cursor, recordType: String, desiredKeys: [String]? = nil, accumulated: [CKRecord]) async -> [CKRecord] {
+        let (records, nextCursor) = await fetchRecords(cursor: cursor, recordType: recordType, desiredKeys: desiredKeys)
         let combined = accumulated + records
         guard let nextCursor else { return combined }
-        return await fetchRemainingRecords(cursor: nextCursor, recordType: recordType, accumulated: combined)
+        return await fetchRemainingRecords(cursor: nextCursor, recordType: recordType, desiredKeys: desiredKeys, accumulated: combined)
     }
 
     private func configure(
         operation: CKQueryOperation,
         recordType: String,
+        desiredKeys: [String]?,
         continuation: CheckedContinuation<([CKRecord], CKQueryOperation.Cursor?), Never>
     ) {
         var records: [CKRecord] = []
+        operation.desiredKeys = desiredKeys
         operation.recordMatchedBlock = { _, result in
             if case .success(let record) = result {
                 records.append(record)
