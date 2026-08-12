@@ -708,6 +708,7 @@
 "Enter Mo Layer" = "Enter Mo Layer";
 "Save files to Mo Layer" = "Save files to Mo Layer";
 "Mo Layer is a deeper hidden directory inside the real vault. Use it for files that need an extra layer of privacy." = "Mo Layer is a deeper hidden directory inside the real vault. Use it for files that need an extra layer of privacy.";
+"Mo Layer is a Pro feature. It is a deeper hidden directory inside the real vault for files that need extra privacy. With Pro, you can hide files in Mo Layer and restore them to the regular vault at any time." = "Mo Layer is a Pro feature. It is a deeper hidden directory inside the real vault for files that need extra privacy. With Pro, you can hide files in Mo Layer and restore them to the regular vault at any time.";
 "Tap the blank touch zone between the category title and the profile avatar three times to enter Mo Layer." = "Tap the blank touch zone between the category title and the profile avatar three times to enter Mo Layer.";
 "Select items in the regular vault and tap Hide, or choose the Mo Layer directory when saving shared files." = "Select items in the regular vault and tap Hide, or choose the Mo Layer directory when saving shared files.";
 "Step %d of %d" = "Step %d of %d";

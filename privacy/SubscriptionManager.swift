@@ -9,6 +9,11 @@ enum SubscriptionLoadState: Equatable {
     case failed(String)
 }
 
+enum MoLayerEntryAction: Equatable {
+    case enter
+    case explainPro
+}
+
 enum MembershipAccessLevel: Equatable {
     case activePro
     case expiredReadOnly
@@ -21,6 +26,10 @@ enum MembershipAccessLevel: Equatable {
         case .lockedUntilPro:
             false
         }
+    }
+
+    var moLayerEntryAction: MoLayerEntryAction {
+        allowsVaultEntry ? .enter : .explainPro
     }
 
     var allowsImportAndCloudSync: Bool {
@@ -267,7 +276,7 @@ final class SubscriptionManager: NSObject, ObservableObject {
     }
 
     var canEnterVault: Bool {
-        accessLevel.allowsVaultEntry
+        accessLevel.moLayerEntryAction == .enter
     }
 
     var canImportAndSync: Bool {

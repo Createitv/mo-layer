@@ -704,6 +704,7 @@
 "Enter Mo Layer" = "Entrer dans Mo Layer";
 "Save files to Mo Layer" = "Enregistrer dans Mo Layer";
 "Mo Layer is a deeper hidden directory inside the real vault. Use it for files that need an extra layer of privacy." = "Mo Layer est un dossier caché plus profond dans le vrai coffre. Utilisez-le pour les fichiers nécessitant une couche de confidentialité supplémentaire.";
+"Mo Layer is a Pro feature. It is a deeper hidden directory inside the real vault for files that need extra privacy. With Pro, you can hide files in Mo Layer and restore them to the regular vault at any time." = "Mo Layer est une fonctionnalité Pro. Il s’agit d’un répertoire masqué plus profond dans le vrai coffre, destiné aux fichiers nécessitant davantage de confidentialité. Avec Pro, vous pouvez masquer des fichiers dans Mo Layer et les restaurer à tout moment dans le coffre standard.";
 "Tap the blank touch zone between the category title and the profile avatar three times to enter Mo Layer." = "Touchez trois fois la zone vide entre le titre de catégorie et l’avatar de profil pour entrer dans Mo Layer.";
 "Select items in the regular vault and tap Hide, or choose the Mo Layer directory when saving shared files." = "Sélectionnez des éléments dans le coffre normal et touchez Hide, ou choisissez le dossier Mo Layer lors de l’enregistrement de fichiers partagés.";
 "Step %d of %d" = "Étape %d sur %d";

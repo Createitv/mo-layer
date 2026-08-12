@@ -708,6 +708,7 @@
 "Enter Mo Layer" = "进入墨层";
 "Save files to Mo Layer" = "保存文件到墨层";
 "Mo Layer is a deeper hidden directory inside the real vault. Use it for files that need an extra layer of privacy." = "墨层是真实保险箱里的更深隐藏目录，适合存放需要额外隐私保护的文件。";
+"Mo Layer is a Pro feature. It is a deeper hidden directory inside the real vault for files that need extra privacy. With Pro, you can hide files in Mo Layer and restore them to the regular vault at any time." = "墨层目录是 Pro 功能。它是真实保险箱内更深一层的隐藏目录，适合存放需要额外隐私保护的文件。开通 Pro 后，你可以把文件隐藏到墨层，也可以随时恢复到普通保险箱。";
 "Tap the blank touch zone between the category title and the profile avatar three times to enter Mo Layer." = "连续点击分类标题和用户头像之间的空白触碰区 3 次，即可进入墨层。";
 "Select items in the regular vault and tap Hide, or choose the Mo Layer directory when saving shared files." = "在普通目录中选中文件后点击 Hide，或保存分享文件时选择墨层目录。";
 "Step %d of %d" = "第 %d / %d 步";

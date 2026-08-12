@@ -738,6 +738,7 @@ struct VaultHomeView: View {
     @State private var showImportHub = false
     @State private var showQuickRecorder = false
     @State private var showMembership = false
+    @State private var showMoLayerProPrompt = false
     @State private var selectedCategory: VaultCategory = .album
     @State private var albumMediaFilter: AlbumMediaFilter = .all
     @State private var isAlbumFilterPickerPresented = false
@@ -967,6 +968,14 @@ struct VaultHomeView: View {
                 message: Text(alert.message),
                 dismissButton: .default(Text(L.string("OK")))
             )
+        }
+        .alert(L.string("Mo Layer"), isPresented: $showMoLayerProPrompt) {
+            Button(L.string("Cancel"), role: .cancel) {}
+            Button(L.string("Open Pro")) {
+                showMembership = true
+            }
+        } message: {
+            Text(L.string("Mo Layer is a Pro feature. It is a deeper hidden directory inside the real vault for files that need extra privacy. With Pro, you can hide files in Mo Layer and restore them to the regular vault at any time."))
         }
         .alert(L.string("Delete Selected Items?"), isPresented: $confirmBulkDelete) {
             Button(L.string("Cancel"), role: .cancel) {}
@@ -1512,7 +1521,7 @@ struct VaultHomeView: View {
 
     private func enterInnerVault() {
         guard subscription.canEnterVault else {
-            showMembership = true
+            showMoLayerProPrompt = true
             return
         }
 

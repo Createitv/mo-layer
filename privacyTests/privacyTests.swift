@@ -1402,6 +1402,12 @@ struct privacyTests {
         #expect(!MembershipAccessLevel.lockedUntilPro.allowsImportAndCloudSync)
     }
 
+    @Test func moLayerEntryActionExplainsProOnlyToNeverSubscribedUsers() {
+        #expect(MembershipAccessLevel.activePro.moLayerEntryAction == .enter)
+        #expect(MembershipAccessLevel.expiredReadOnly.moLayerEntryAction == .enter)
+        #expect(MembershipAccessLevel.lockedUntilPro.moLayerEntryAction == .explainPro)
+    }
+
     @Test func freeImportPolicyAllowsFirstNinetyNineVaultFilesBeforePro() {
         #expect(VaultFreeImportPolicy.freeItemLimit == 99)
         #expect(VaultFreeImportPolicy.canImport(currentCount: 0, incomingCount: 1, isPro: false))
