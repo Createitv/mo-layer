@@ -4,7 +4,7 @@
 
 **Goal:** Show an explanatory Mo Layer alert to never-subscribed free users before they choose whether to open the existing Pro paywall.
 
-**Architecture:** Keep the existing `MembershipAccessLevel.allowsVaultEntry` boundary, which already permits active and expired Pro users. Add one presentation state to `VaultHomeView`; locked users set that state, and the alert's affirmative action opens the existing membership cover.
+**Architecture:** Derive a small, testable `MoLayerEntryAction` from `MembershipAccessLevel`, preserving direct entry for active and expired Pro users. Add one presentation state to `VaultHomeView`; locked users set that state, and the alert's affirmative action opens the existing membership cover.
 
 **Tech Stack:** SwiftUI, Swift Testing, project `L.string` localization.
 
@@ -19,30 +19,58 @@
 
 ---
 
-### Task 1: Lock the entry behavior with a regression test
+### Task 1: Lock the entry policy with a regression test
 
 **Files:**
+- Modify: `privacy/SubscriptionManager.swift:12-38`
 - Test: `privacyTests/privacyTests.swift`
 
 **Interfaces:**
-- Consumes: `MembershipAccessLevel.allowsVaultEntry`, `VaultHomeView.enterInnerVault()` source.
-- Produces: regression coverage for the alert state and required actions.
+- Consumes: `MembershipAccessLevel`.
+- Produces: `MoLayerEntryAction` and `MembershipAccessLevel.moLayerEntryAction` for the SwiftUI entry flow.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the failing policy test**
 
-Add a Swift Testing case that reads `privacy/MainViews.swift`, isolates `enterInnerVault()`, and asserts that locked entry sets `showMoLayerProPrompt`, not `showMembership`. Assert that the source contains a `Mo Layer` alert with `Cancel` and `Open Pro`, and that `Open Pro` sets `showMembership = true`.
+Add a Swift Testing case with literal expected values:
+
+```swift
+@Test func moLayerEntryActionExplainsProOnlyToNeverSubscribedUsers() {
+    #expect(MembershipAccessLevel.activePro.moLayerEntryAction == .enter)
+    #expect(MembershipAccessLevel.expiredReadOnly.moLayerEntryAction == .enter)
+    #expect(MembershipAccessLevel.lockedUntilPro.moLayerEntryAction == .explainPro)
+}
+```
 
 - [ ] **Step 2: Run the test to verify it fails**
 
 Run:
 
 ```bash
-xcodebuild -project privacy.xcodeproj -scheme privacy -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -only-testing:privacyTests/privacyTests/lockedMoLayerEntryExplainsFeatureBeforeOpeningPro test
+xcodebuild -project privacy.xcodeproj -scheme privacy -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -only-testing:privacyTests/privacyTests/moLayerEntryActionExplainsProOnlyToNeverSubscribedUsers test
 ```
 
-Expected: the assertion for `showMoLayerProPrompt` fails because the state and alert do not exist.
+Expected: compilation fails because `moLayerEntryAction`, `.enter`, and `.explainPro` do not exist.
 
-- [ ] **Step 3: Preserve the existing membership-state coverage**
+- [ ] **Step 3: Add the minimal policy implementation**
+
+Add beside `MembershipAccessLevel`:
+
+```swift
+enum MoLayerEntryAction: Equatable {
+    case enter
+    case explainPro
+}
+```
+
+Add to `MembershipAccessLevel`:
+
+```swift
+var moLayerEntryAction: MoLayerEntryAction {
+    allowsVaultEntry ? .enter : .explainPro
+}
+```
+
+- [ ] **Step 4: Run the policy test and existing membership tests**
 
 Keep `membershipAccessSeparatesActiveExpiredAndLockedStates` and `moLayerEntryUsesVaultReadAccessInsteadOfWriteAccess` passing so expired users remain eligible for entry.
 
@@ -62,15 +90,15 @@ Keep `membershipAccessSeparatesActiveExpiredAndLockedStates` and `moLayerEntryUs
 - Modify: `privacy/es.lproj/Localizable.strings`
 
 **Interfaces:**
-- Consumes: `subscription.canEnterVault`, existing `showMembership` full-screen cover, `L.string`.
+- Consumes: `subscription.accessLevel.moLayerEntryAction`, existing `showMembership` full-screen cover, `L.string`.
 - Produces: `@State private var showMoLayerProPrompt`, native alert transition to membership.
 
 - [ ] **Step 1: Add the minimal presentation state and gate**
 
-Add `showMoLayerProPrompt` beside `showMembership`. In `enterInnerVault()`, replace the direct paywall assignment with:
+Add `showMoLayerProPrompt` beside `showMembership`. In `enterInnerVault()`, branch on the tested policy:
 
 ```swift
-guard subscription.canEnterVault else {
+guard subscription.accessLevel.moLayerEntryAction == .enter else {
     showMoLayerProPrompt = true
     return
 }
@@ -131,4 +159,3 @@ xcodebuild -project privacy.xcodeproj -scheme privacy -destination 'generic/plat
 ```
 
 Expected: `BUILD SUCCEEDED`.
-
