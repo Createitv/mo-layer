@@ -7,6 +7,7 @@
 
 import Testing
 import CloudKit
+import CoreMedia
 import CryptoKit
 import Foundation
 import SwiftData
@@ -87,6 +88,74 @@ struct privacyTests {
         }
 
         #expect(didFail)
+    }
+
+    @Test func cloudMetadataInspectionDistinguishesWrongKeyFromLegacyPayload() throws {
+        let rootKey = SymmetricKey(size: .bits256)
+        let otherKey = SymmetricKey(size: .bits256)
+        let metadata = VaultMetadata(
+            originalName: "Photo.jpg",
+            mimeType: "image/jpeg",
+            source: "Photos",
+            note: "",
+            importedAt: Date(timeIntervalSince1970: 1_800_000_000)
+        )
+        let readable = try VaultCryptoService.encryptCodable(metadata, using: rootKey)
+        let legacy = try VaultCryptoService.encrypt(Data("{\"legacy\":true}".utf8), using: rootKey)
+
+        #expect(VaultCloudMetadataInspector.classify(readable, using: rootKey) == .readable)
+        #expect(VaultCloudMetadataInspector.classify(legacy, using: rootKey) == .incompatiblePayload)
+        #expect(VaultCloudMetadataInspector.classify(readable, using: otherKey) == .wrongRootKey)
+    }
+
+    @Test func remoteManifestRestoresPackagedKeyWhenLocalKeyCannotOpenIt() {
+        #expect(VaultRemoteRootKeyPolicy.shouldRestorePackagedKey(
+            localKeyOpensManifest: false,
+            recoveryKeyOpensPackage: true
+        ))
+        #expect(!VaultRemoteRootKeyPolicy.shouldRestorePackagedKey(
+            localKeyOpensManifest: true,
+            recoveryKeyOpensPackage: true
+        ))
+        #expect(!VaultRemoteRootKeyPolicy.shouldRestorePackagedKey(
+            localKeyOpensManifest: false,
+            recoveryKeyOpensPackage: false
+        ))
+    }
+
+    @Test func vaultRecoverySelectsOnlyTheUniqueCandidateWithMostReadableItems() {
+        let selected = VaultRecoverySelectionPolicy.select(
+            candidates: [
+                VaultRecoveryCandidateScore(id: "current", readableItemCount: 4),
+                VaultRecoveryCandidateScore(id: "old-backup", readableItemCount: 994),
+                VaultRecoveryCandidateScore(id: "unrelated", readableItemCount: 0)
+            ]
+        )
+
+        #expect(selected?.id == "old-backup")
+        #expect(selected?.readableItemCount == 994)
+    }
+
+    @Test func vaultRecoveryRefusesAmbiguousCandidateTie() {
+        let selected = VaultRecoverySelectionPolicy.select(
+            candidates: [
+                VaultRecoveryCandidateScore(id: "first", readableItemCount: 499),
+                VaultRecoveryCandidateScore(id: "second", readableItemCount: 499)
+            ]
+        )
+
+        #expect(selected == nil)
+    }
+
+    @Test func vaultRecoveryOnlyPromptsWhenTheUnavailableVaultIsDominant() {
+        #expect(VaultRecoverySelectionPolicy.shouldRequestRecovery(
+            readableItemCount: 4,
+            wrongRootKeyCount: 994
+        ))
+        #expect(!VaultRecoverySelectionPolicy.shouldRequestRecovery(
+            readableItemCount: 994,
+            wrongRootKeyCount: 4
+        ))
     }
 
     @Test func decoyNotePayloadEncryptsAndDecrypts() throws {
@@ -242,6 +311,55 @@ struct privacyTests {
         #expect(BrowserViewModel.sanitizedDownloadFilename("invoice:2026.pdf") == "invoice-2026.pdf")
         #expect(BrowserViewModel.sanitizedDownloadFilename("  .hidden  ") == "hidden")
         #expect(BrowserViewModel.sanitizedDownloadFilename("   ").hasSuffix(".download"))
+    }
+
+    @Test func sharedImportUsesOriginalFilenameForMetadata() {
+        let stagedURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(UUID().uuidString)-Quarterly Report.pdf")
+
+        #expect(ImportService.sanitizedFileName("  folder/Quarterly: Report.pdf  ") == "folder-Quarterly- Report.pdf")
+        #expect(ImportService.preferredFileExtension(originalName: "Quarterly Report.pdf", fallbackURL: stagedURL) == "pdf")
+        #expect(ImportService.preferredFileExtension(originalName: "Quarterly Report", fallbackURL: stagedURL) == "pdf")
+    }
+
+    @Test func fileDisplayDescriptorUsesOriginalExtensionForIcons() {
+        let pdf = VaultMetadata(
+            originalName: "Bank statement.pdf",
+            mimeType: "application/octet-stream",
+            source: "Files",
+            note: "",
+            importedAt: Date(),
+            originalExtension: nil
+        )
+        let excel = VaultMetadata(
+            originalName: "Budget.xlsx",
+            mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            source: "Files",
+            note: "",
+            importedAt: Date(),
+            originalExtension: "xlsx"
+        )
+        let archive = VaultMetadata(
+            originalName: "Archive.zip",
+            mimeType: "application/zip",
+            source: "Files",
+            note: "",
+            importedAt: Date(),
+            originalExtension: "zip"
+        )
+        let code = VaultMetadata(
+            originalName: "ImportService.swift",
+            mimeType: "text/plain",
+            source: "Files",
+            note: "",
+            importedAt: Date(),
+            originalExtension: "swift"
+        )
+
+        #expect(VaultFileDisplayDescriptor(metadata: pdf, kind: .document).icon == "doc.richtext.fill")
+        #expect(VaultFileDisplayDescriptor(metadata: excel, kind: .document).icon == "tablecells.fill")
+        #expect(VaultFileDisplayDescriptor(metadata: archive, kind: .archive).icon == "archivebox.fill")
+        #expect(VaultFileDisplayDescriptor(metadata: code, kind: .document).icon == "curlybraces")
     }
 
     @Test func gestureEnrollmentAcceptsSameRouteWithScaleOffsetAndTimingChanges() throws {
@@ -709,6 +827,8 @@ struct privacyTests {
         #expect(MediaGridLayout.clampedScale(4) == MediaGridLayout.maximumScale)
         #expect(MediaGridLayout.tileMinimum(for: 390, scale: 0.8) == 86)
         #expect(MediaGridLayout.tileMinimum(for: 390, scale: 1.4) == 151)
+        #expect(MediaGridLayout.filledTileSize(for: 390, scale: MediaGridLayout.defaultScale) == 126)
+        #expect(MediaGridLayout.filledTileSize(for: 390, scale: 1.4) == 192)
         #expect(MediaGridLayout.columnCount(for: 390, scale: MediaGridLayout.minimumScale) == 13)
         #expect(MediaGridLayout.columnCount(for: 390, scale: MediaGridLayout.defaultScale) == 3)
         #expect(MediaGridLayout.columnCount(for: 390, scale: MediaGridLayout.maximumScale) == 1)
@@ -769,25 +889,187 @@ struct privacyTests {
         #expect(candidates == ["2", "4"])
     }
 
+    @Test func albumGridReportsVisibleItemsOnlyAfterScrollingSettles() {
+        #expect(!AlbumGridVisibleItemsReportPolicy.shouldReport(isDragging: true, isDecelerating: false))
+        #expect(!AlbumGridVisibleItemsReportPolicy.shouldReport(isDragging: false, isDecelerating: true))
+        #expect(AlbumGridVisibleItemsReportPolicy.shouldReport(isDragging: false, isDecelerating: false))
+    }
+
+    @Test func albumPageMergeAppendsOnlyNewStableIDs() {
+        let merged = AlbumMediaPageMergePolicy.merge(
+            existingIDs: ["a", "b"],
+            incomingIDs: ["b", "c", "d"]
+        )
+
+        #expect(merged == ["a", "b", "c", "d"])
+    }
+
+    @Test func albumLoadTriggerUsesTwoScreenWindow() {
+        #expect(AlbumMediaLoadTriggerPolicy.shouldLoadMore(
+            maxRequestedIndex: 160,
+            loadedCount: 200,
+            estimatedVisibleCount: 24
+        ))
+        #expect(!AlbumMediaLoadTriggerPolicy.shouldLoadMore(
+            maxRequestedIndex: 120,
+            loadedCount: 200,
+            estimatedVisibleCount: 24
+        ))
+    }
+
+    @Test func albumPagingRequestPolicyRejectsDuplicateAndCompletedLoads() {
+        #expect(AlbumMediaPagingRequestPolicy.canStart(isLoading: false, hasMore: true))
+        #expect(!AlbumMediaPagingRequestPolicy.canStart(isLoading: true, hasMore: true))
+        #expect(!AlbumMediaPagingRequestPolicy.canStart(isLoading: false, hasMore: false))
+    }
+
+    @Test @MainActor func albumPagingIncludesNilFolderItemsInRegularVault() async throws {
+        let schema = Schema([VaultItem.self])
+        let configuration = ModelConfiguration(
+            schema: schema,
+            isStoredInMemoryOnly: true,
+            cloudKitDatabase: .none
+        )
+        let container = try ModelContainer(for: schema, configurations: [configuration])
+        let context = ModelContext(container)
+        let regularItem = VaultItem(
+            id: "regular-photo",
+            kind: .image,
+            encryptedMetadata: Data(),
+            byteSize: 1,
+            folderId: nil
+        )
+        let innerItem = VaultItem(
+            id: "inner-photo",
+            kind: .image,
+            encryptedMetadata: Data(),
+            byteSize: 1,
+            folderId: VaultStore.innerVaultFolderId
+        )
+        context.insert(regularItem)
+        context.insert(innerItem)
+        try context.save()
+
+        let paging = AlbumMediaPagingController()
+        await paging.loadFirstPage(
+            scope: AlbumMediaScope(
+                isInnerVaultActive: false,
+                filter: .all,
+                favoritesOnly: false
+            ),
+            context: context
+        )
+
+        #expect(paging.items.map(\.id) == ["regular-photo"])
+        #expect(try AlbumLibraryCountQuery.fetch(context: context, isInnerVaultActive: false).album == 1)
+    }
+
+    @Test func albumCursorUsesLastStableItem() {
+        let date = Date(timeIntervalSince1970: 100)
+
+        #expect(
+            AlbumMediaCursorPolicy.cursor(createdAt: date, id: "z")
+                == AlbumMediaCursor(createdAt: date, id: "z")
+        )
+    }
+
+    @Test func albumGridUsesOnlyApprovedColumnCounts() {
+        #expect(MediaGridLayout.albumColumnCounts == [1, 3, 5, 7])
+        #expect(MediaGridLayout.defaultAlbumColumnCount == 3)
+        #expect(MediaGridLayout.settledAlbumColumnCount(startingColumnCount: 3, gestureScale: 2) == 1)
+        #expect(MediaGridLayout.settledAlbumColumnCount(startingColumnCount: 3, gestureScale: 0.5) == 7)
+    }
+
+    @Test func albumZoomAnchorRestoresViewportOffset() {
+        #expect(AlbumGridZoomAnchorPolicy.contentOffset(
+            itemCenterY: 900,
+            viewportAnchorY: 300,
+            minimumOffsetY: 0,
+            maximumOffsetY: 1_400
+        ) == 600)
+        #expect(AlbumGridZoomAnchorPolicy.contentOffset(
+            itemCenterY: 50,
+            viewportAnchorY: 300,
+            minimumOffsetY: 0,
+            maximumOffsetY: 1_400
+        ) == 0)
+    }
+
+    @Test @MainActor func mediaPreviewRepairBackfillsMissingDurationOnlyFromLocalVideos() {
+        #expect(VaultMediaPreviewRepairPolicy.needsVideoDuration(kind: .video, storedDuration: nil, hasLocalOriginal: true))
+        #expect(!VaultMediaPreviewRepairPolicy.needsVideoDuration(kind: .video, storedDuration: 41, hasLocalOriginal: true))
+        #expect(!VaultMediaPreviewRepairPolicy.needsVideoDuration(kind: .video, storedDuration: nil, hasLocalOriginal: false))
+        #expect(!VaultMediaPreviewRepairPolicy.needsVideoDuration(kind: .image, storedDuration: nil, hasLocalOriginal: true))
+    }
+
     @Test @MainActor func albumGridReconfiguresOnlyChangedVisibleItems() {
         let previous = [
-            AlbumGridItemRenderState(id: "1", thumbnailIdentity: "thumb-1", statusIdentity: "synced", isSelected: false),
-            AlbumGridItemRenderState(id: "2", thumbnailIdentity: "", statusIdentity: "cloud", isSelected: false)
+            AlbumGridItemRenderState(id: "1", thumbnailIdentity: "thumb-1", statusIdentity: "synced", isFavorite: false, isSelected: false),
+            AlbumGridItemRenderState(id: "2", thumbnailIdentity: "", statusIdentity: "cloud", isFavorite: false, isSelected: false)
         ]
         let next = [
             previous[0],
-            AlbumGridItemRenderState(id: "2", thumbnailIdentity: "thumb-2", statusIdentity: "cloud", isSelected: false)
+            AlbumGridItemRenderState(id: "2", thumbnailIdentity: "thumb-2", statusIdentity: "cloud", isFavorite: false, isSelected: false)
         ]
 
         #expect(AlbumGridUpdatePolicy.plan(previous: previous, next: next) == .reconfigure([1]))
         #expect(AlbumGridUpdatePolicy.plan(previous: previous, next: Array(next.reversed())) == .reloadAll)
     }
 
-    @Test func albumVideoDurationFormatterAdaptsToAvailableSpace() {
+    @Test @MainActor func albumGridUsesInsertPlanForAppendedPage() {
+        let previous = [
+            AlbumGridItemRenderState(id: "a", thumbnailIdentity: "thumb-a", statusIdentity: "synced", isSelected: false),
+            AlbumGridItemRenderState(id: "b", thumbnailIdentity: "thumb-b", statusIdentity: "synced", isSelected: false)
+        ]
+        let next = previous + [
+            AlbumGridItemRenderState(id: "c", thumbnailIdentity: "thumb-c", statusIdentity: "synced", isSelected: false)
+        ]
+
+        #expect(AlbumGridUpdatePolicy.plan(previous: previous, next: next) == .append(2..<3))
+    }
+
+    @Test @MainActor func albumGridReconfiguresOnlyTheItemWhoseFavoriteStateChanged() {
+        let previous = [
+            AlbumGridItemRenderState(id: "1", thumbnailIdentity: "thumb-1", statusIdentity: "synced", isFavorite: false, isSelected: false),
+            AlbumGridItemRenderState(id: "2", thumbnailIdentity: "thumb-2", statusIdentity: "synced", isFavorite: false, isSelected: false)
+        ]
+        let next = [
+            AlbumGridItemRenderState(id: "1", thumbnailIdentity: "thumb-1", statusIdentity: "synced", isFavorite: true, isSelected: false),
+            previous[1]
+        ]
+
+        #expect(AlbumGridUpdatePolicy.plan(previous: previous, next: next) == .reconfigure([0]))
+    }
+
+    @Test @MainActor func albumFavoriteFilterKeepsRegularAndMoLayerSpacesIndependent() {
+        let regularItems = [(id: "regular-favorite", favorite: true), (id: "regular-other", favorite: false)]
+        let moLayerItems = [(id: "molayer-favorite", favorite: true), (id: "molayer-other", favorite: false)]
+
+        let regularFavorites = AlbumFavoriteFilter.items(
+            from: regularItems,
+            showsFavoritesOnly: true,
+            isFavorite: \.favorite
+        )
+        let moLayerFavorites = AlbumFavoriteFilter.items(
+            from: moLayerItems,
+            showsFavoritesOnly: true,
+            isFavorite: \.favorite
+        )
+
+        #expect(regularFavorites.map(\.id) == ["regular-favorite"])
+        #expect(moLayerFavorites.map(\.id) == ["molayer-favorite"])
+        #expect(AlbumFavoriteFilter.items(from: regularItems, showsFavoritesOnly: false, isFavorite: \.favorite).map(\.id) == ["regular-favorite", "regular-other"])
+    }
+
+    @Test @MainActor func albumVideoDurationFormatterAdaptsToAvailableSpace() {
         #expect(AlbumVideoDurationFormatter.text(for: 65) == "1:05")
         #expect(AlbumVideoDurationFormatter.text(for: 3661) == "1:01:01")
         #expect(AlbumVideoDurationFormatter.text(for: 3661, compact: true) == "1h")
         #expect(AlbumVideoDurationFormatter.text(for: 65, compact: true) == "1m")
+        #expect(AlbumVideoDurationFormatter.text(for: 12, compact: true) == "12s")
+        #expect(AlbumVideoDurationLayout.presentation(for: 96) == .full)
+        #expect(AlbumVideoDurationLayout.presentation(for: 54) == .compact)
+        #expect(AlbumVideoDurationLayout.presentation(for: 32) == .iconOnly)
     }
 
     @Test @MainActor func vaultMetadataDecodesWithoutMediaDurationForExistingItems() throws {
@@ -844,7 +1126,7 @@ struct privacyTests {
         #expect(!VideoPlayerIdleTimerPolicy.shouldDisableIdleTimer(isPlaying: true, isVisible: false))
     }
 
-    @Test func videoPreviewUsesStableLazyPagingAndCenteredTransportControls() throws {
+    @Test func videoPreviewOwnsOneItemWithoutPreviousNextPaging() throws {
         let source = try String(
             contentsOf: repositoryRoot()
                 .appendingPathComponent("privacy")
@@ -852,17 +1134,21 @@ struct privacyTests {
             encoding: .utf8
         )
 
-        #expect(source.contains("LazyHStack(spacing: 0)"))
-        #expect(source.contains(".scrollTargetBehavior(.paging)"))
+        #expect(source.contains("struct MediaPreviewSelection: Identifiable"))
+        #expect(source.contains("let item: VaultItem"))
+        #expect(!source.contains("LazyHStack(spacing: 0)"))
+        #expect(!source.contains(".scrollTargetBehavior(.paging)"))
         #expect(source.contains("VideoPlayerTransportControls("))
         #expect(source.contains("alignment: .center"))
         #expect(source.contains("AVPlayerItemFailedToPlayToEndTimeErrorKey"))
         #expect(source.contains(".AVPlayerItemPlaybackStalled"))
         #expect(!source.contains("ForEach(previewWindowItems)"))
+        #expect(!source.contains("let items: [VaultItem]\n    let initialItemId"))
     }
 
     @Test func mediaGridScaleStorageSeparatesHomeCategories() {
         #expect(MediaGridScaleStorage.albumKey == "vault.mediaGridScale.album")
+        #expect(MediaGridScaleStorage.albumColumnsKey == "vault.mediaGridColumns.album")
         #expect(MediaGridScaleStorage.audioKey == "vault.mediaGridScale.audio")
         #expect(MediaGridScaleStorage.documentsKey == "vault.mediaGridScale.documents")
         #expect(MediaGridScaleStorage.defaultStoredScale == Double(MediaGridLayout.defaultScale))
@@ -878,7 +1164,7 @@ struct privacyTests {
 
         #expect(source.contains("collectionView.isScrollEnabled = true"))
         #expect(source.contains("context.coordinator.reloadDataIfNeeded(collectionView)"))
-        #expect(source.contains("private var transientScale"))
+        #expect(source.contains("private var transientColumnCount"))
         #expect(source.contains("MediaGridLayout.albumViewportHeight()"))
 
         let pinchStart = try #require(source.range(of: "@objc func handlePinch"))
@@ -888,16 +1174,66 @@ struct privacyTests {
         let endedStart = try #require(pinchSource.range(of: "case .ended, .cancelled, .failed:"))
         let changedSource = pinchSource[changedStart.lowerBound..<endedStart.lowerBound]
 
-        #expect(changedSource.contains("transientScale ="))
-        #expect(!changedSource.contains("parent.scale ="))
+        #expect(changedSource.contains("transientColumnCount ="))
+        #expect(!changedSource.contains("parent.columnCount ="))
+        #expect(source.contains("collectionView.prefetchDataSource = context.coordinator"))
+        #expect(source.contains("interactionFrameSampler.start"))
     }
 
-    @Test func cloudToLocalSyncKeepsOriginalsOnDemandForAutomaticAndManualRefreshRuns() {
-        #expect(!VaultCloudToLocalSyncPolicy.automaticDownloadsOriginals)
+    @Test func fullscreenMediaUsesBoundedDecodeAndResponsiveSeeking() {
+        let maxPixels = FullscreenImageDecodePolicy.maximumPixelSize(
+            screenSize: CGSize(width: 402, height: 874),
+            screenScale: 3
+        )
+
+        #expect(maxPixels == 4096)
+        #expect(VideoPlayerSeekPolicy.tolerance.seconds > 0)
+        #expect(VideoPlayerSeekPolicy.tolerance.seconds <= 0.1)
+    }
+
+    @Test func decryptedPreviewCacheIdentityChangesWithEncryptedAssetRevision() {
+        let first = VaultPreviewFileCachePolicy.cacheKey(
+            itemID: "video-1",
+            encryptedFilePath: "objects/video-1.enc",
+            encryptedFileKey: Data([1, 2, 3]),
+            updatedAt: Date(timeIntervalSince1970: 100)
+        )
+        let same = VaultPreviewFileCachePolicy.cacheKey(
+            itemID: "video-1",
+            encryptedFilePath: "objects/video-1.enc",
+            encryptedFileKey: Data([1, 2, 3]),
+            updatedAt: Date(timeIntervalSince1970: 100)
+        )
+        let changed = VaultPreviewFileCachePolicy.cacheKey(
+            itemID: "video-1",
+            encryptedFilePath: "objects/video-1-v2.enc",
+            encryptedFileKey: Data([1, 2, 3]),
+            updatedAt: Date(timeIntervalSince1970: 101)
+        )
+
+        #expect(first == same)
+        #expect(first != changed)
+    }
+
+    @Test func cloudToLocalSyncDownloadsOriginalsOnlyWhenRestoringAfterReinstall() {
+        #expect(VaultCloudToLocalSyncPolicy.downloadsOriginals(
+            purpose: .reinstallRestore,
+            explicitOverride: nil
+        ))
+        #expect(!VaultCloudToLocalSyncPolicy.downloadsOriginals(
+            purpose: .routineSync,
+            explicitOverride: nil
+        ))
         #expect(!VaultCloudToLocalSyncPolicy.automaticDownloadsPreviews)
         #expect(!VaultCloudToLocalSyncPolicy.manualRefreshDownloadsOriginals)
-        #expect(!VaultCloudToLocalSyncPolicy.downloadsOriginals(explicitOverride: nil))
-        #expect(VaultCloudToLocalSyncPolicy.downloadsOriginals(explicitOverride: true))
+        #expect(VaultCloudToLocalSyncPolicy.downloadsOriginals(
+            purpose: .routineSync,
+            explicitOverride: true
+        ))
+        #expect(!VaultCloudToLocalSyncPolicy.downloadsOriginals(
+            purpose: .reinstallRestore,
+            explicitOverride: false
+        ))
         #expect(VaultCloudToLocalSyncPolicy.syncedHomeCategories == [.album, .audio, .documents])
     }
 
@@ -1187,6 +1523,46 @@ struct privacyTests {
 
         #expect(original != changedLanguage)
         #expect(original != changedAppearance)
+    }
+
+    @Test func appStorageUsageFormatterUsesReadableBinaryUnits() {
+        let locale = Locale(identifier: "en_US_POSIX")
+
+        #expect(AppStorageUsageFormatter.localizedFileSize(0, locale: locale) == "0 B")
+        #expect(AppStorageUsageFormatter.localizedFileSize(1_536, locale: locale) == "1.5 KB")
+        #expect(AppStorageUsageFormatter.localizedFileSize(1_572_864, locale: locale) == "1.5 MB")
+        #expect(AppStorageUsageFormatter.localizedFileSize(1_610_612_736, locale: locale) == "1.50 GB")
+    }
+
+    @Test func appStorageUsageSnapshotSeparatesVaultAndOtherAppData() {
+        let snapshot = AppStorageUsageSnapshot(
+            appBundleBytes: 100,
+            appDataBytes: 900,
+            vaultBytes: 500,
+            encryptedOriginalBytes: 320,
+            thumbnailBytes: 80,
+            vaultTemporaryBytes: 20,
+            cacheBytes: 120,
+            temporaryBytes: 40
+        )
+
+        #expect(snapshot.totalBytes == 1_000)
+        #expect(snapshot.otherVaultBytes == 80)
+        #expect(snapshot.otherAppDataBytes == 240)
+    }
+
+    @Test func generalSettingsExposesAppStorageUsageOption() throws {
+        let source = try String(
+            contentsOf: repositoryRoot()
+                .appendingPathComponent("privacy")
+                .appendingPathComponent("FeatureViews.swift"),
+            encoding: .utf8
+        )
+
+        #expect(source.contains("AppStorageUsageSettingsView(initialSnapshot: storageUsageSnapshot)"))
+        #expect(source.contains("title: L.string(\"App Storage Usage\")"))
+        #expect(source.contains("detail: storageUsageDetail"))
+        #expect(source.contains("L.format(\n            \"Currently using %@\""))
     }
 
     @Test func appLanguageSettingsExposeEverySupportedLocalizationBundle() {

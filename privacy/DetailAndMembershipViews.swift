@@ -11,6 +11,7 @@ struct VaultItemDetailView: View {
     @Query(sort: \VaultFolder.sortOrder) private var folders: [VaultFolder]
     let item: VaultItem
     @State private var sharePayload: SharePayload?
+    @State private var previewItem: VaultItem?
     @State private var isPreparingShare = false
 
     var body: some View {
@@ -51,12 +52,21 @@ struct VaultItemDetailView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                         .overlay(RoundedRectangle(cornerRadius: 8).stroke(AppTheme.line))
                 } else {
-                    Image(systemName: item.kind == .video ? "video.fill" : "doc.fill")
+                    Image(systemName: placeholderDescriptor.icon)
                         .font(.system(size: 72))
-                        .foregroundStyle(AppTheme.primary)
+                        .foregroundStyle(placeholderDescriptor.tint)
                         .frame(maxWidth: .infinity, minHeight: 220)
-                        .background(AppTheme.primary.opacity(0.08))
+                        .background(placeholderDescriptor.tint.opacity(0.08))
                         .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+
+                if item.kind.isDocumentPreview {
+                    Button {
+                        previewItem = item
+                    } label: {
+                        Label(L.string("Preview"), systemImage: placeholderDescriptor.icon)
+                    }
+                    .buttonStyle(AppButtonStyle())
                 }
 
                 if item.kind == .link, let urlString = vaultStore.metadata(for: item)?.remoteURL, let url = URL(string: urlString) {
@@ -116,7 +126,16 @@ struct VaultItemDetailView: View {
             .navigationTitle(L.string("Private Item"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button {
+                        Task {
+                            await vaultStore.toggleFavorite(item, context: modelContext, sync: sync)
+                        }
+                    } label: {
+                        Image(systemName: item.isFavorite ? "heart.fill" : "heart")
+                    }
+                    .accessibilityLabel(item.isFavorite ? L.string("Unfavorite") : L.string("Favorite"))
+
                     Menu {
                         Button {
                             Task { await prepareShare() }
@@ -130,6 +149,12 @@ struct VaultItemDetailView: View {
             }
             .sheet(item: $sharePayload) { payload in
                 ShareSheet(items: payload.items)
+            }
+            .fullScreenCover(item: $previewItem) { item in
+                DocumentDetailPreviewView(
+                    item: item,
+                    isInnerVaultActive: item.folderId == VaultStore.innerVaultFolderId
+                )
             }
         }
     }
@@ -149,6 +174,10 @@ struct VaultItemDetailView: View {
 
     private var detailLine: String {
         "\(ByteCountFormatter.string(fromByteCount: item.byteSize, countStyle: .file)) · \(item.syncStatus.title)"
+    }
+
+    private var placeholderDescriptor: VaultFileDisplayDescriptor {
+        VaultFileDisplayDescriptor(metadata: vaultStore.metadata(for: item), kind: item.kind)
     }
 }
 

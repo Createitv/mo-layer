@@ -73,6 +73,9 @@ struct MainAppView: View {
                 allowsCloudSync: subscription.canPullFromCloud,
                 allowsCloudWrite: false
             )
+            #if DEBUG
+            await vaultStore.installPerformanceFixturesIfRequested(context: modelContext)
+            #endif
             refreshPendingSharedImports()
             runBackgroundCloudSync()
         }
@@ -726,7 +729,13 @@ struct VaultHomeView: View {
     @EnvironmentObject private var vaultStore: VaultStore
     @EnvironmentObject private var importQueue: VaultImportQueue
     @EnvironmentObject private var remoteChanges: CloudSyncRemoteChangeRouter
-    @Query(sort: \VaultItem.createdAt, order: .reverse) private var items: [VaultItem]
+    @Query(
+        filter: #Predicate<VaultItem> { item in
+            item.kindRawValue != "image" && item.kindRawValue != "livePhoto" && item.kindRawValue != "video"
+        },
+        sort: \VaultItem.createdAt,
+        order: .reverse
+    ) private var nonAlbumItems: [VaultItem]
     @State private var selectedItem: VaultItem?
     @State private var previewSelection: MediaPreviewSelection?
     @State private var audioDetailItem: VaultItem?
@@ -740,7 +749,10 @@ struct VaultHomeView: View {
     @State private var showMembership = false
     @State private var showMoLayerProPrompt = false
     @State private var selectedCategory: VaultCategory = .album
-    @State private var albumMediaFilter: AlbumMediaFilter = .all
+    @State private var albumMediaFilter: AlbumMediaKindFilter = .all
+    @State private var albumPaging = AlbumMediaPagingController()
+    @State private var libraryCounts = AlbumLibraryCountSnapshot.empty
+    @State private var showsFavoriteAlbumItemsOnly = false
     @State private var isAlbumFilterPickerPresented = false
     @State private var importSummary: ImportSummary?
     @State private var selectionMode = false
@@ -765,11 +777,11 @@ struct VaultHomeView: View {
     @State private var moLayerTouchZoneFrame: CGRect = .zero
     @State private var showMoLayerGuide = false
     @AppStorage("vault.hasSeenMoLayerGuide") private var hasSeenMoLayerGuide = false
-    @AppStorage(MediaGridScaleStorage.albumKey) private var albumGridScale = MediaGridScaleStorage.defaultStoredScale
+    @AppStorage(MediaGridScaleStorage.albumColumnsKey) private var albumGridColumnCount = MediaGridLayout.defaultAlbumColumnCount
     @AppStorage(MediaGridScaleStorage.audioKey) private var audioGridScale = MediaGridScaleStorage.defaultStoredScale
     @AppStorage(MediaGridScaleStorage.documentsKey) private var documentGridScale = MediaGridScaleStorage.defaultStoredScale
 
-    private var activeItems: [VaultItem] { items.filter { $0.deletedAt == nil } }
+    private var activeItems: [VaultItem] { nonAlbumItems.filter { $0.deletedAt == nil } }
     private var spaceItems: [VaultItem] {
         activeItems.filter { item in
             isInnerVaultActive ? item.folderId == VaultStore.innerVaultFolderId : item.folderId != VaultStore.innerVaultFolderId
@@ -779,8 +791,10 @@ struct VaultHomeView: View {
         selectedCategory.items(from: spaceItems)
     }
     private var visibleItems: [VaultItem] {
-        guard selectedCategory == .album else { return categoryItems }
-        return albumMediaFilter.items(from: categoryItems)
+        selectedCategory == .album ? albumPaging.items : categoryItems
+    }
+    private var albumFavoriteItemCount: Int {
+        selectedCategory == .album ? libraryCounts.albumFavorites : 0
     }
     private var mediaPreviewRepairCandidates: [VaultItem] {
         guard selectedCategory == .album else { return [] }
@@ -823,7 +837,7 @@ struct VaultHomeView: View {
         return nil
     }
     private var freeImportItemCount: Int {
-        VaultFreeImportPolicy.countedItemCount(in: activeItems)
+        libraryCounts.totalActive
     }
     private var shouldShowFreeImportLimitBanner: Bool {
         !subscription.isPro && freeImportItemCount >= VaultFreeImportPolicy.freeItemLimit
@@ -845,13 +859,26 @@ struct VaultHomeView: View {
         VaultFolderContextStyle(isInnerVaultActive: isInnerVaultActive)
     }
     private var categoryCounts: [VaultCategory: Int] {
-        Dictionary(uniqueKeysWithValues: VaultCategory.homeModes.map { category in
-            (category, category.items(from: spaceItems).count)
-        })
+        [
+            .album: libraryCounts.album,
+            .audio: libraryCounts.audio,
+            .documents: libraryCounts.documents,
+            .links: libraryCounts.links
+        ]
+    }
+    private var albumMediaScope: AlbumMediaScope {
+        AlbumMediaScope(
+            isInnerVaultActive: isInnerVaultActive,
+            filter: albumMediaFilter,
+            favoritesOnly: showsFavoriteAlbumItemsOnly
+        )
+    }
+    private var isAlbumInitialLoading: Bool {
+        selectedCategory == .album && albumPaging.isInitialLoading
     }
     private var detailSheetBinding: Binding<VaultItem?> {
         Binding {
-            usesSplitLayout ? nil : selectedItem
+            PlatformCapabilities.isMacCatalyst || !usesSplitLayout ? selectedItem : nil
         } set: { value in
             selectedItem = value
         }
@@ -859,7 +886,9 @@ struct VaultHomeView: View {
 
     var body: some View {
         Group {
-            if usesSplitLayout {
+            if PlatformCapabilities.isMacCatalyst {
+                desktopHomeContent
+            } else if usesSplitLayout {
                 splitHomeContent
             } else {
                 compactHomeContent
@@ -874,10 +903,11 @@ struct VaultHomeView: View {
         .fullScreenCover(item: $documentDetailItem) { item in
             DocumentDetailPreviewView(item: item, isInnerVaultActive: isInnerVaultActive)
         }
-        .fullScreenCover(item: $previewSelection) { selection in
+        .fullScreenCover(item: $previewSelection, onDismiss: {
+            Task { await refreshAlbumData() }
+        }) { selection in
             VaultMediaPreviewView(
-                items: selection.items,
-                initialItemId: selection.initialItemId,
+                item: selection.item,
                 isInnerVaultActive: isInnerVaultActive
             )
         }
@@ -936,6 +966,10 @@ struct VaultHomeView: View {
             handleQuickAction(quickActions.pendingAction)
             presentMoLayerGuideIfNeeded()
         }
+        .task(id: albumMediaScope) {
+            await albumPaging.loadFirstPage(scope: albumMediaScope, context: modelContext)
+            await refreshLibraryCounts()
+        }
         .onChange(of: quickActions.pendingAction) { _, action in
             handleQuickAction(action)
         }
@@ -948,9 +982,25 @@ struct VaultHomeView: View {
         .onChange(of: selectedCategory) { _, _ in
             clearSelection()
             endLightPeek()
+            showsFavoriteAlbumItemsOnly = false
+        }
+        .onChange(of: albumFavoriteItemCount) { _, count in
+            if count == 0 {
+                showsFavoriteAlbumItemsOnly = false
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
+            vaultStore.clearDecryptedMediaCaches()
             exitInnerVault()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+            vaultStore.clearDecryptedMediaCaches()
+        }
+        .onChange(of: remoteChanges.lastReceivedAt) { _, _ in
+            Task { await refreshAlbumData() }
+        }
+        .onChange(of: vaultStore.cloudIndexRevision) { _, _ in
+            Task { await refreshAlbumData() }
         }
         .alert(item: $importSummary) { summary in
             Alert(
@@ -1008,9 +1058,16 @@ struct VaultHomeView: View {
 
     private var compactHomeContent: some View {
         NavigationStack {
-            ScrollView(.vertical, showsIndicators: true) {
-                scrollContent
+            Group {
+                if selectedCategory == .album {
+                    compactAlbumContent
+                } else {
+                    ScrollView(.vertical, showsIndicators: true) {
+                        scrollContent
+                    }
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(AppGlassBackground().ignoresSafeArea())
             .safeAreaInset(edge: .bottom) {
                 bottomInsetContent
@@ -1029,6 +1086,76 @@ struct VaultHomeView: View {
                 }
             }
         }
+    }
+
+    private var compactAlbumContent: some View {
+        GeometryReader { containerProxy in
+            VStack(alignment: .leading, spacing: 0) {
+                compactAlbumTopBar
+
+                GeometryReader { gridProxy in
+                    ZStack(alignment: .top) {
+                        albumMediaGrid(fillsAvailableSpace: true)
+                            .frame(
+                                width: max(1, gridProxy.size.width - 16),
+                                height: max(1, gridProxy.size.height)
+                            )
+
+                        if isAlbumInitialLoading {
+                            ProgressView()
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                .allowsHitTesting(false)
+                        } else if visibleItems.isEmpty {
+                            EmptyCategoryState(category: selectedCategory)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                .padding(.vertical, 48)
+                                .allowsHitTesting(false)
+                        }
+                    }
+                    .frame(
+                        width: gridProxy.size.width,
+                        height: gridProxy.size.height,
+                        alignment: .top
+                    )
+                }
+            }
+            .frame(
+                width: containerProxy.size.width,
+                height: containerProxy.size.height,
+                alignment: .topLeading
+            )
+        }
+    }
+
+    private var compactAlbumTopBar: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VaultHomeHeader(
+                selectedCategory: $selectedCategory,
+                isInnerVaultActive: isInnerVaultActive,
+                profileAction: { showProfileCenter = true },
+                importAction: openImportHub,
+                toggleInnerVaultAction: toggleInnerVault,
+                onTouchZoneFrameChange: { frame in
+                    moLayerTouchZoneFrame = frame
+                }
+            )
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+            .padding(.bottom, 8)
+
+            if shouldShowFreeImportLimitBanner {
+                FreeImportLimitBanner()
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 8)
+            }
+
+            if let progress = importQueue.progress {
+                VaultImportProgressBanner(progress: progress)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 8)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
     private var splitHomeContent: some View {
@@ -1070,6 +1197,33 @@ struct VaultHomeView: View {
         .background(AppGlassBackground().ignoresSafeArea())
     }
 
+    private var desktopHomeContent: some View {
+        NavigationSplitView(columnVisibility: $splitVisibility) {
+            VaultSidebarView(
+                selectedCategory: $selectedCategory,
+                isInnerVaultActive: isInnerVaultActive,
+                categoryCounts: categoryCounts,
+                toggleInnerVaultAction: toggleInnerVault,
+                importAction: openImportHub,
+                profileAction: { showProfileCenter = true }
+            )
+        } detail: {
+            ScrollView(.vertical, showsIndicators: true) {
+                splitContent
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(AppGlassBackground().ignoresSafeArea())
+            .safeAreaInset(edge: .bottom) {
+                bottomInsetContent
+            }
+            .navigationTitle(selectedCategory.title)
+            .toolbar {
+                desktopToolbar
+            }
+        }
+        .background(AppGlassBackground().ignoresSafeArea())
+    }
+
     private var scrollContent: some View {
         VStack(alignment: .leading, spacing: 18) {
             VaultHomeHeader(
@@ -1094,7 +1248,12 @@ struct VaultHomeView: View {
             ZStack(alignment: .top) {
                 categoryContent
 
-                if visibleItems.isEmpty {
+                if isAlbumInitialLoading {
+                    ProgressView()
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 48)
+                        .allowsHitTesting(false)
+                } else if visibleItems.isEmpty {
                     EmptyCategoryState(category: selectedCategory)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 48)
@@ -1102,7 +1261,6 @@ struct VaultHomeView: View {
                 }
             }
 
-            VaultCategorySummaryFooter(category: selectedCategory, count: visibleItems.count)
         }
         .padding()
     }
@@ -1120,7 +1278,12 @@ struct VaultHomeView: View {
             ZStack(alignment: .top) {
                 splitCategoryContent
 
-                if visibleItems.isEmpty {
+                if isAlbumInitialLoading {
+                    ProgressView()
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 64)
+                        .allowsHitTesting(false)
+                } else if visibleItems.isEmpty {
                     EmptyCategoryState(category: selectedCategory)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 64)
@@ -1128,7 +1291,6 @@ struct VaultHomeView: View {
                 }
             }
 
-            VaultCategorySummaryFooter(category: selectedCategory, count: visibleItems.count)
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 16)
@@ -1145,9 +1307,27 @@ struct VaultHomeView: View {
                 selectedItemIds: selectedItemIds,
                 enterSelectionAction: enterSelectionMode,
                 toggleSelectionAction: toggleSelection,
-                openAudio: { desktopDetailItem = $0 },
-                openDocument: { desktopDetailItem = $0 },
-                openDetails: { desktopDetailItem = $0 },
+                openAudio: { item in
+                    if PlatformCapabilities.isMacCatalyst {
+                        audioDetailItem = item
+                    } else {
+                        desktopDetailItem = item
+                    }
+                },
+                openDocument: { item in
+                    if PlatformCapabilities.isMacCatalyst {
+                        documentDetailItem = item
+                    } else {
+                        desktopDetailItem = item
+                    }
+                },
+                openDetails: { item in
+                    if PlatformCapabilities.isMacCatalyst {
+                        selectedItem = item
+                    } else {
+                        desktopDetailItem = item
+                    }
+                },
                 deleteItem: { item in
                     Task { await delete(item) }
                 }
@@ -1203,6 +1383,82 @@ struct VaultHomeView: View {
         }
     }
 
+    @ToolbarContentBuilder
+    private var desktopToolbar: some ToolbarContent {
+        ToolbarItemGroup(placement: .topBarTrailing) {
+            Button {
+                toggleInnerVault()
+            } label: {
+                Image(systemName: isInnerVaultActive ? "arrow.uturn.left" : "lock.fill")
+            }
+            .accessibilityLabel(isInnerVaultActive ? L.string("Restore") : L.string("Mo Layer"))
+
+            Button {
+                Task { await refreshVaultFromCloud() }
+            } label: {
+                Image(systemName: "arrow.clockwise")
+            }
+            .accessibilityLabel(L.string("Refresh"))
+            .keyboardShortcut("r", modifiers: .command)
+
+            Button(action: openImportHub) {
+                Image(systemName: folderContextStyle.importSystemImage)
+            }
+            .accessibilityLabel(L.string("Import"))
+            .keyboardShortcut("i", modifiers: .command)
+
+            if selectedCategory == .album {
+                Menu {
+                    ForEach(AlbumMediaKindFilter.allCases) { filter in
+                        Button {
+                            selectAlbumMediaFilter(filter)
+                        } label: {
+                            Label(filter.title, systemImage: filter == albumMediaFilter ? "checkmark" : filter.systemImage)
+                        }
+                    }
+                } label: {
+                    Image(systemName: albumMediaFilter.systemImage)
+                }
+                .accessibilityLabel(L.string("Filter"))
+                .accessibilityValue(albumMediaFilter.title)
+            }
+
+            if subscription.canImportAndSync, !selectableVisibleItems.isEmpty {
+                Button(action: selectAllVisibleItems) {
+                    Image(systemName: "checkmark.circle")
+                }
+                .accessibilityLabel(L.string("Select All"))
+                .keyboardShortcut("a", modifiers: .command)
+            }
+
+            if selectedCategory == .album {
+                Button {
+                    adjustAlbumGridColumnCount(zoomingIn: false)
+                } label: {
+                    Image(systemName: "minus.magnifyingglass")
+                }
+                .accessibilityLabel(L.string("Zoom Out"))
+
+                Button {
+                    adjustAlbumGridColumnCount(zoomingIn: true)
+                } label: {
+                    Image(systemName: "plus.magnifyingglass")
+                }
+                .accessibilityLabel(L.string("Zoom In"))
+            }
+
+            if folderContextStyle.showsProfileAction {
+                Button {
+                    showProfileCenter = true
+                } label: {
+                    Image(systemName: folderContextStyle.profileSystemImage)
+                }
+                .accessibilityLabel(L.string("Profile"))
+                .keyboardShortcut(",", modifiers: .command)
+            }
+        }
+    }
+
     @ViewBuilder
     private var categoryContent: some View {
         if selectedCategory.usesListLayout {
@@ -1229,29 +1485,7 @@ struct VaultHomeView: View {
     @ViewBuilder
     private var mediaGridContent: some View {
         if selectedCategory == .album {
-            AlbumZoomableMediaGrid(
-                items: visibleItems,
-                scale: mediaGridScaleBinding,
-                contentHeight: $albumGridContentHeight,
-                isSelectionMode: selectionMode,
-                selectedItemIds: selectedItemIds,
-                cachedThumbnailProvider: { vaultStore.cachedThumbnail(for: $0) },
-                videoDurationProvider: { vaultStore.metadata(for: $0)?.mediaDurationSeconds },
-                thumbnailProvider: { await vaultStore.loadThumbnail(for: $0) },
-                visibleItemIDsDidChange: { itemIDs in
-                    if visibleAlbumItemIDs != itemIDs {
-                        visibleAlbumItemIDs = itemIDs
-                    }
-                },
-                openAction: { open($0, in: visibleItems) },
-                toggleSelectionAction: toggleSelection,
-                enterSelectionAction: enterSelectionMode
-            )
-            .frame(maxWidth: .infinity, minHeight: 1)
-            .frame(height: albumGridContentHeight)
-            .task(id: mediaPreviewRepairKey) {
-                await repairVisibleMediaPreviewsIfNeeded()
-            }
+            albumMediaGrid(fillsAvailableSpace: false)
         } else {
             ZoomableMediaGrid(
                 items: visibleItems,
@@ -1271,6 +1505,41 @@ struct VaultHomeView: View {
                         endSweepSelection()
                     }
             )
+        }
+    }
+
+    @ViewBuilder
+    private func albumMediaGrid(fillsAvailableSpace: Bool) -> some View {
+        let grid = AlbumZoomableMediaGrid(
+            items: visibleItems,
+            columnCount: $albumGridColumnCount,
+            contentHeight: $albumGridContentHeight,
+            isSelectionMode: selectionMode,
+            selectedItemIds: selectedItemIds,
+            cachedThumbnailProvider: { vaultStore.cachedThumbnail(for: $0) },
+            videoDurationProvider: { vaultStore.metadata(for: $0)?.mediaDurationSeconds },
+            thumbnailProvider: { await vaultStore.loadThumbnail(for: $0) },
+            visibleItemIDsDidChange: { itemIDs in
+                if visibleAlbumItemIDs != itemIDs {
+                    visibleAlbumItemIDs = itemIDs
+                }
+            },
+            loadMoreAction: {
+                Task { await albumPaging.loadNextPageIfNeeded(context: modelContext) }
+            },
+            openAction: { open($0, in: visibleItems) },
+            toggleSelectionAction: toggleSelection,
+            enterSelectionAction: enterSelectionMode
+        )
+        .frame(maxWidth: .infinity, minHeight: 1)
+        .task(id: mediaPreviewRepairKey) {
+            await repairVisibleMediaPreviewsIfNeeded()
+        }
+
+        if fillsAvailableSpace {
+            grid.frame(maxHeight: .infinity)
+        } else {
+            grid.frame(height: albumGridContentHeight)
         }
     }
 
@@ -1307,12 +1576,12 @@ struct VaultHomeView: View {
 
     @ViewBuilder
     private var albumFilterButton: some View {
-        if selectedCategory == .album {
+        if selectedCategory == .album && !PlatformCapabilities.isMacCatalyst {
             let contextStyle = folderContextStyle
             VStack(alignment: .trailing, spacing: 10) {
                 if isAlbumFilterPickerPresented {
                     HStack(spacing: 8) {
-                        ForEach(AlbumMediaFilter.allCases) { filter in
+                        ForEach(AlbumMediaKindFilter.allCases) { filter in
                             Button {
                                 selectAlbumMediaFilter(filter)
                             } label: {
@@ -1337,6 +1606,24 @@ struct VaultHomeView: View {
                     .transition(.opacity.combined(with: .scale(scale: 0.94, anchor: .bottomTrailing)))
                 }
 
+                if albumFavoriteItemCount > 0 {
+                    Button {
+                        toggleFavoriteAlbumFilter()
+                    } label: {
+                        Image(systemName: showsFavoriteAlbumItemsOnly ? "heart.fill" : "heart")
+                            .font(.headline.weight(.semibold))
+                            .foregroundStyle(contextStyle.actionForeground)
+                            .frame(width: 48, height: 48)
+                            .background(contextStyle.actionBackground)
+                            .clipShape(Circle())
+                            .contentShape(Circle())
+                            .shadow(color: contextStyle.actionForeground.opacity(0.22), radius: 10, y: 5)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(showsFavoriteAlbumItemsOnly ? L.string("Show All Media") : L.string("Show Favorites"))
+                    .accessibilityValue(L.format("%d favorites", albumFavoriteItemCount))
+                }
+
                 Button {
                     withAnimation(.snappy(duration: 0.16)) {
                         isAlbumFilterPickerPresented.toggle()
@@ -1359,7 +1646,20 @@ struct VaultHomeView: View {
         }
     }
 
-    private func selectAlbumMediaFilter(_ filter: AlbumMediaFilter) {
+    private func toggleFavoriteAlbumFilter() {
+        if selectionMode || !selectedItemIds.isEmpty {
+            clearSelection()
+        }
+        if peekItem != nil || peekTouchItemId != nil {
+            endLightPeek()
+        }
+        withAnimation(.snappy(duration: 0.16)) {
+            showsFavoriteAlbumItemsOnly.toggle()
+            isAlbumFilterPickerPresented = false
+        }
+    }
+
+    private func selectAlbumMediaFilter(_ filter: AlbumMediaKindFilter) {
         if albumMediaFilter != filter {
             if selectionMode || !selectedItemIds.isEmpty {
                 clearSelection()
@@ -1490,6 +1790,7 @@ struct VaultHomeView: View {
             }
         }
         importSummary = summary
+        Task { await refreshAlbumData() }
     }
 
     private func presentMoLayerGuideIfNeeded() {
@@ -1526,18 +1827,17 @@ struct VaultHomeView: View {
         }
 
         let requestedAt = CFAbsoluteTimeGetCurrent()
-        let targetCount = activeItems.reduce(0) { count, item in
-            count + (item.folderId == VaultStore.innerVaultFolderId ? 1 : 0)
-        }
-        vaultHomePerformanceLogger.info("Mo Layer enter requested activeItems=\(self.activeItems.count, privacy: .public) currentVisible=\(self.visibleItems.count, privacy: .public) targetSpaceItems=\(targetCount, privacy: .public)")
+        let targetCount = libraryCounts.innerSpace
+        vaultHomePerformanceLogger.info("Mo Layer enter requested activeItems=\(self.libraryCounts.regularSpace + self.libraryCounts.innerSpace, privacy: .public) currentVisible=\(self.visibleItems.count, privacy: .public) targetSpaceItems=\(targetCount, privacy: .public)")
         Task { @MainActor in
             let folderStartedAt = CFAbsoluteTimeGetCurrent()
             guard await vaultStore.ensureInnerVaultFolder(context: modelContext, sync: sync) != nil else { return }
             let folderMs = (CFAbsoluteTimeGetCurrent() - folderStartedAt) * 1000
             withAnimation(.snappy) {
-                clearSelection()
-                endLightPeek()
-                isInnerVaultActive = true
+            clearSelection()
+            endLightPeek()
+            showsFavoriteAlbumItemsOnly = false
+            isInnerVaultActive = true
             }
             let elapsedMs = (CFAbsoluteTimeGetCurrent() - requestedAt) * 1000
             vaultHomePerformanceLogger.info("Mo Layer enter committed targetSpaceItems=\(targetCount, privacy: .public) ensureFolderMs=\(String(format: "%.1f", folderMs), privacy: .public) elapsedMs=\(String(format: "%.1f", elapsedMs), privacy: .public)")
@@ -1555,13 +1855,12 @@ struct VaultHomeView: View {
     private func exitInnerVault() {
         guard isInnerVaultActive else { return }
         let startedAt = CFAbsoluteTimeGetCurrent()
-        let targetCount = activeItems.reduce(0) { count, item in
-            count + (item.folderId != VaultStore.innerVaultFolderId ? 1 : 0)
-        }
-        vaultHomePerformanceLogger.info("Mo Layer exit requested activeItems=\(self.activeItems.count, privacy: .public) currentVisible=\(self.visibleItems.count, privacy: .public) targetSpaceItems=\(targetCount, privacy: .public)")
+        let targetCount = libraryCounts.regularSpace
+        vaultHomePerformanceLogger.info("Mo Layer exit requested activeItems=\(self.libraryCounts.regularSpace + self.libraryCounts.innerSpace, privacy: .public) currentVisible=\(self.visibleItems.count, privacy: .public) targetSpaceItems=\(targetCount, privacy: .public)")
         withAnimation(.snappy) {
             clearSelection()
             endLightPeek()
+            showsFavoriteAlbumItemsOnly = false
             isInnerVaultActive = false
         }
         let elapsedMs = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
@@ -1595,33 +1894,30 @@ struct VaultHomeView: View {
     }
 
     private func open(_ item: VaultItem, in collection: [VaultItem]) {
-        if usesSplitLayout {
-            desktopDetailItem = item
+        guard item.kind.isPreviewableContent else {
+            if usesSplitLayout && !PlatformCapabilities.isMacCatalyst {
+                desktopDetailItem = item
+            } else {
+                selectedItem = item
+            }
             return
         }
 
-        guard item.kind.isPreviewableContent else {
-            selectedItem = item
-            return
-        }
         openPreview(item, in: collection)
     }
 
     private func openPreview(_ item: VaultItem, in collection: [VaultItem]) {
         guard item.kind.isPreviewableContent else { return }
-        if usesSplitLayout {
+        if usesSplitLayout && !PlatformCapabilities.isMacCatalyst {
             desktopDetailItem = item
             return
         }
 
-        previewSelection = MediaPreviewSelection(
-            items: collection.filter { $0.kind.isPreviewableContent },
-            initialItemId: item.id
-        )
+        previewSelection = MediaPreviewSelection(item: item)
     }
 
     private func openDetails(_ item: VaultItem) {
-        if usesSplitLayout {
+        if usesSplitLayout && !PlatformCapabilities.isMacCatalyst {
             desktopDetailItem = item
         } else {
             selectedItem = item
@@ -1773,6 +2069,7 @@ struct VaultHomeView: View {
             allowsCloudWrite: subscription.canImportAndSync,
             downloadsOriginals: VaultCloudToLocalSyncPolicy.manualRefreshDownloadsOriginals
         )
+        await refreshAlbumData()
     }
 
     @MainActor
@@ -1782,6 +2079,7 @@ struct VaultHomeView: View {
             return
         }
         await vaultStore.deleteImmediately(item, context: modelContext, sync: sync)
+        await refreshAlbumData()
     }
 
     @MainActor
@@ -1882,6 +2180,7 @@ struct VaultHomeView: View {
         await vaultStore.deleteImmediately(selectedItems, context: modelContext, sync: sync)
         isDeletingSelection = false
         clearSelection()
+        await refreshAlbumData()
     }
 
     @MainActor
@@ -1902,6 +2201,7 @@ struct VaultHomeView: View {
             }
         }
         clearSelection()
+        await refreshAlbumData()
     }
 
     @MainActor
@@ -1918,6 +2218,7 @@ struct VaultHomeView: View {
                 desktopDetailItem = nil
             }
         }
+        await refreshAlbumData()
     }
 
     private var mediaGridScaleBinding: Binding<CGFloat> {
@@ -1931,7 +2232,7 @@ struct VaultHomeView: View {
     private func storedScale(for category: VaultCategory) -> Double {
         switch category {
         case .album:
-            albumGridScale
+            MediaGridScaleStorage.defaultStoredScale
         case .audio:
             audioGridScale
         case .documents, .links:
@@ -1942,12 +2243,37 @@ struct VaultHomeView: View {
     private func setStoredScale(_ scale: Double, for category: VaultCategory) {
         switch category {
         case .album:
-            albumGridScale = scale
+            break
         case .audio:
             audioGridScale = scale
         case .documents, .links:
             documentGridScale = scale
         }
+    }
+
+    private func adjustAlbumGridColumnCount(zoomingIn: Bool) {
+        guard selectedCategory == .album else { return }
+        let approved = MediaGridLayout.albumColumnCounts
+        let current = MediaGridLayout.clampedAlbumColumnCount(albumGridColumnCount)
+        guard let index = approved.firstIndex(of: current) else { return }
+        let nextIndex = zoomingIn ? max(index - 1, 0) : min(index + 1, approved.count - 1)
+        withAnimation(MediaGridLayout.settledZoomAnimation) {
+            albumGridColumnCount = approved[nextIndex]
+        }
+    }
+
+    @MainActor
+    private func refreshAlbumData() async {
+        await albumPaging.refreshPreservingLoadedRange(context: modelContext)
+        await refreshLibraryCounts()
+    }
+
+    @MainActor
+    private func refreshLibraryCounts() async {
+        libraryCounts = (try? AlbumLibraryCountQuery.fetch(
+            context: modelContext,
+            isInnerVaultActive: isInnerVaultActive
+        )) ?? .empty
     }
 }
 
@@ -2740,13 +3066,7 @@ enum VaultCategory: String, CaseIterable, Identifiable {
     }
 }
 
-private enum AlbumMediaFilter: String, CaseIterable, Identifiable {
-    case all
-    case photos
-    case videos
-
-    var id: String { rawValue }
-
+private extension AlbumMediaKindFilter {
     var title: String {
         switch self {
         case .all: L.string("All")
@@ -2763,32 +3083,6 @@ private enum AlbumMediaFilter: String, CaseIterable, Identifiable {
         }
     }
 
-    func items(from items: [VaultItem]) -> [VaultItem] {
-        switch self {
-        case .all:
-            return items
-        case .photos:
-            return items.filter { $0.kind == .image || $0.kind == .livePhoto }
-        case .videos:
-            return items.filter { $0.kind == .video }
-        }
-    }
-}
-
-private struct VaultCategorySummaryFooter: View {
-    let category: VaultCategory
-    let count: Int
-
-    var body: some View {
-        Text(category.summaryText(count: count))
-            .font(.caption2)
-            .foregroundStyle(AppTheme.secondaryText.opacity(0.68))
-            .lineLimit(1)
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal, 16)
-            .padding(.top, 6)
-            .padding(.bottom, 8)
-    }
 }
 
 struct VaultCategoryDetailView: View {
@@ -2837,7 +3131,6 @@ struct VaultCategoryDetailView: View {
         }
         .background(AppTheme.background)
         .safeAreaInset(edge: .bottom) {
-            VaultCategorySummaryFooter(category: category, count: items.count)
         }
         .navigationTitle(category.title)
         .navigationBarTitleDisplayMode(.large)
@@ -2864,8 +3157,7 @@ struct VaultCategoryDetailView: View {
         }
         .fullScreenCover(item: $previewSelection) { selection in
             VaultMediaPreviewView(
-                items: selection.items,
-                initialItemId: selection.initialItemId,
+                item: selection.item,
                 isInnerVaultActive: false
             )
         }
@@ -2881,10 +3173,7 @@ struct VaultCategoryDetailView: View {
 
     private func openPreview(_ item: VaultItem) {
         guard item.kind.isPreviewableContent else { return }
-        previewSelection = MediaPreviewSelection(
-            items: items.filter { $0.kind.isPreviewableContent },
-            initialItemId: item.id
-        )
+        previewSelection = MediaPreviewSelection(item: item)
     }
 
     private func openLongPressPreview(_ item: VaultItem) {
@@ -3499,8 +3788,8 @@ private struct DocumentListRow: View {
         vaultStore.metadata(for: item)
     }
 
-    private var descriptor: FileFormatDescriptor {
-        FileFormatDescriptor(metadata: metadata, kind: item.kind)
+    private var descriptor: VaultFileDisplayDescriptor {
+        VaultFileDisplayDescriptor(metadata: metadata, kind: item.kind)
     }
 
     var body: some View {
@@ -3673,13 +3962,20 @@ private struct RenameVaultItemSheet: View {
     }
 }
 
-private struct FileFormatDescriptor {
+struct VaultFileDisplayDescriptor {
     let icon: String
     let label: String
     let tint: Color
 
     init(metadata: VaultMetadata?, kind: VaultItemKind) {
-        let ext = metadata?.originalExtension?.lowercased() ?? ""
+        let metadataExtension = metadata?.originalExtension?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() ?? ""
+        let nameExtension = ((metadata?.originalName ?? "") as NSString)
+            .pathExtension
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let ext = metadataExtension.isEmpty ? nameExtension : metadataExtension
         let mime = metadata?.mimeType.lowercased() ?? ""
         let type = UTType(filenameExtension: ext)
 
@@ -3910,11 +4206,11 @@ struct VaultItemTile: View {
                         .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
                 } else {
                     VStack(spacing: min(max(tileSize * 0.055, 3), 8)) {
-                        Image(systemName: icon)
+                        Image(systemName: descriptor.icon)
                             .font(.system(size: min(max(tileSize * 0.22, 14), 28), weight: .semibold))
-                            .foregroundStyle(AppTheme.primary)
+                            .foregroundStyle(descriptor.tint)
                         if tileSize >= 72 {
-                            Text(item.kind.rawValue.uppercased())
+                            Text(descriptor.label)
                                 .font(.caption2)
                                 .foregroundStyle(AppTheme.secondaryText)
                                 .lineLimit(1)
@@ -3927,8 +4223,8 @@ struct VaultItemTile: View {
 
                 VStack {
                     HStack {
-                        if !item.kind.isVisualMedia, let badge = item.kind.previewBadgeSystemImage {
-                            Image(systemName: badge)
+                        if !item.kind.isVisualMedia {
+                            Image(systemName: descriptor.icon)
                                 .font(.system(size: badgeSize * 0.52, weight: .bold))
                                 .foregroundStyle(.white)
                                 .frame(width: badgeSize, height: badgeSize)
@@ -3950,19 +4246,9 @@ struct VaultItemTile: View {
         .clipped()
     }
 
-    private var icon: String {
-        switch item.kind {
-        case .image: "photo"
-        case .livePhoto: "livephoto"
-        case .video: "video"
-        case .audio: "waveform"
-        case .document: "doc"
-        case .archive: "archivebox"
-        case .link: "link"
-        case .other: "doc"
-        }
+    private var descriptor: VaultFileDisplayDescriptor {
+        VaultFileDisplayDescriptor(metadata: vaultStore.metadata(for: item), kind: item.kind)
     }
-
 }
 
 private struct MediaThumbnailOverlay: View {
@@ -4121,8 +4407,7 @@ private func makeLivePhoto(
 
 struct MediaPreviewSelection: Identifiable {
     let id = UUID()
-    let items: [VaultItem]
-    let initialItemId: String
+    let item: VaultItem
 }
 
 struct VaultMediaPreviewView: View {
@@ -4131,12 +4416,8 @@ struct VaultMediaPreviewView: View {
     @EnvironmentObject private var vaultStore: VaultStore
     @EnvironmentObject private var sync: CloudKitSyncService
     @EnvironmentObject private var subscription: SubscriptionManager
-    let items: [VaultItem]
-    let initialItemId: String
+    let item: VaultItem
     let isInnerVaultActive: Bool
-    @State private var selectedId: String
-    @State private var scrollPosition: String?
-    @State private var previewItems: [VaultItem]
     @State private var sharePayload: SharePayload?
     @State private var detailItem: VaultItem?
     @State private var isPreparingShare = false
@@ -4145,54 +4426,17 @@ struct VaultMediaPreviewView: View {
     @State private var isDeletingSelectedItem = false
     @State private var photoSaveAlert: PhotoSaveAlert?
     @State private var originalScreenBrightness: CGFloat?
-    @State private var livePhotoPlaybackTriggers: [String: Int] = [:]
-
-    init(items: [VaultItem], initialItemId: String, isInnerVaultActive: Bool) {
-        self.items = items
-        self.initialItemId = initialItemId
-        self.isInnerVaultActive = isInnerVaultActive
-        _selectedId = State(initialValue: initialItemId)
-        _scrollPosition = State(initialValue: initialItemId)
-        _previewItems = State(initialValue: items)
-    }
+    @State private var livePhotoPlaybackTrigger = 0
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            GeometryReader { proxy in
-                ScrollView(.horizontal) {
-                    LazyHStack(spacing: 0) {
-                        ForEach(Array(previewItems.enumerated()), id: \.element.id) { index, item in
-                            FullscreenMediaPage(
-                                item: item,
-                                loadMode: FullscreenMediaLoadingPolicy.loadMode(
-                                    itemIndex: index,
-                                    selectedIndex: selectedIndex,
-                                    itemKind: item.kind
-                                ),
-                                livePhotoPlaybackTrigger: livePhotoPlaybackTriggers[item.id, default: 0]
-                            )
-                            .frame(width: proxy.size.width, height: proxy.size.height)
-                            .id(item.id)
-                        }
-                    }
-                    .scrollTargetLayout()
-                }
-                .scrollIndicators(.hidden)
-                .scrollTargetBehavior(.paging)
-                .scrollPosition(id: $scrollPosition)
-                .onChange(of: scrollPosition) { _, newValue in
-                    guard let newValue,
-                          previewItems.contains(where: { $0.id == newValue }) else { return }
-                    selectedId = newValue
-                }
-                .onChange(of: selectedId) { _, newValue in
-                    if scrollPosition != newValue {
-                        scrollPosition = newValue
-                    }
-                }
-            }
+            FullscreenMediaPage(
+                item: item,
+                loadMode: .original,
+                livePhotoPlaybackTrigger: livePhotoPlaybackTrigger
+            )
             .ignoresSafeArea()
 
             VStack(spacing: 0) {
@@ -4210,9 +4454,21 @@ struct VaultMediaPreviewView: View {
 
                     Spacer()
 
+                    Button {
+                        Task { await toggleFavorite(item) }
+                    } label: {
+                        Image(systemName: item.isFavorite ? "heart.fill" : "heart")
+                            .font(.headline.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 38, height: 38)
+                            .background(.black.opacity(0.35))
+                            .clipShape(Circle())
+                    }
+                    .accessibilityLabel(item.isFavorite ? L.string("Unfavorite") : L.string("Favorite"))
+
                     Menu {
                         Button {
-                            detailItem = selectedItem
+                            detailItem = item
                         } label: {
                             Label(L.string("Details"), systemImage: "info.circle")
                         }
@@ -4267,7 +4523,7 @@ struct VaultMediaPreviewView: View {
                 Spacer()
             }
 
-            if selectedItem?.kind == .livePhoto {
+            if item.kind == .livePhoto {
                 livePhotoPlaybackButton
                     .padding(.trailing, 18)
                     .padding(.bottom, 36)
@@ -4293,9 +4549,6 @@ struct VaultMediaPreviewView: View {
             }
             MediaPreviewAudioSession.activateForPlayback()
         }
-        .onChange(of: selectedId) { _, newValue in
-            livePhotoPlaybackTriggers[newValue] = 0
-        }
         .onDisappear {
             if let originalScreenBrightness {
                 UIScreen.main.brightness = originalScreenBrightness
@@ -4304,21 +4557,13 @@ struct VaultMediaPreviewView: View {
         }
     }
 
-    private var selectedItem: VaultItem? {
-        previewItems.first { $0.id == selectedId }
-    }
-
-    private var selectedIndex: Int? {
-        previewItems.firstIndex { $0.id == selectedId }
-    }
-
     private var canSaveSelectedItemToPhotos: Bool {
-        selectedItem.map { PhotoLibraryExportService.canSaveToPhotoLibrary(kind: $0.kind) } ?? false
+        PhotoLibraryExportService.canSaveToPhotoLibrary(kind: item.kind)
     }
 
     private var livePhotoPlaybackButton: some View {
         Button {
-            livePhotoPlaybackTriggers[selectedId, default: 0] += 1
+            livePhotoPlaybackTrigger += 1
         } label: {
             Image(systemName: "livephoto.play")
                 .font(.title3.weight(.semibold))
@@ -4331,21 +4576,26 @@ struct VaultMediaPreviewView: View {
     }
 
     @MainActor
+    private func toggleFavorite(_ item: VaultItem) async {
+        await vaultStore.toggleFavorite(item, context: modelContext, sync: sync)
+    }
+
+    @MainActor
     private func exportSelectedItem() async {
-        guard let selectedItem, !isPreparingShare else { return }
+        guard !isPreparingShare else { return }
         isPreparingShare = true
         defer { isPreparingShare = false }
-        let urls = await vaultStore.decryptedTemporaryURLs(for: [selectedItem], context: modelContext, sync: sync)
+        let urls = await vaultStore.decryptedTemporaryURLs(for: [item], context: modelContext, sync: sync)
         guard !urls.isEmpty else { return }
         sharePayload = SharePayload(items: urls)
     }
 
     @MainActor
     private func saveSelectedItemToPhotos() async {
-        guard let selectedItem, !isSavingToPhotos else { return }
+        guard !isSavingToPhotos else { return }
         isSavingToPhotos = true
         let result = await PhotoLibraryExportService.save(
-            item: selectedItem,
+            item: item,
             vaultStore: vaultStore,
             context: modelContext,
             sync: sync
@@ -4357,43 +4607,21 @@ struct VaultMediaPreviewView: View {
     @MainActor
     private func deleteSelectedItem() async {
         guard subscription.canImportAndSync, !isDeletingSelectedItem else { return }
-        guard let selectedItem else { return }
         isDeletingSelectedItem = true
         defer { isDeletingSelectedItem = false }
-
-        let nextSelection = previewItems.first { $0.id != selectedItem.id }?.id
-        await vaultStore.deleteImmediately(selectedItem, context: modelContext, sync: sync)
-        if let nextSelection {
-            selectedId = nextSelection
-            scrollPosition = nextSelection
-            await Task.yield()
-            previewItems.removeAll { $0.id == selectedItem.id }
-        } else {
-            dismiss()
-            previewItems.removeAll { $0.id == selectedItem.id }
-        }
+        await vaultStore.deleteImmediately(item, context: modelContext, sync: sync)
+        dismiss()
     }
 
     @MainActor
     private func moveSelectedItemToMoLayer() async {
         guard subscription.canImportAndSync, !isInnerVaultActive, !isMovingToMoLayer else { return }
-        guard let selectedItem else { return }
         isMovingToMoLayer = true
         defer { isMovingToMoLayer = false }
-
-        let nextSelection = previewItems.first { $0.id != selectedItem.id }?.id
-        let didMove = await vaultStore.moveToInnerVault([selectedItem], context: modelContext, sync: sync)
+        let didMove = await vaultStore.moveToInnerVault([item], context: modelContext, sync: sync)
         guard didMove else { return }
         VaultHaptics.moLayerTransferSucceeded()
-        if let nextSelection {
-            selectedId = nextSelection
-            scrollPosition = nextSelection
-            await Task.yield()
-            previewItems.removeAll { $0.id == selectedItem.id }
-        } else {
-            dismiss()
-            previewItems.removeAll { $0.id == selectedItem.id }
-        }
+        dismiss()
     }
 }
 
@@ -4420,6 +4648,19 @@ private struct MediaPreviewDetailSheet: View {
                     detailRow(L.string("MIME Type"), metadata?.mimeType)
                     detailRow(L.string("Extension"), metadata?.originalExtension?.isEmpty == false ? metadata?.originalExtension : nil)
                     detailRow(L.string("Source"), metadata?.source)
+                }
+
+                Section {
+                    Button {
+                        Task {
+                            await vaultStore.toggleFavorite(item, context: modelContext, sync: sync)
+                        }
+                    } label: {
+                        Label(
+                            item.isFavorite ? L.string("Unfavorite") : L.string("Favorite"),
+                            systemImage: item.isFavorite ? "heart.fill" : "heart"
+                        )
+                    }
                 }
 
                 Section(L.string("Dates")) {
@@ -4500,7 +4741,16 @@ private struct MediaPreviewDetailSheet: View {
             .navigationTitle(L.string("Details"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button {
+                        Task {
+                            await vaultStore.toggleFavorite(item, context: modelContext, sync: sync)
+                        }
+                    } label: {
+                        Image(systemName: item.isFavorite ? "heart.fill" : "heart")
+                    }
+                    .accessibilityLabel(item.isFavorite ? L.string("Unfavorite") : L.string("Favorite"))
+
                     Button(L.string("Done")) {
                         dismiss()
                     }
@@ -4786,7 +5036,7 @@ private struct AudioDetailPlayerView: View {
     }
 }
 
-private struct DocumentDetailPreviewView: View {
+struct DocumentDetailPreviewView: View {
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "app.landlady.www.privacy", category: "DocumentDetail")
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
@@ -5010,11 +5260,11 @@ private enum MediaPreviewAudioSession {
     static func makePlayer(for url: URL, kind: VaultItemKind) -> AVPlayer {
         let item = AVPlayerItem(url: url)
         if kind == .video {
-            item.preferredForwardBufferDuration = 5
+            item.preferredForwardBufferDuration = url.isFileURL ? 0 : 5
             item.canUseNetworkResourcesForLiveStreamingWhilePaused = false
         }
         let player = AVPlayer(playerItem: item)
-        player.automaticallyWaitsToMinimizeStalling = true
+        player.automaticallyWaitsToMinimizeStalling = !url.isFileURL
         configure(player)
         return player
     }
@@ -5065,6 +5315,15 @@ enum FullscreenMediaLoadingPolicy {
 enum FullscreenMediaStagingPolicy {
     nonisolated static func shouldShowThumbnailBeforeOriginal(kind: VaultItemKind) -> Bool {
         !kind.isStillImageMedia
+    }
+}
+
+enum FullscreenImageDecodePolicy {
+    nonisolated static let absoluteMaximumPixelSize: CGFloat = 4096
+
+    nonisolated static func maximumPixelSize(screenSize: CGSize, screenScale: CGFloat) -> CGFloat {
+        let longestDisplayEdge = max(screenSize.width, screenSize.height) * max(screenScale, 1)
+        return min(max(longestDisplayEdge * 2, 1), absoluteMaximumPixelSize)
     }
 }
 
@@ -5201,12 +5460,22 @@ private struct FullscreenMediaPage: View {
     }
 
     private static func decodedImage(at url: URL) async -> UIImage? {
-        await withCheckedContinuation { continuation in
+        let maximumPixelSize = FullscreenImageDecodePolicy.maximumPixelSize(
+            screenSize: UIScreen.main.bounds.size,
+            screenScale: UIScreen.main.scale
+        )
+        return await withCheckedContinuation { (continuation: CheckedContinuation<UIImage?, Never>) in
             DispatchQueue.global(qos: .userInitiated).async {
                 autoreleasepool {
-                    let options = [kCGImageSourceShouldCacheImmediately: true] as CFDictionary
-                    guard let source = CGImageSourceCreateWithURL(url as CFURL, options),
-                          let cgImage = CGImageSourceCreateImageAtIndex(source, 0, options) else {
+                    let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+                    let decodeOptions = [
+                        kCGImageSourceCreateThumbnailFromImageAlways: true,
+                        kCGImageSourceCreateThumbnailWithTransform: true,
+                        kCGImageSourceShouldCacheImmediately: true,
+                        kCGImageSourceThumbnailMaxPixelSize: Int(maximumPixelSize)
+                    ] as CFDictionary
+                    guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions),
+                          let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, decodeOptions) else {
                         continuation.resume(returning: nil)
                         return
                     }
@@ -5268,6 +5537,10 @@ enum VideoPlayerIdleTimerPolicy {
     nonisolated static func shouldDisableIdleTimer(isPlaying: Bool, isVisible: Bool) -> Bool {
         isPlaying && isVisible
     }
+}
+
+enum VideoPlayerSeekPolicy {
+    nonisolated static let tolerance = CMTime(value: 1, timescale: 30)
 }
 
 private struct ZoomableVideoPreview: View {
@@ -5609,7 +5882,11 @@ private struct ZoomableVideoPreview: View {
     private func seek(to seconds: Double, resumePlayback: Bool) {
         didReachEnd = false
         let time = CMTime(seconds: seconds, preferredTimescale: 600)
-        player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
+        player.seek(
+            to: time,
+            toleranceBefore: VideoPlayerSeekPolicy.tolerance,
+            toleranceAfter: VideoPlayerSeekPolicy.tolerance
+        ) { _ in
             DispatchQueue.main.async {
                 currentTime = seconds
                 if resumePlayback {

@@ -699,9 +699,21 @@ struct GeneralSettingsView: View {
     @EnvironmentObject private var subscription: SubscriptionManager
     @AppStorage(AppLanguage.storageKey) private var language = AppLanguage.english.rawValue
     @AppStorage(AppAppearance.storageKey) private var appearance = AppAppearance.system.rawValue
+    @State private var storageUsageSnapshot = AppStorageUsageSnapshot.empty
+    @State private var isLoadingStorageUsage = false
 
     private var preferenceRefreshToken: SettingsPreferenceRefreshToken {
         SettingsPreferenceRefreshToken(language: language, appearance: appearance)
+    }
+
+    private var storageUsageDetail: String {
+        guard !isLoadingStorageUsage || storageUsageSnapshot.totalBytes > 0 else {
+            return L.string("Calculating...")
+        }
+        return L.format(
+            "Currently using %@",
+            AppStorageUsageFormatter.localizedFileSize(storageUsageSnapshot.totalBytes)
+        )
     }
 
     var body: some View {
@@ -759,6 +771,16 @@ struct GeneralSettingsView: View {
                 }
 
                 NavigationLink {
+                    AppStorageUsageSettingsView(initialSnapshot: storageUsageSnapshot)
+                } label: {
+                    SettingsNavigationRow(
+                        icon: "internaldrive",
+                        title: L.string("App Storage Usage"),
+                        detail: storageUsageDetail
+                    )
+                }
+
+                NavigationLink {
                     UnlockVerificationSettingsView()
                         .environmentObject(auth)
                 } label: {
@@ -775,6 +797,16 @@ struct GeneralSettingsView: View {
         .id(preferenceRefreshToken)
         .navigationTitle(L.string("General Settings"))
         .navigationBarTitleDisplayMode(.inline)
+        .task {
+            await refreshStorageUsage()
+        }
+    }
+
+    @MainActor
+    private func refreshStorageUsage() async {
+        isLoadingStorageUsage = true
+        storageUsageSnapshot = await AppStorageUsageCalculator.currentSnapshot()
+        isLoadingStorageUsage = false
     }
 }
 
@@ -918,6 +950,156 @@ struct AppLanguageSettingsView: View {
         .id(preferenceRefreshToken)
         .navigationTitle(L.string("App Language"))
         .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+struct AppStorageUsageSettingsView: View {
+    @AppStorage(AppLanguage.storageKey) private var language = AppLanguage.english.rawValue
+    @AppStorage(AppAppearance.storageKey) private var appearance = AppAppearance.system.rawValue
+    @State private var snapshot: AppStorageUsageSnapshot
+    @State private var isLoading = false
+
+    init(initialSnapshot: AppStorageUsageSnapshot = .empty) {
+        _snapshot = State(initialValue: initialSnapshot)
+    }
+
+    private var preferenceRefreshToken: SettingsPreferenceRefreshToken {
+        SettingsPreferenceRefreshToken(language: language, appearance: appearance)
+    }
+
+    var body: some View {
+        List {
+            Section {
+                AppStorageUsageValueRow(
+                    icon: "internaldrive",
+                    title: L.string("Total App Storage"),
+                    value: formatted(snapshot.totalBytes),
+                    isProminent: true
+                )
+            } header: {
+                Text(L.string("Storage on This Device"))
+            } footer: {
+                Text(L.string("iCloud copies are not counted here. Values are calculated from the app container on this device."))
+            }
+
+            Section {
+                AppStorageUsageValueRow(
+                    icon: "app",
+                    title: L.string("App Bundle"),
+                    value: formatted(snapshot.appBundleBytes)
+                )
+                AppStorageUsageValueRow(
+                    icon: "folder",
+                    title: L.string("App Data"),
+                    value: formatted(snapshot.appDataBytes)
+                )
+            } header: {
+                Text(L.string("Storage Breakdown"))
+            }
+
+            Section {
+                AppStorageUsageValueRow(
+                    icon: "lock.doc",
+                    title: L.string("Encrypted Originals"),
+                    value: formatted(snapshot.encryptedOriginalBytes)
+                )
+                AppStorageUsageValueRow(
+                    icon: "photo.on.rectangle",
+                    title: L.string("Thumbnails"),
+                    value: formatted(snapshot.thumbnailBytes)
+                )
+                AppStorageUsageValueRow(
+                    icon: "clock.arrow.circlepath",
+                    title: L.string("Vault Temporary Files"),
+                    value: formatted(snapshot.vaultTemporaryBytes)
+                )
+                AppStorageUsageValueRow(
+                    icon: "archivebox",
+                    title: L.string("Other Vault Data"),
+                    value: formatted(snapshot.otherVaultBytes)
+                )
+            } header: {
+                Text(L.string("Vault Storage"))
+            }
+
+            Section {
+                AppStorageUsageValueRow(
+                    icon: "externaldrive.badge.icloud",
+                    title: L.string("Caches"),
+                    value: formatted(snapshot.cacheBytes)
+                )
+                AppStorageUsageValueRow(
+                    icon: "timer",
+                    title: L.string("Temporary Files"),
+                    value: formatted(snapshot.temporaryBytes)
+                )
+                AppStorageUsageValueRow(
+                    icon: "doc.text",
+                    title: L.string("Other App Data"),
+                    value: formatted(snapshot.otherAppDataBytes)
+                )
+            }
+
+            Section {
+                Button {
+                    Task {
+                        await refresh()
+                    }
+                } label: {
+                    Label(L.string("Refresh Usage"), systemImage: "arrow.clockwise")
+                }
+                .disabled(isLoading)
+            }
+        }
+        .id(preferenceRefreshToken)
+        .navigationTitle(L.string("App Storage Usage"))
+        .navigationBarTitleDisplayMode(.inline)
+        .task {
+            await refresh()
+        }
+    }
+
+    private func formatted(_ bytes: Int64) -> String {
+        AppStorageUsageFormatter.localizedFileSize(bytes)
+    }
+
+    @MainActor
+    private func refresh() async {
+        isLoading = true
+        snapshot = await AppStorageUsageCalculator.currentSnapshot()
+        isLoading = false
+    }
+}
+
+private struct AppStorageUsageValueRow: View {
+    let icon: String
+    let title: String
+    let value: String
+    var isProminent = false
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .foregroundStyle(AppTheme.primary)
+                .frame(width: 30, height: 30)
+                .background(AppTheme.primary.opacity(0.1))
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+            Text(title)
+                .font(isProminent ? .body.weight(.semibold) : .body)
+                .foregroundStyle(AppTheme.ink)
+                .lineLimit(2)
+
+            Spacer(minLength: 12)
+
+            Text(value)
+                .font(isProminent ? .headline.weight(.semibold) : .subheadline.weight(.semibold))
+                .foregroundStyle(isProminent ? AppTheme.primary : AppTheme.secondaryText)
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.82)
+        }
+        .padding(.vertical, isProminent ? 5 : 2)
     }
 }
 

@@ -3,8 +3,8 @@ import OSLog
 
 enum VaultFileStore {
     private nonisolated static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "app.landlady.www.privacy", category: "VaultFileStore")
-    static let encryptedFileProtection: FileProtectionType = .completeUntilFirstUserAuthentication
-    static let encryptedDataWritingOptions: Data.WritingOptions = [
+    nonisolated static let encryptedFileProtection: FileProtectionType = .completeUntilFirstUserAuthentication
+    nonisolated static let encryptedDataWritingOptions: Data.WritingOptions = [
         .atomic,
         .completeFileProtectionUntilFirstUserAuthentication
     ]
@@ -14,19 +14,19 @@ enum VaultFileStore {
         return base.appendingPathComponent("Vault", isDirectory: true)
     }
 
-    static var objectsDirectory: URL {
+    nonisolated static var objectsDirectory: URL {
         vaultDirectory.appendingPathComponent("objects", isDirectory: true)
     }
 
-    static var thumbsDirectory: URL {
+    nonisolated static var thumbsDirectory: URL {
         vaultDirectory.appendingPathComponent("thumbs", isDirectory: true)
     }
 
-    static var tempDirectory: URL {
+    nonisolated static var tempDirectory: URL {
         vaultDirectory.appendingPathComponent("temp", isDirectory: true)
     }
 
-    static func prepareDirectories() throws {
+    nonisolated static func prepareDirectories() throws {
         try [vaultDirectory, objectsDirectory, thumbsDirectory, tempDirectory].forEach {
             try FileManager.default.createDirectory(at: $0, withIntermediateDirectories: true)
         }
@@ -94,18 +94,20 @@ enum VaultFileStore {
         return try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date
     }
 
-    static func encryptedObjectBytes() -> Int64 {
-        guard let files = try? FileManager.default.contentsOfDirectory(
-            at: objectsDirectory,
-            includingPropertiesForKeys: [.fileSizeKey],
-            options: [.skipsHiddenFiles]
-        ) else {
-            return 0
-        }
-        return files.reduce(Int64(0)) { total, url in
-            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-            return total + Int64(size)
-        }
+    nonisolated static func encryptedObjectBytes() -> Int64 {
+        directoryBytes(at: objectsDirectory)
+    }
+
+    nonisolated static func encryptedThumbnailBytes() -> Int64 {
+        directoryBytes(at: thumbsDirectory)
+    }
+
+    nonisolated static func vaultTemporaryBytes() -> Int64 {
+        directoryBytes(at: tempDirectory)
+    }
+
+    nonisolated static func vaultBytes() -> Int64 {
+        directoryBytes(at: vaultDirectory)
     }
 
     static func availableCapacityForImportantUsage() -> Int64 {
@@ -152,7 +154,7 @@ enum VaultFileStore {
         try? FileManager.default.removeItem(at: resolvedURL(for: path))
     }
 
-    static func temporaryPlainURL(fileName: String, data: Data) throws -> URL {
+    nonisolated static func temporaryPlainURL(fileName: String, data: Data) throws -> URL {
         try prepareDirectories()
         let safeName = fileName.replacingOccurrences(of: "/", with: "-")
         let url = tempDirectory.appendingPathComponent("\(UUID().uuidString)-\(safeName)")
@@ -173,6 +175,40 @@ enum VaultFileStore {
         try? FileManager.default.removeItem(at: destination)
         try? FileManager.default.copyItem(at: sourceURL, to: destination)
         try? setEncryptedFileProtection(at: destination)
+    }
+
+    nonisolated static func directoryBytes(at directoryURL: URL) -> Int64 {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: directoryURL.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+            return 0
+        }
+
+        let keys: [URLResourceKey] = [
+            .isRegularFileKey,
+            .totalFileAllocatedSizeKey,
+            .fileAllocatedSizeKey,
+            .fileSizeKey
+        ]
+        guard let enumerator = FileManager.default.enumerator(
+            at: directoryURL,
+            includingPropertiesForKeys: keys
+        ) else {
+            return 0
+        }
+
+        var total: Int64 = 0
+        for case let url as URL in enumerator {
+            guard let values = try? url.resourceValues(forKeys: Set(keys)),
+                  values.isRegularFile == true else {
+                continue
+            }
+            let size = values.totalFileAllocatedSize
+                ?? values.fileAllocatedSize
+                ?? values.fileSize
+                ?? 0
+            total += Int64(max(0, size))
+        }
+        return total
     }
 
     private static func setEncryptedFileProtection(at url: URL) throws {
@@ -209,5 +245,106 @@ enum VaultFileStore {
 
     private nonisolated static func storedPathForLog(_ path: String) -> String {
         normalizedStoredPath(path) ?? path
+    }
+}
+
+struct AppStorageUsageSnapshot: Equatable {
+    static let empty = AppStorageUsageSnapshot(
+        appBundleBytes: 0,
+        appDataBytes: 0,
+        vaultBytes: 0,
+        encryptedOriginalBytes: 0,
+        thumbnailBytes: 0,
+        vaultTemporaryBytes: 0,
+        cacheBytes: 0,
+        temporaryBytes: 0
+    )
+
+    let appBundleBytes: Int64
+    let appDataBytes: Int64
+    let vaultBytes: Int64
+    let encryptedOriginalBytes: Int64
+    let thumbnailBytes: Int64
+    let vaultTemporaryBytes: Int64
+    let cacheBytes: Int64
+    let temporaryBytes: Int64
+
+    var totalBytes: Int64 {
+        appBundleBytes + appDataBytes
+    }
+
+    var otherVaultBytes: Int64 {
+        max(0, vaultBytes - encryptedOriginalBytes - thumbnailBytes - vaultTemporaryBytes)
+    }
+
+    var otherAppDataBytes: Int64 {
+        max(0, appDataBytes - vaultBytes - cacheBytes - temporaryBytes)
+    }
+
+    nonisolated static func current() -> AppStorageUsageSnapshot {
+        let fileManager = FileManager.default
+        let documentsURL = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first
+        let applicationSupportURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+        let cachesURL = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first
+        let temporaryURL = fileManager.temporaryDirectory
+
+        let documentsBytes = documentsURL.map(VaultFileStore.directoryBytes(at:)) ?? 0
+        let applicationSupportBytes = applicationSupportURL.map(VaultFileStore.directoryBytes(at:)) ?? 0
+        let cacheBytes = cachesURL.map(VaultFileStore.directoryBytes(at:)) ?? 0
+        let temporaryBytes = VaultFileStore.directoryBytes(at: temporaryURL)
+
+        return AppStorageUsageSnapshot(
+            appBundleBytes: VaultFileStore.directoryBytes(at: Bundle.main.bundleURL),
+            appDataBytes: documentsBytes + applicationSupportBytes + cacheBytes + temporaryBytes,
+            vaultBytes: VaultFileStore.vaultBytes(),
+            encryptedOriginalBytes: VaultFileStore.encryptedObjectBytes(),
+            thumbnailBytes: VaultFileStore.encryptedThumbnailBytes(),
+            vaultTemporaryBytes: VaultFileStore.vaultTemporaryBytes(),
+            cacheBytes: cacheBytes,
+            temporaryBytes: temporaryBytes
+        )
+    }
+}
+
+enum AppStorageUsageCalculator {
+    static func currentSnapshot() async -> AppStorageUsageSnapshot {
+        await Task.detached(priority: .utility) {
+            AppStorageUsageSnapshot.current()
+        }.value
+    }
+}
+
+enum AppStorageUsageFormatter {
+    static func localizedFileSize(_ bytes: Int64, locale: Locale = AppLanguage.current.locale) -> String {
+        let safeBytes = max(0, bytes)
+        let value = Double(safeBytes)
+        let kb = 1024.0
+        let mb = kb * 1024.0
+        let gb = mb * 1024.0
+
+        if value >= gb {
+            return "\(localizedNumber(value / gb, minimumFractionDigits: 2, maximumFractionDigits: 2, locale: locale)) GB"
+        }
+        if value >= mb {
+            return "\(localizedNumber(value / mb, minimumFractionDigits: 1, maximumFractionDigits: 1, locale: locale)) MB"
+        }
+        if value >= kb {
+            return "\(localizedNumber(value / kb, minimumFractionDigits: 1, maximumFractionDigits: 1, locale: locale)) KB"
+        }
+        return "\(safeBytes) B"
+    }
+
+    private static func localizedNumber(
+        _ value: Double,
+        minimumFractionDigits: Int,
+        maximumFractionDigits: Int,
+        locale: Locale
+    ) -> String {
+        let formatter = NumberFormatter()
+        formatter.locale = locale
+        formatter.numberStyle = .decimal
+        formatter.minimumFractionDigits = minimumFractionDigits
+        formatter.maximumFractionDigits = maximumFractionDigits
+        return formatter.string(from: NSNumber(value: value)) ?? String(format: "%.\(maximumFractionDigits)f", value)
     }
 }

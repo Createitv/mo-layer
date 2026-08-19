@@ -28,10 +28,6 @@ enum MembershipAccessLevel: Equatable {
         }
     }
 
-    var moLayerEntryAction: MoLayerEntryAction {
-        allowsVaultEntry ? .enter : .explainPro
-    }
-
     var allowsImportAndCloudSync: Bool {
         self == .activePro
     }
@@ -43,6 +39,10 @@ enum MembershipAccessLevel: Equatable {
         case .lockedUntilPro:
             false
         }
+    }
+
+    var moLayerEntryAction: MoLayerEntryAction {
+        allowsVaultEntry ? .enter : .explainPro
     }
 }
 

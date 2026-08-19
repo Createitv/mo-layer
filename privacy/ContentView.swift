@@ -111,6 +111,9 @@ struct ContentView: View {
         .onAppear {
             handleQuickRecordingAction(quickActions.pendingAction)
             handleStoredQuickRecordingRequest()
+            if vaultStore.requiresVaultRecovery {
+                showCloudRestore = true
+            }
         }
         .onChange(of: quickActions.pendingAction) { _, action in
             handleQuickRecordingAction(action)
@@ -138,6 +141,11 @@ struct ContentView: View {
             guard let reason else { return }
             Task {
                 await handleRemoteCloudChange(reason)
+            }
+        }
+        .onChange(of: vaultStore.requiresVaultRecovery) { _, isRequired in
+            if isRequired {
+                showCloudRestore = true
             }
         }
         .onChange(of: subscription.canImportAndSync) { _, canWrite in

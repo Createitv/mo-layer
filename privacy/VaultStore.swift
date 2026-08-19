@@ -3,6 +3,7 @@ import AVFoundation
 import CloudKit
 import CryptoKit
 import Foundation
+import ImageIO
 import OSLog
 import SwiftUI
 import SwiftData
@@ -29,7 +30,70 @@ struct VaultThumbnailLoadRequest: Sendable {
 }
 
 actor VaultThumbnailDataLoader {
+    nonisolated static let maximumConcurrentLoads = 3
+
+    private var activeLoadCount = 0
+    private var slotWaiters: [CheckedContinuation<Void, Never>] = []
+    private var inFlight: [String: Task<UIImage?, Never>] = [:]
+
     func decryptedData(for request: VaultThumbnailLoadRequest) throws -> Data {
+        try Self.decryptData(for: request)
+    }
+
+    func image(for request: VaultThumbnailLoadRequest) async -> UIImage? {
+        if let task = inFlight[request.cacheKey] {
+            return await task.value
+        }
+
+        let task = Task { await performLoad(request) }
+        inFlight[request.cacheKey] = task
+        let image = await task.value
+        inFlight[request.cacheKey] = nil
+        return image
+    }
+
+    private func performLoad(_ request: VaultThumbnailLoadRequest) async -> UIImage? {
+        await acquireSlot()
+        defer { releaseSlot() }
+        return await Task.detached(priority: .userInitiated) {
+            autoreleasepool {
+                do {
+                    let data = try Self.decryptData(for: request)
+                    let options = [
+                        kCGImageSourceShouldCache: true,
+                        kCGImageSourceShouldCacheImmediately: true
+                    ] as CFDictionary
+                    guard let source = CGImageSourceCreateWithData(data as CFData, options),
+                          let cgImage = CGImageSourceCreateImageAtIndex(source, 0, options) else {
+                        return nil
+                    }
+                    return UIImage(cgImage: cgImage)
+                } catch {
+                    return nil
+                }
+            }
+        }.value
+    }
+
+    private func acquireSlot() async {
+        if activeLoadCount < Self.maximumConcurrentLoads {
+            activeLoadCount += 1
+            return
+        }
+        await withCheckedContinuation { continuation in
+            slotWaiters.append(continuation)
+        }
+    }
+
+    private func releaseSlot() {
+        if slotWaiters.isEmpty {
+            activeLoadCount = max(0, activeLoadCount - 1)
+        } else {
+            slotWaiters.removeFirst().resume()
+        }
+    }
+
+    nonisolated private static func decryptData(for request: VaultThumbnailLoadRequest) throws -> Data {
         try Task.checkCancellation()
         let fileKey = try VaultCryptoService.unwrapFileKey(
             request.encryptedFileKey,
@@ -38,6 +102,63 @@ actor VaultThumbnailDataLoader {
         let encrypted = try VaultFileStore.read(path: request.encryptedThumbPath)
         try Task.checkCancellation()
         return try VaultCryptoService.decrypt(encrypted, using: fileKey)
+    }
+}
+
+enum VaultPreviewFileCachePolicy {
+    nonisolated static func cacheKey(
+        itemID: String,
+        encryptedFilePath: String,
+        encryptedFileKey: Data,
+        updatedAt: Date
+    ) -> String {
+        "\(itemID)|\(encryptedFilePath)|\(encryptedFileKey.base64EncodedString())|\(updatedAt.timeIntervalSince1970)"
+    }
+}
+
+struct VaultPreviewFileLoadRequest: Sendable {
+    let cacheKey: String
+    let fileName: String
+    let encryptedFilePath: String
+    let encryptedFileKey: Data
+    let rootKey: SymmetricKey
+}
+
+actor VaultPreviewFileLoader {
+    private var cachedURLs: [String: URL] = [:]
+    private var inFlight: [String: Task<URL, Error>] = [:]
+
+    func url(for request: VaultPreviewFileLoadRequest) async throws -> URL {
+        if let cachedURL = cachedURLs[request.cacheKey],
+           FileManager.default.fileExists(atPath: cachedURL.path) {
+            return cachedURL
+        }
+        if let task = inFlight[request.cacheKey] {
+            return try await task.value
+        }
+
+        let task = Task.detached(priority: .userInitiated) {
+            let fileKey = try VaultCryptoService.unwrapFileKey(
+                request.encryptedFileKey,
+                rootKey: request.rootKey
+            )
+            let encrypted = try VaultFileStore.read(path: request.encryptedFilePath)
+            try Task.checkCancellation()
+            let decrypted = try VaultCryptoService.decrypt(encrypted, using: fileKey)
+            try Task.checkCancellation()
+            return try VaultFileStore.temporaryPlainURL(fileName: request.fileName, data: decrypted)
+        }
+        inFlight[request.cacheKey] = task
+
+        do {
+            let url = try await task.value
+            cachedURLs[request.cacheKey] = url
+            inFlight[request.cacheKey] = nil
+            return url
+        } catch {
+            inFlight[request.cacheKey] = nil
+            throw error
+        }
     }
 }
 
@@ -69,15 +190,109 @@ struct CloudAssetDownloadSummary: Equatable {
     }
 }
 
+enum VaultCloudToLocalSyncPurpose {
+    case routineSync
+    case reinstallRestore
+}
+
 enum VaultCloudToLocalSyncPolicy {
-    nonisolated static let automaticDownloadsOriginals = false
     nonisolated static let automaticDownloadsPreviews = false
     nonisolated static let manualRefreshDownloadsOriginals = false
     static let syncedHomeCategories: [VaultCategory] = [.album, .audio, .documents]
 
-    nonisolated static func downloadsOriginals(explicitOverride: Bool?) -> Bool {
-        explicitOverride ?? automaticDownloadsOriginals
+    nonisolated static func downloadsOriginals(
+        purpose: VaultCloudToLocalSyncPurpose,
+        explicitOverride: Bool?
+    ) -> Bool {
+        if let explicitOverride {
+            return explicitOverride
+        }
+        switch purpose {
+        case .routineSync:
+            return false
+        case .reinstallRestore:
+            return true
+        }
     }
+}
+
+enum VaultCloudMetadataClassification: Equatable {
+    case readable
+    case incompatiblePayload
+    case wrongRootKey
+}
+
+enum VaultCloudMetadataInspector {
+    static func classify(_ encryptedMetadata: Data, using rootKey: SymmetricKey) -> VaultCloudMetadataClassification {
+        let decrypted: Data
+        do {
+            decrypted = try VaultCryptoService.decrypt(encryptedMetadata, using: rootKey)
+        } catch {
+            return .wrongRootKey
+        }
+
+        do {
+            _ = try JSONDecoder().decode(VaultMetadata.self, from: decrypted)
+            return .readable
+        } catch {
+            return .incompatiblePayload
+        }
+    }
+}
+
+enum VaultRemoteRootKeyPolicy {
+    nonisolated static func shouldRestorePackagedKey(
+        localKeyOpensManifest: Bool,
+        recoveryKeyOpensPackage: Bool
+    ) -> Bool {
+        !localKeyOpensManifest && recoveryKeyOpensPackage
+    }
+}
+
+struct VaultRecoveryCandidateScore: Equatable, Sendable {
+    let id: String
+    let readableItemCount: Int
+
+    nonisolated init(id: String, readableItemCount: Int) {
+        self.id = id
+        self.readableItemCount = readableItemCount
+    }
+}
+
+enum VaultRecoverySelectionPolicy {
+    nonisolated static func select(candidates: [VaultRecoveryCandidateScore]) -> VaultRecoveryCandidateScore? {
+        guard let highestCount = candidates.map(\.readableItemCount).max(), highestCount > 0 else {
+            return nil
+        }
+        let bestCandidates = candidates.filter { $0.readableItemCount == highestCount }
+        guard bestCandidates.count == 1 else { return nil }
+        return bestCandidates[0]
+    }
+
+    nonisolated static func shouldRequestRecovery(
+        readableItemCount: Int,
+        wrongRootKeyCount: Int
+    ) -> Bool {
+        wrongRootKeyCount > readableItemCount
+    }
+}
+
+private struct VaultCloudIndexPullSummary {
+    var fetched = 0
+    var indexed = 0
+    var missingIdentity = 0
+    var incompatiblePayload = 0
+    var wrongRootKey = 0
+
+    var skipped: Int {
+        missingIdentity + incompatiblePayload + wrongRootKey
+    }
+}
+
+private struct VaultRecoveryLocalCleanup {
+    let items: [VaultItem]
+    let folders: [VaultFolder]
+    let notes: [DecoyNoteRecord]
 }
 
 enum VaultOptimizedStoragePolicy {
@@ -115,6 +330,16 @@ enum VaultCloudAssetDownloadPolicy {
         item.deletedAt == nil
             && item.kind.isVisualMedia
             && (item.encryptedThumbPath?.isEmpty != false || !VaultFileStore.fileExists(path: item.encryptedThumbPath))
+    }
+}
+
+enum VaultMediaPreviewRepairPolicy {
+    nonisolated static func needsVideoDuration(
+        kind: VaultItemKind,
+        storedDuration: Double?,
+        hasLocalOriginal: Bool
+    ) -> Bool {
+        kind == .video && storedDuration == nil && hasLocalOriginal
     }
 }
 
@@ -270,7 +495,7 @@ enum VaultImportArtifactBuilder {
         ]
     }
 
-    private static func mediaDurationSeconds(from data: Data, kind: VaultItemKind, preferredExtension: String?) async -> Double? {
+    nonisolated static func mediaDurationSeconds(from data: Data, kind: VaultItemKind, preferredExtension: String?) async -> Double? {
         guard kind == .video else { return nil }
         let temporaryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
@@ -332,16 +557,119 @@ final class VaultStore: ObservableObject {
         return cache
     }()
     private let thumbnailDataLoader = VaultThumbnailDataLoader()
+    private let previewFileLoader = VaultPreviewFileLoader()
     private var thumbnailRootKey: SymmetricKey?
+    private var mediaCacheGeneration: UInt = 0
+    private var metadataCache: [String: (identity: String, metadata: VaultMetadata)] = [:]
     private var thumbnailDownloadTasks: [String: Task<Bool, Never>] = [:]
     private var originalDownloadTasks: [String: Task<Void, Error>] = [:]
+    private var routineCloudToLocalSyncTasks: [Bool: Task<CloudAssetDownloadSummary, Never>] = [:]
     @Published var lastError: String?
     @Published var restoreStatusMessage: String?
     @Published private(set) var allowsVaultWrites = false
+    @Published private(set) var requiresVaultRecovery = false
+    @Published private(set) var cloudIndexRevision = 0
 
     func setWriteAccess(_ isAllowed: Bool) {
         allowsVaultWrites = isAllowed
     }
+
+    func clearDecryptedMediaCaches() {
+        mediaCacheGeneration &+= 1
+        thumbnailCache.removeAllObjects()
+        metadataCache.removeAll(keepingCapacity: false)
+        thumbnailRootKey = nil
+    }
+
+    #if DEBUG
+    func installPerformanceFixturesIfRequested(context: ModelContext) async {
+        guard ProcessInfo.processInfo.arguments.contains("-ui-performance-fixtures") else { return }
+        do {
+            let existingItems = try context.fetch(FetchDescriptor<VaultItem>())
+            guard !existingItems.contains(where: { $0.id.hasPrefix("__performance_fixture_") }) else {
+                return
+            }
+
+            let rootKey = try VaultCryptoService.ensureRootKey()
+            let fileKey = VaultCryptoService.newFileKey()
+            let wrappedFileKey = try VaultCryptoService.wrapFileKey(fileKey, rootKey: rootKey)
+            let renderer = UIGraphicsImageRenderer(size: CGSize(width: 240, height: 240))
+            let image = renderer.image { context in
+                UIColor(red: 0.08, green: 0.36, blue: 0.64, alpha: 1).setFill()
+                context.fill(CGRect(x: 0, y: 0, width: 240, height: 240))
+                UIColor(red: 0.12, green: 0.82, blue: 0.70, alpha: 1).setFill()
+                context.cgContext.fillEllipse(in: CGRect(x: 54, y: 54, width: 132, height: 132))
+            }
+            guard let thumbnailData = image.jpegData(compressionQuality: 0.78) else { return }
+            let encryptedThumbnail = try VaultCryptoService.encrypt(thumbnailData, using: fileKey)
+            let sharedThumbnailPath = try VaultFileStore.writeEncryptedThumb(
+                encryptedThumbnail,
+                itemId: "__performance_fixture_shared"
+            )
+            let imageMetadata = VaultMetadata(
+                originalName: "Performance Fixture.jpg",
+                mimeType: "image/jpeg",
+                source: "DEBUG",
+                note: "",
+                importedAt: Date(),
+                originalExtension: "jpg"
+            )
+            let encryptedImageMetadata = try VaultCryptoService.encryptCodable(imageMetadata, using: rootKey)
+            let baseDate = Date()
+
+            for index in 0..<600 {
+                let item = VaultItem(
+                    id: "__performance_fixture_image_\(index)",
+                    kind: .image,
+                    encryptedThumbPath: sharedThumbnailPath,
+                    encryptedMetadata: encryptedImageMetadata,
+                    encryptedFileKey: wrappedFileKey,
+                    byteSize: 0,
+                    assetState: .cloudOnly
+                )
+                item.createdAt = baseDate.addingTimeInterval(-Double(index + 1))
+                item.updatedAt = item.createdAt
+                item.syncStatus = .synced
+                context.insert(item)
+            }
+
+            let videoSeedURL = VaultFileStore.tempDirectory.appendingPathComponent("performance-seed.mp4")
+            if let videoData = try? Data(contentsOf: videoSeedURL) {
+                let videoID = "__performance_fixture_video"
+                let encryptedVideo = try VaultCryptoService.encrypt(videoData, using: fileKey)
+                let videoPath = try VaultFileStore.writeEncryptedObject(encryptedVideo, itemId: videoID)
+                let videoMetadata = VaultMetadata(
+                    originalName: "Performance Fixture.mp4",
+                    mimeType: "video/mp4",
+                    source: "DEBUG",
+                    note: "",
+                    importedAt: baseDate,
+                    originalExtension: "mp4",
+                    mediaDurationSeconds: 6
+                )
+                let videoItem = VaultItem(
+                    id: videoID,
+                    kind: .video,
+                    encryptedFilePath: videoPath,
+                    encryptedThumbPath: sharedThumbnailPath,
+                    encryptedMetadata: try VaultCryptoService.encryptCodable(videoMetadata, using: rootKey),
+                    encryptedFileKey: wrappedFileKey,
+                    byteSize: Int64(videoData.count),
+                    assetState: .local
+                )
+                videoItem.createdAt = baseDate.addingTimeInterval(1)
+                videoItem.updatedAt = videoItem.createdAt
+                videoItem.syncStatus = .synced
+                context.insert(videoItem)
+            }
+
+            try context.save()
+            logger.info("Installed DEBUG media performance fixtures itemCount=600")
+        } catch {
+            logger.error("DEBUG media performance fixture install failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+    #endif
 
     func hasLocalVaultData(context: ModelContext) -> Bool {
         do {
@@ -393,7 +721,7 @@ final class VaultStore: ObservableObject {
                             sync: sync,
                             allowsCloudSync: allowsCloudSync,
                             allowsCloudWrite: canWriteCloud,
-                            downloadsOriginals: VaultCloudToLocalSyncPolicy.automaticDownloadsOriginals
+                            purpose: .reinstallRestore
                         )
                         restoreStatusMessage = summary.displayText
                     } else {
@@ -420,34 +748,84 @@ final class VaultStore: ObservableObject {
 
     func restoreRootKeyFromCloud(recoveryKey: String, context: ModelContext, sync: CloudKitSyncService) async -> Bool {
         do {
-            guard let remoteManifest = await sync.fetchRemoteManifest(),
-                  let package = remoteManifest["encryptedRootKeyPackage"] as? Data,
-                  !package.isEmpty else {
+            let manifestCandidates = await sync.fetchRemoteManifestCandidates()
+            guard !manifestCandidates.isEmpty else {
                 lastError = L.string("No iCloud recovery package was found.")
                 return false
             }
 
-            let rootKey = try VaultCryptoService.restoreRootKey(from: package, recoveryKey: recoveryKey)
+            let remoteRecords = await sync.fetchRemoteItemsForIndex()
+            var recoveredKeys: [String: SymmetricKey] = [:]
+            var candidateRecords: [String: CKRecord] = [:]
+            var scores: [VaultRecoveryCandidateScore] = []
+
+            for record in manifestCandidates {
+                guard let package = record["encryptedRootKeyPackage"] as? Data,
+                      !package.isEmpty,
+                      let candidateKey = try? VaultCryptoService.previewRootKey(
+                        from: package,
+                        recoveryKey: recoveryKey
+                      ) else {
+                    continue
+                }
+                if let encryptedName = record["encryptedVaultName"] as? Data,
+                   !encryptedName.isEmpty,
+                   (try? VaultCryptoService.decryptString(encryptedName, using: candidateKey)) == nil {
+                    continue
+                }
+
+                let id = record.recordID.recordName
+                let readableItemCount = remoteRecords.reduce(into: 0) { count, itemRecord in
+                    guard let encryptedMetadata = itemRecord["encryptedMetadata"] as? Data else { return }
+                    if VaultCloudMetadataInspector.classify(encryptedMetadata, using: candidateKey) == .readable {
+                        count += 1
+                    }
+                }
+                recoveredKeys[id] = candidateKey
+                candidateRecords[id] = record
+                scores.append(VaultRecoveryCandidateScore(id: id, readableItemCount: readableItemCount))
+            }
+
+            guard let selected = VaultRecoverySelectionPolicy.select(candidates: scores),
+                  let rootKey = recoveredKeys[selected.id],
+                  let remoteManifest = candidateRecords[selected.id] else {
+                lastError = L.string("The recovery key did not identify one unique iCloud vault. No local or iCloud data was changed.")
+                return false
+            }
+
+            let localCleanup = try validateLocalStoreForRecoveredRootKey(rootKey, context: context)
+            try VaultCryptoService.installRootKey(rootKey, recoveryKey: recoveryKey)
+            localCleanup.items.forEach(context.delete)
+            localCleanup.folders.forEach(context.delete)
+            localCleanup.notes.forEach(context.delete)
             let existingManifests = try context.fetch(FetchDescriptor<VaultManifest>())
             for manifest in existingManifests {
                 context.delete(manifest)
             }
             let manifest = makeManifest(from: remoteManifest)
-            manifest.encryptedRootKeyPackage = try VaultCryptoService.makeRootKeyPackage(recoveryKey: recoveryKey)
-            manifest.encryptedVaultName = try VaultCryptoService.encryptString("Private Vault", using: rootKey)
             manifest.syncStatus = .synced
             context.insert(manifest)
             try context.save()
-            try? VaultCryptoService.syncRootKeyToICloudKeychain()
+            clearDecryptedMediaCaches()
             let summary = await syncCloudToLocal(
                 context: context,
                 sync: sync,
-                downloadsOriginals: VaultCloudToLocalSyncPolicy.automaticDownloadsOriginals
+                allowsCloudWrite: false,
+                purpose: .reinstallRestore,
+                downloadsOriginals: false
             )
-            restoreStatusMessage = summary.displayText
+            requiresVaultRecovery = false
+            restoreStatusMessage = L.format(
+                "%d encrypted item(s) restored from the selected iCloud vault. Originals download when opened.",
+                max(selected.readableItemCount, summary.indexedItems)
+            )
+            sync.appendLog(
+                "Selected one VaultManifest recovery candidate record=\(selected.id) readableItems=\(selected.readableItemCount) cloudWrite=false"
+            )
+            lastError = nil
             return true
         } catch {
-            lastError = L.string("Recovery key is incorrect or the iCloud package cannot be opened.")
+            lastError = error.localizedDescription
             return false
         }
     }
@@ -469,7 +847,7 @@ final class VaultStore: ObservableObject {
                 let summary = await syncCloudToLocal(
                     context: context,
                     sync: sync,
-                    downloadsOriginals: VaultCloudToLocalSyncPolicy.automaticDownloadsOriginals
+                    purpose: .reinstallRestore
                 )
                 restoreStatusMessage = summary.displayText
                 return .restoredAutomatically(summary)
@@ -595,8 +973,21 @@ final class VaultStore: ObservableObject {
     }
 
     func metadata(for item: VaultItem) -> VaultMetadata? {
+        let identity = "\(item.encryptedMetadata.count):\(item.updatedAt.timeIntervalSince1970)"
+        if let cached = metadataCache[item.id], cached.identity == identity {
+            return cached.metadata
+        }
         guard let rootKey = try? VaultCryptoService.ensureRootKey() else { return nil }
-        return try? VaultCryptoService.decryptCodable(VaultMetadata.self, from: item.encryptedMetadata, using: rootKey)
+        guard let metadata = try? VaultCryptoService.decryptCodable(
+            VaultMetadata.self,
+            from: item.encryptedMetadata,
+            using: rootKey
+        ) else {
+            metadataCache[item.id] = nil
+            return nil
+        }
+        metadataCache[item.id] = (identity, metadata)
+        return metadata
     }
 
     func thumbnail(for item: VaultItem) -> UIImage? {
@@ -635,28 +1026,19 @@ final class VaultStore: ObservableObject {
             return cached
         }
 
+        let requestedGeneration = mediaCacheGeneration
         let startedAt = CFAbsoluteTimeGetCurrent()
-        do {
-            let data = try await thumbnailDataLoader.decryptedData(for: request)
-            try Task.checkCancellation()
-            guard let image = UIImage(data: data) else {
-                logger.error("Thumbnail data could not decode for item \(item.id, privacy: .public)")
-                return nil
-            }
-            let displayImage = await image.byPreparingForDisplay() ?? image
-            try Task.checkCancellation()
-            cacheThumbnail(displayImage, forKey: request.cacheKey)
-            let elapsedMs = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
-            if elapsedMs > 500 {
-                logger.debug("Thumbnail loaded asynchronously kind=\(item.kind.rawValue, privacy: .public) bytes=\(data.count, privacy: .public) elapsedMs=\(String(format: "%.1f", elapsedMs), privacy: .public)")
-            }
-            return displayImage
-        } catch is CancellationError {
-            return nil
-        } catch {
-            logger.error("Asynchronous thumbnail load failed for item \(item.id, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        guard let displayImage = await thumbnailDataLoader.image(for: request) else {
+            logger.error("Thumbnail data could not decode for item \(item.id, privacy: .public)")
             return nil
         }
+        guard !Task.isCancelled, requestedGeneration == mediaCacheGeneration else { return nil }
+        cacheThumbnail(displayImage, forKey: request.cacheKey)
+        let elapsedMs = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
+        if elapsedMs > 500 {
+            logger.debug("Thumbnail loaded asynchronously kind=\(item.kind.rawValue, privacy: .public) elapsedMs=\(String(format: "%.1f", elapsedMs), privacy: .public)")
+        }
+        return displayImage
     }
 
     private func thumbnailLoadRequest(for item: VaultItem) throws -> VaultThumbnailLoadRequest? {
@@ -701,6 +1083,11 @@ final class VaultStore: ObservableObject {
 
     func needsMediaPreviewRepair(_ item: VaultItem) -> Bool {
         VaultCloudAssetDownloadPolicy.needsLocalPreview(item)
+            || VaultMediaPreviewRepairPolicy.needsVideoDuration(
+                kind: item.kind,
+                storedDuration: metadata(for: item)?.mediaDurationSeconds,
+                hasLocalOriginal: item.assetState == .local && VaultFileStore.fileExists(path: item.encryptedFilePath)
+            )
     }
 
     func decryptedTemporaryURL(for item: VaultItem) throws -> URL {
@@ -725,7 +1112,21 @@ final class VaultStore: ObservableObject {
         } else {
             markLocalOriginalAccessed(for: item, context: context)
         }
-        return try decryptedTemporaryURL(for: item)
+        let rootKey = try VaultCryptoService.ensureRootKey()
+        let name = metadata(for: item)?.originalName ?? "\(item.id).bin"
+        let request = VaultPreviewFileLoadRequest(
+            cacheKey: VaultPreviewFileCachePolicy.cacheKey(
+                itemID: item.id,
+                encryptedFilePath: item.encryptedFilePath,
+                encryptedFileKey: item.encryptedFileKey,
+                updatedAt: item.updatedAt
+            ),
+            fileName: name,
+            encryptedFilePath: item.encryptedFilePath,
+            encryptedFileKey: item.encryptedFileKey,
+            rootKey: rootKey
+        )
+        return try await previewFileLoader.url(for: request)
     }
 
     func decryptedLivePhotoResourceURLs(for item: VaultItem, context: ModelContext, sync: CloudKitSyncService) async throws -> [URL] {
@@ -1229,15 +1630,55 @@ final class VaultStore: ObservableObject {
         sync: CloudKitSyncService,
         allowsCloudSync: Bool = true,
         allowsCloudWrite: Bool? = nil,
+        purpose: VaultCloudToLocalSyncPurpose = .routineSync,
         downloadsOriginals: Bool? = nil
     ) async -> CloudAssetDownloadSummary {
         guard allowsCloudSync else { return CloudAssetDownloadSummary() }
         let canWriteCloud = allowsCloudWrite ?? allowsCloudSync
         let shouldDownloadOriginals = VaultCloudToLocalSyncPolicy.downloadsOriginals(
+            purpose: purpose,
             explicitOverride: downloadsOriginals
         )
 
-        let indexedCount = await pullCloudIndex(context: context, sync: sync, allowsCloudSync: allowsCloudSync)
+        if case .routineSync = purpose, !shouldDownloadOriginals {
+            if let task = routineCloudToLocalSyncTasks[canWriteCloud] {
+                sync.appendLog("Coalesced overlapping routine iCloud sync")
+                return await task.value
+            }
+            let task = Task { @MainActor [weak self] in
+                guard let self else { return CloudAssetDownloadSummary() }
+                return await self.performCloudToLocalSync(
+                    context: context,
+                    sync: sync,
+                    allowsCloudSync: allowsCloudSync,
+                    canWriteCloud: canWriteCloud,
+                    shouldDownloadOriginals: false
+                )
+            }
+            routineCloudToLocalSyncTasks[canWriteCloud] = task
+            let summary = await task.value
+            routineCloudToLocalSyncTasks[canWriteCloud] = nil
+            return summary
+        }
+
+        return await performCloudToLocalSync(
+            context: context,
+            sync: sync,
+            allowsCloudSync: allowsCloudSync,
+            canWriteCloud: canWriteCloud,
+            shouldDownloadOriginals: shouldDownloadOriginals
+        )
+    }
+
+    private func performCloudToLocalSync(
+        context: ModelContext,
+        sync: CloudKitSyncService,
+        allowsCloudSync: Bool,
+        canWriteCloud: Bool,
+        shouldDownloadOriginals: Bool
+    ) async -> CloudAssetDownloadSummary {
+        let indexSummary = await pullCloudIndexSummary(context: context, sync: sync, allowsCloudSync: allowsCloudSync)
+        let indexedCount = indexSummary.indexed
         await pullCloudDecoyNotes(context: context, sync: sync)
         await syncPendingChanges(context: context, sync: sync, allowsCloudSync: canWriteCloud)
 
@@ -1266,25 +1707,41 @@ final class VaultStore: ObservableObject {
 
     @discardableResult
     func pullCloudIndex(context: ModelContext, sync: CloudKitSyncService, allowsCloudSync: Bool = true) async -> Int {
+        await pullCloudIndexSummary(context: context, sync: sync, allowsCloudSync: allowsCloudSync).indexed
+    }
+
+    private func pullCloudIndexSummary(
+        context: ModelContext,
+        sync: CloudKitSyncService,
+        allowsCloudSync: Bool
+    ) async -> VaultCloudIndexPullSummary {
+        guard allowsCloudSync else { return VaultCloudIndexPullSummary() }
         do {
             let rootKey = try VaultCryptoService.ensureRootKey()
             await pullCloudFolders(context: context, sync: sync)
             let remoteRecords = await sync.fetchRemoteItemsForIndex()
             let existingItems = try context.fetch(FetchDescriptor<VaultItem>())
             var itemsById = Dictionary(uniqueKeysWithValues: existingItems.map { ($0.id, $0) })
-            var indexedCount = 0
+            var summary = VaultCloudIndexPullSummary(fetched: remoteRecords.count)
 
             for record in remoteRecords {
                 guard let itemId = record["itemId"] as? String else {
+                    summary.missingIdentity += 1
                     continue
                 }
 
                 let kind = VaultItemKind(rawValue: record["type"] as? String ?? "") ?? .other
                 let encryptedMetadata = record["encryptedMetadata"] as? Data ?? Data()
-                guard (try? VaultCryptoService.decryptCodable(VaultMetadata.self, from: encryptedMetadata, using: rootKey)) != nil else {
+                switch VaultCloudMetadataInspector.classify(encryptedMetadata, using: rootKey) {
+                case .readable:
+                    summary.indexed += 1
+                case .incompatiblePayload:
+                    summary.incompatiblePayload += 1
+                    continue
+                case .wrongRootKey:
+                    summary.wrongRootKey += 1
                     continue
                 }
-                indexedCount += 1
                 let encryptedFileKey = record["encryptedFileKey"] as? Data ?? Data()
                 let byteSize = record["byteSize"] as? Int64 ?? 0
                 let folderId = record["folderId"] as? String
@@ -1341,12 +1798,59 @@ final class VaultStore: ObservableObject {
                     itemsById[itemId] = item
                 }
             }
-            _ = rootKey
             try context.save()
-            return indexedCount
+            cloudIndexRevision &+= 1
+            sync.appendLog(
+                "Cloud index merge fetched=\(summary.fetched) indexed=\(summary.indexed) missingIdentity=\(summary.missingIdentity) incompatiblePayload=\(summary.incompatiblePayload) wrongRootKey=\(summary.wrongRootKey)"
+            )
+            if VaultRecoverySelectionPolicy.shouldRequestRecovery(
+                readableItemCount: summary.indexed,
+                wrongRootKeyCount: summary.wrongRootKey
+            ) {
+                requiresVaultRecovery = true
+                let manifestCandidates = await sync.fetchRemoteManifestCandidates()
+                let currentKeyCandidates = manifestCandidates.filter { record in
+                    guard let encryptedName = record["encryptedVaultName"] as? Data else { return false }
+                    return (try? VaultCryptoService.decryptString(encryptedName, using: rootKey)) != nil
+                }
+                let recoverableCandidates = manifestCandidates.filter { record in
+                    guard let package = record["encryptedRootKeyPackage"] as? Data else { return false }
+                    return VaultCryptoService.canRestoreRootKey(from: package)
+                }
+                sync.appendLog(
+                    "Cloud manifest recovery candidates total=\(manifestCandidates.count) currentKey=\(currentKeyCandidates.count) recoveryKey=\(recoverableCandidates.count)"
+                )
+                let message = L.format(
+                    "%d iCloud item(s) belong to a vault key that is not available on this device. Restore the original vault with its recovery key.",
+                    summary.wrongRootKey
+                )
+                lastError = message
+                sync.lastSyncError = message
+            } else if summary.wrongRootKey > 0 {
+                requiresVaultRecovery = false
+                sync.appendLog(
+                    "Ignored minority records from another vault key readable=\(summary.indexed) wrongRootKey=\(summary.wrongRootKey)"
+                )
+                lastError = nil
+                sync.lastSyncError = nil
+            } else if summary.incompatiblePayload > 0 {
+                requiresVaultRecovery = false
+                let message = L.format(
+                    "%d iCloud item(s) use an unsupported metadata format. Update the app before trying again.",
+                    summary.incompatiblePayload
+                )
+                lastError = message
+                sync.lastSyncError = message
+            } else if summary.skipped == 0 {
+                requiresVaultRecovery = false
+                lastError = nil
+                sync.lastSyncError = nil
+            }
+            return summary
         } catch {
             lastError = error.localizedDescription
-            return 0
+            sync.appendLog("Cloud index merge failed: \(error.localizedDescription)")
+            return VaultCloudIndexPullSummary()
         }
     }
 
@@ -1424,36 +1928,50 @@ final class VaultStore: ObservableObject {
         sync: CloudKitSyncService,
         syncAfterRepair: Bool = false
     ) async -> Bool {
-        let candidates = items.filter(VaultCloudAssetDownloadPolicy.needsLocalPreview)
+        let candidates = items.filter(needsMediaPreviewRepair)
         guard !candidates.isEmpty else { return false }
 
         var repairedCount = 0
         var generatedPreviewNeedsSync = false
         for item in candidates {
-            if await downloadThumbnailIfAvailable(for: item, sync: sync) {
+            var repairedItem = false
+            var generatedLocalChange = false
+
+            if VaultCloudAssetDownloadPolicy.needsLocalPreview(item) {
+                if await downloadThumbnailIfAvailable(for: item, sync: sync) {
+                    repairedItem = true
+                } else if VaultFileStore.fileExists(path: item.encryptedFilePath),
+                          item.assetState == .local,
+                          let encryptedThumbPath = await makeEncryptedThumbnail(for: item) {
+                    item.encryptedThumbPath = encryptedThumbPath
+                    repairedItem = true
+                    generatedLocalChange = true
+                }
+            }
+
+            if VaultMediaPreviewRepairPolicy.needsVideoDuration(
+                kind: item.kind,
+                storedDuration: metadata(for: item)?.mediaDurationSeconds,
+                hasLocalOriginal: item.assetState == .local && VaultFileStore.fileExists(path: item.encryptedFilePath)
+            ), await repairMissingVideoDuration(for: item) {
+                repairedItem = true
+                generatedLocalChange = true
+            }
+
+            if generatedLocalChange {
+                item.updatedAt = Date()
+                if syncAfterRepair {
+                    item.localRevision += 1
+                    item.syncStatus = .pending
+                    generatedPreviewNeedsSync = true
+                }
+                if item.syncStatus == .synced {
+                    releaseLocalOriginalIfBackedUp(for: item)
+                }
+            }
+            if repairedItem {
                 repairedCount += 1
-                continue
             }
-
-            guard VaultFileStore.fileExists(path: item.encryptedFilePath), item.assetState == .local else {
-                continue
-            }
-
-            guard VaultCloudAssetDownloadPolicy.needsLocalPreview(item),
-                  let encryptedThumbPath = await makeEncryptedThumbnail(for: item) else {
-                continue
-            }
-            item.encryptedThumbPath = encryptedThumbPath
-            item.updatedAt = Date()
-            if syncAfterRepair {
-                item.localRevision += 1
-                item.syncStatus = .pending
-                generatedPreviewNeedsSync = true
-            }
-            if item.syncStatus == .synced {
-                releaseLocalOriginalIfBackedUp(for: item)
-            }
-            repairedCount += 1
         }
 
         if repairedCount > 0 {
@@ -1462,6 +1980,41 @@ final class VaultStore: ObservableObject {
             objectWillChange.send()
         }
         return generatedPreviewNeedsSync
+    }
+
+    private func repairMissingVideoDuration(for item: VaultItem) async -> Bool {
+        do {
+            let rootKey = try VaultCryptoService.ensureRootKey()
+            let fileKey = try VaultCryptoService.unwrapFileKey(item.encryptedFileKey, rootKey: rootKey)
+            guard var metadata = try? VaultCryptoService.decryptCodable(
+                VaultMetadata.self,
+                from: item.encryptedMetadata,
+                using: rootKey
+            ), metadata.mediaDurationSeconds == nil else {
+                return false
+            }
+            let encryptedFilePath = item.encryptedFilePath
+            let kind = item.kind
+            let preferredExtension = metadata.originalExtension
+            let duration = try await Task.detached(priority: .utility) {
+                let encryptedFile = try VaultFileStore.read(path: encryptedFilePath)
+                let data = try VaultCryptoService.decrypt(encryptedFile, using: fileKey)
+                return await VaultImportArtifactBuilder.mediaDurationSeconds(
+                    from: data,
+                    kind: kind,
+                    preferredExtension: preferredExtension
+                )
+            }.value
+            guard let duration else {
+                return false
+            }
+            metadata.mediaDurationSeconds = duration
+            item.encryptedMetadata = try VaultCryptoService.encryptCodable(metadata, using: rootKey)
+            return true
+        } catch {
+            logger.error("Video duration repair failed for item \(item.id, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            return false
+        }
     }
 
     @discardableResult
@@ -1813,8 +2366,20 @@ final class VaultStore: ObservableObject {
         let encryptedVaultName = record["encryptedVaultName"] as? Data ?? Data()
         let rootKey = VaultCryptoService.hasRootKey() ? try? VaultCryptoService.ensureRootKey() : nil
         let canOpenWithLocalRootKey = rootKey.flatMap { try? VaultCryptoService.decryptString(encryptedVaultName, using: $0) } != nil
-        guard canOpenWithLocalRootKey || VaultCryptoService.canRestoreRootKey(from: package) else {
+        let canRestoreFromPackage = VaultCryptoService.canRestoreRootKey(from: package)
+        guard canOpenWithLocalRootKey || canRestoreFromPackage else {
             return false
+        }
+
+        if VaultRemoteRootKeyPolicy.shouldRestorePackagedKey(
+            localKeyOpensManifest: canOpenWithLocalRootKey,
+            recoveryKeyOpensPackage: canRestoreFromPackage
+        ) {
+            let restoredKey = try VaultCryptoService.restoreRootKey(
+                from: package,
+                recoveryKey: VaultCryptoService.currentRecoveryKey()
+            )
+            _ = try VaultCryptoService.decryptString(encryptedVaultName, using: restoredKey)
         }
 
         let manifest = makeManifest(from: record)
@@ -1825,6 +2390,7 @@ final class VaultStore: ObservableObject {
 
     private func pullCloudFolders(context: ModelContext, sync: CloudKitSyncService) async {
         do {
+            let rootKey = try VaultCryptoService.ensureRootKey()
             let remoteRecords = await sync.fetchRemoteFolders()
             let existingFolders = try context.fetch(FetchDescriptor<VaultFolder>())
             var foldersById = Dictionary(uniqueKeysWithValues: existingFolders.map { ($0.id, $0) })
@@ -1832,6 +2398,9 @@ final class VaultStore: ObservableObject {
             for record in remoteRecords {
                 guard let folderId = record["folderId"] as? String else { continue }
                 let encryptedName = record["encryptedName"] as? Data ?? Data()
+                guard (try? VaultCryptoService.decryptString(encryptedName, using: rootKey)) != nil else {
+                    continue
+                }
                 let sortOrder = record["sortOrder"] as? Int ?? 0
                 let updatedAt = record["updatedAt"] as? Date ?? Date()
                 let deletedAt = record["deletedAt"] as? Date
@@ -1867,6 +2436,53 @@ final class VaultStore: ObservableObject {
         } catch {
             lastError = error.localizedDescription
         }
+    }
+
+    private func validateLocalStoreForRecoveredRootKey(
+        _ rootKey: SymmetricKey,
+        context: ModelContext
+    ) throws -> VaultRecoveryLocalCleanup {
+        let items = try context.fetch(FetchDescriptor<VaultItem>())
+        let unreadableItems = items.filter {
+            VaultCloudMetadataInspector.classify($0.encryptedMetadata, using: rootKey) != .readable
+        }
+        guard unreadableItems.allSatisfy({ $0.cloudRecordName?.isEmpty == false && $0.syncStatus == .synced }) else {
+            throw NSError(
+                domain: "VaultRecovery",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: L.string("This device has local changes from another vault that are not backed up. Recovery was stopped without changing the encryption key.")]
+            )
+        }
+
+        let folders = try context.fetch(FetchDescriptor<VaultFolder>())
+        let unreadableFolders = folders.filter {
+            (try? VaultCryptoService.decryptString($0.encryptedName, using: rootKey)) == nil
+        }
+        guard unreadableFolders.allSatisfy({ $0.cloudRecordName?.isEmpty == false && $0.syncStatus == .synced }) else {
+            throw NSError(
+                domain: "VaultRecovery",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: L.string("This device has local folder changes from another vault that are not backed up. Recovery was stopped without changing the encryption key.")]
+            )
+        }
+
+        let notes = try context.fetch(FetchDescriptor<DecoyNoteRecord>())
+        let unreadableNotes = notes.filter {
+            (try? VaultCryptoService.decryptCodable(DecoyNotePayload.self, from: $0.encryptedPayload, using: rootKey)) == nil
+        }
+        guard unreadableNotes.allSatisfy({ $0.cloudRecordName?.isEmpty == false && $0.syncStatus == .synced }) else {
+            throw NSError(
+                domain: "VaultRecovery",
+                code: 3,
+                userInfo: [NSLocalizedDescriptionKey: L.string("This device has local note changes from another vault that are not backed up. Recovery was stopped without changing the encryption key.")]
+            )
+        }
+
+        return VaultRecoveryLocalCleanup(
+            items: unreadableItems,
+            folders: unreadableFolders,
+            notes: unreadableNotes
+        )
     }
 
     private func makeLocalManifest(rootKey: SymmetricKey) throws -> VaultManifest {

@@ -78,7 +78,8 @@ struct VaultHomeHeader: View {
 
             // 暗格入口：连续点击标题和右侧按钮之间的空白区域三次。
             Color.clear
-                .frame(maxWidth: .infinity, minHeight: 44)
+                .frame(maxWidth: .infinity)
+                .frame(height: 44)
                 .contentShape(Rectangle())
                 .background(
                     GeometryReader { proxy in
@@ -108,7 +109,7 @@ struct VaultHomeHeader: View {
                 action: importAction
             )
         }
-        .frame(minHeight: 44)
+        .frame(height: 44)
         .animation(.smooth(duration: 0.18), value: contextStyle)
         .onDisappear {
             hiddenTapResetTask?.cancel()

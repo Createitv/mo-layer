@@ -406,18 +406,25 @@ enum ImportService {
         vaultStore: VaultStore,
         sync: CloudKitSyncService,
         source: String = "Files",
+        originalName: String? = nil,
+        mimeType: String? = nil,
+        typeIdentifier: String? = nil,
         folderId: String? = nil,
         syncAfterImport: Bool = true,
         saveImmediately: Bool = true
     ) async -> VaultImportResult {
         guard let data = await loadFileData(from: url) else { return .failed }
-        let type = UTType(filenameExtension: url.pathExtension)
-        let kind = kind(for: type, fileExtension: url.pathExtension)
+        let resolvedOriginalName = sanitizedFileName(originalName ?? url.lastPathComponent)
+        let fileExtension = preferredFileExtension(originalName: resolvedOriginalName, fallbackURL: url)
+        let declaredType = typeIdentifier.flatMap { UTType($0) }
+        let resourceType = (try? url.resourceValues(forKeys: [.contentTypeKey]))?.contentType
+        let type = declaredType ?? resourceType ?? UTType(filenameExtension: fileExtension) ?? UTType(filenameExtension: url.pathExtension)
+        let kind = kind(for: type, fileExtension: fileExtension)
         let captureLocation = await captureLocation(from: data, kind: kind)
         return await vaultStore.importData(
             data,
-            originalName: url.lastPathComponent,
-            mimeType: type?.preferredMIMEType ?? "application/octet-stream",
+            originalName: resolvedOriginalName,
+            mimeType: mimeType ?? type?.preferredMIMEType ?? "application/octet-stream",
             source: source,
             kind: kind,
             context: context,
@@ -590,7 +597,8 @@ enum ImportService {
         for item in pending {
             guard !Task.isCancelled else { break }
             let type = UTType(item.typeIdentifier) ?? UTType(filenameExtension: item.fileURL.pathExtension)
-            let kind = kind(for: type, fileExtension: item.fileURL.pathExtension)
+            let fileExtension = preferredFileExtension(originalName: item.originalName, fallbackURL: item.fileURL)
+            let kind = kind(for: type, fileExtension: fileExtension)
             progress?(.currentItem(VaultImportProgressItem(
                 displayName: item.originalName,
                 kind: kind,
@@ -604,6 +612,9 @@ enum ImportService {
                 vaultStore: vaultStore,
                 sync: sync,
                 source: "Share Extension",
+                originalName: item.originalName,
+                mimeType: item.mimeType,
+                typeIdentifier: item.typeIdentifier,
                 folderId: folderId,
                 syncAfterImport: syncAfterImport,
                 saveImmediately: false
@@ -882,12 +893,22 @@ enum ImportService {
         }
     }
 
-    private static func sanitizedFileName(_ value: String) -> String {
+    static func sanitizedFileName(_ value: String) -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "\(UUID().uuidString).dat" }
         return trimmed
             .components(separatedBy: CharacterSet(charactersIn: "/:"))
             .joined(separator: "-")
+    }
+
+    static func preferredFileExtension(originalName: String?, fallbackURL: URL) -> String {
+        let originalExtension = ((originalName ?? "") as NSString)
+            .pathExtension
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if !originalExtension.isEmpty {
+            return originalExtension
+        }
+        return fallbackURL.pathExtension
     }
 }
 

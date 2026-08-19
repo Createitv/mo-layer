@@ -699,6 +699,26 @@ final class CloudKitSyncService: ObservableObject {
         return latest
     }
 
+    func fetchRemoteManifestCandidates() async -> [CKRecord] {
+        guard await ensureCloudAvailable() else { return [] }
+
+        state = .syncing
+        let records = Self.userRecords(from: await fetchRecords(
+            recordType: "VaultManifest",
+            desiredKeys: [
+                "vaultId",
+                "schemaVersion",
+                "encryptedVaultName",
+                "encryptedRootKeyPackage",
+                "updatedAt"
+            ]
+        ))
+        state = .synced(Date())
+        lastSyncError = nil
+        appendLog("Fetched VaultManifest candidates count=\(records.count)")
+        return records
+    }
+
     func syncItem(_ item: VaultItem) async -> Bool {
         guard await ensureCloudAvailable() else {
             item.syncStatus = .pending

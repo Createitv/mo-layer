@@ -3,6 +3,8 @@ import UIKit
 import OSLog
 
 enum MediaGridLayout {
+    static let albumColumnCounts = [1, 3, 5, 7]
+    static let defaultAlbumColumnCount = 3
     static let defaultScale: CGFloat = 1
     static let minimumScale: CGFloat = 0.16
     static let maximumScale: CGFloat = 3.25
@@ -19,6 +21,31 @@ enum MediaGridLayout {
         min(max(scale, minimumScale), maximumScale)
     }
 
+    static func clampedAlbumColumnCount(_ proposed: Int) -> Int {
+        albumColumnCounts.min(by: { abs($0 - proposed) < abs($1 - proposed) }) ?? defaultAlbumColumnCount
+    }
+
+    static func settledAlbumColumnCount(startingColumnCount: Int, gestureScale: CGFloat) -> Int {
+        let start = clampedAlbumColumnCount(startingColumnCount)
+        guard gestureScale.isFinite, gestureScale > 0 else { return start }
+        let proposed = CGFloat(start) / gestureScale
+        return albumColumnCounts.min { lhs, rhs in
+            let lhsDistance = abs(CGFloat(lhs) - proposed)
+            let rhsDistance = abs(CGFloat(rhs) - proposed)
+            if lhsDistance == rhsDistance {
+                return gestureScale < 1 ? lhs > rhs : lhs < rhs
+            }
+            return lhsDistance < rhsDistance
+        } ?? start
+    }
+
+    static func albumTileSize(for containerWidth: CGFloat, columnCount: Int) -> CGFloat {
+        let width = max(containerWidth, minimumTileSize)
+        let columns = clampedAlbumColumnCount(columnCount)
+        let spacingWidth = spacing * CGFloat(max(columns - 1, 0))
+        return max(floor((width - spacingWidth) / CGFloat(columns)), minimumTileSize)
+    }
+
     static func tileMinimum(for containerWidth: CGFloat, scale: CGFloat) -> CGFloat {
         let width = max(containerWidth, minimumTileSize)
         let scaledTile = round(baseTileMinimum * clampedScale(scale))
@@ -29,6 +56,14 @@ enum MediaGridLayout {
         let tile = tileMinimum(for: containerWidth, scale: scale)
         let availableWidth = max(containerWidth + spacing, tile)
         return max(1, Int(floor(availableWidth / (tile + spacing))))
+    }
+
+    static func filledTileSize(for containerWidth: CGFloat, scale: CGFloat) -> CGFloat {
+        let width = max(containerWidth, minimumTileSize)
+        let columns = columnCount(for: width, scale: scale)
+        let spacingWidth = spacing * CGFloat(max(columns - 1, 0))
+        let availableWidth = max(width - spacingWidth, minimumTileSize)
+        return max(floor(availableWidth / CGFloat(columns)), minimumTileSize)
     }
 
     static func tileInteractionScale(effectiveScale: CGFloat, committedScale: CGFloat) -> CGFloat {
@@ -82,16 +117,29 @@ enum MediaGridLayout {
 
 enum MediaGridScaleStorage {
     static let albumKey = "vault.mediaGridScale.album"
+    static let albumColumnsKey = "vault.mediaGridColumns.album"
     static let audioKey = "vault.mediaGridScale.audio"
     static let documentsKey = "vault.mediaGridScale.documents"
 
     static let defaultStoredScale = Double(MediaGridLayout.defaultScale)
 }
 
+enum AlbumFavoriteFilter {
+    nonisolated static func items<Item>(
+        from items: [Item],
+        showsFavoritesOnly: Bool,
+        isFavorite: KeyPath<Item, Bool>
+    ) -> [Item] {
+        guard showsFavoritesOnly else { return items }
+        return items.filter { $0[keyPath: isFavorite] }
+    }
+}
+
 struct AlbumGridItemRenderState: Equatable {
     let id: String
     let thumbnailIdentity: String
     let statusIdentity: String
+    let isFavorite: Bool
     let isSelected: Bool
     let isSelectionMode: Bool
 
@@ -99,12 +147,14 @@ struct AlbumGridItemRenderState: Equatable {
         id: String,
         thumbnailIdentity: String,
         statusIdentity: String,
+        isFavorite: Bool = false,
         isSelected: Bool,
         isSelectionMode: Bool = false
     ) {
         self.id = id
         self.thumbnailIdentity = thumbnailIdentity
         self.statusIdentity = statusIdentity
+        self.isFavorite = isFavorite
         self.isSelected = isSelected
         self.isSelectionMode = isSelectionMode
     }
@@ -113,6 +163,7 @@ struct AlbumGridItemRenderState: Equatable {
 enum AlbumGridUpdatePlan: Equatable {
     case none
     case reloadAll
+    case append(Range<Int>)
     case reconfigure([Int])
 }
 
@@ -122,9 +173,31 @@ enum AlbumGridUpdatePolicy {
         next: [AlbumGridItemRenderState]
     ) -> AlbumGridUpdatePlan {
         guard let previous else { return .reloadAll }
-        guard previous.map(\.id) == next.map(\.id) else { return .reloadAll }
+        let previousIDs = previous.map(\.id)
+        let nextIDs = next.map(\.id)
+        if next.count > previous.count, Array(nextIDs.prefix(previous.count)) == previousIDs {
+            return .append(previous.count..<next.count)
+        }
+        guard previousIDs == nextIDs else { return .reloadAll }
         let changedIndices = next.indices.filter { previous[$0] != next[$0] }
         return changedIndices.isEmpty ? .none : .reconfigure(changedIndices)
+    }
+}
+
+enum AlbumGridZoomAnchorPolicy {
+    static func contentOffset(
+        itemCenterY: CGFloat,
+        viewportAnchorY: CGFloat,
+        minimumOffsetY: CGFloat,
+        maximumOffsetY: CGFloat
+    ) -> CGFloat {
+        min(max(itemCenterY - viewportAnchorY, minimumOffsetY), maximumOffsetY)
+    }
+}
+
+enum AlbumGridVisibleItemsReportPolicy {
+    nonisolated static func shouldReport(isDragging: Bool, isDecelerating: Bool) -> Bool {
+        !isDragging && !isDecelerating
     }
 }
 
@@ -139,7 +212,7 @@ enum AlbumVideoDurationFormatter {
         if compact {
             if hours > 0 { return "\(hours)h" }
             if minutes > 0 { return "\(minutes)m" }
-            return "1m"
+            return "\(max(remainingSeconds, 1))s"
         }
 
         if hours > 0 {
@@ -149,10 +222,77 @@ enum AlbumVideoDurationFormatter {
     }
 }
 
+enum AlbumVideoDurationPresentation: Equatable {
+    case full
+    case compact
+    case iconOnly
+}
+
+enum AlbumVideoDurationLayout {
+    nonisolated static func presentation(for tileWidth: CGFloat) -> AlbumVideoDurationPresentation {
+        if tileWidth >= 64 { return .full }
+        if tileWidth >= 42 { return .compact }
+        return .iconOnly
+    }
+}
+
 private let mediaGridPerformanceLogger = Logger(
     subsystem: Bundle.main.bundleIdentifier ?? "app.landlady.www.privacy",
     category: "MediaGridPerformance"
 )
+
+private final class AlbumInteractionFrameSampler {
+    private var displayLink: CADisplayLink?
+    private var label = ""
+    private var startedAt: CFTimeInterval = 0
+    private var previousTimestamp: CFTimeInterval?
+    private var frameCount = 0
+    private var hitchCount = 0
+    private var maxFrameDuration: CFTimeInterval = 0
+
+    func start(label: String) {
+        self.label = label
+        startedAt = CACurrentMediaTime()
+        previousTimestamp = nil
+        frameCount = 0
+        hitchCount = 0
+        maxFrameDuration = 0
+        if displayLink == nil {
+            let link = CADisplayLink(target: self, selector: #selector(sampleFrame(_:)))
+            link.add(to: .main, forMode: .common)
+            displayLink = link
+        }
+        displayLink?.isPaused = false
+    }
+
+    func finish(itemCount: Int) {
+        guard startedAt > 0 else { return }
+        displayLink?.isPaused = true
+        let duration = max(CACurrentMediaTime() - startedAt, 0.001)
+        let fps = Double(frameCount) / duration
+        mediaGridPerformanceLogger.info(
+            "Album interaction kind=\(self.label, privacy: .public) itemCount=\(itemCount, privacy: .public) fps=\(String(format: "%.1f", fps), privacy: .public) hitches=\(self.hitchCount, privacy: .public) maxFrameMs=\(String(format: "%.1f", self.maxFrameDuration * 1000), privacy: .public)"
+        )
+        startedAt = 0
+        previousTimestamp = nil
+    }
+
+    @objc private func sampleFrame(_ link: CADisplayLink) {
+        defer { previousTimestamp = link.timestamp }
+        guard let previousTimestamp else { return }
+        let frameDuration = link.timestamp - previousTimestamp
+        frameCount += 1
+        maxFrameDuration = max(maxFrameDuration, frameDuration)
+        let expectedDuration = max(link.duration, 1.0 / 120.0)
+        if frameDuration > expectedDuration * 1.5 {
+            hitchCount += 1
+        }
+    }
+
+    deinit {
+        displayLink?.invalidate()
+    }
+}
 
 struct ZoomableMediaGrid<Data: RandomAccessCollection, Content: View>: View where Data.Element: Identifiable, Data.Element.ID: Hashable {
     let items: Data
@@ -256,7 +396,7 @@ struct ZoomableMediaGrid<Data: RandomAccessCollection, Content: View>: View wher
 
 struct AlbumZoomableMediaGrid: UIViewRepresentable {
     let items: [VaultItem]
-    @Binding var scale: CGFloat
+    @Binding var columnCount: Int
     @Binding var contentHeight: CGFloat
     let isSelectionMode: Bool
     let selectedItemIds: Set<String>
@@ -264,6 +404,7 @@ struct AlbumZoomableMediaGrid: UIViewRepresentable {
     let videoDurationProvider: (VaultItem) -> Double?
     let thumbnailProvider: @MainActor (VaultItem) async -> UIImage?
     let visibleItemIDsDidChange: (Set<String>) -> Void
+    let loadMoreAction: () -> Void
     let openAction: (VaultItem) -> Void
     let toggleSelectionAction: (VaultItem) -> Void
     let enterSelectionAction: (VaultItem) -> Void
@@ -280,12 +421,18 @@ struct AlbumZoomableMediaGrid: UIViewRepresentable {
 
         let collectionView = UICollectionView(frame: .zero, collectionViewLayout: layout)
         collectionView.backgroundColor = .clear
+        collectionView.contentInsetAdjustmentBehavior = .never
+        collectionView.contentInset = .zero
+        collectionView.scrollIndicatorInsets = .zero
         collectionView.alwaysBounceVertical = true
         collectionView.isScrollEnabled = true
         collectionView.showsVerticalScrollIndicator = false
         collectionView.showsHorizontalScrollIndicator = false
         collectionView.allowsSelection = true
+        collectionView.isPrefetchingEnabled = true
+        collectionView.accessibilityIdentifier = "vault.album.grid"
         collectionView.dataSource = context.coordinator
+        collectionView.prefetchDataSource = context.coordinator
         collectionView.delegate = context.coordinator
         collectionView.register(AlbumMediaCollectionCell.self, forCellWithReuseIdentifier: AlbumMediaCollectionCell.reuseIdentifier)
 
@@ -319,13 +466,15 @@ struct AlbumZoomableMediaGrid: UIViewRepresentable {
         context.coordinator.updateContentHeight()
     }
 
-    final class Coordinator: NSObject, UICollectionViewDataSource, UICollectionViewDelegate, UIGestureRecognizerDelegate {
+    final class Coordinator: NSObject, UICollectionViewDataSource, UICollectionViewDataSourcePrefetching, UICollectionViewDelegate, UIGestureRecognizerDelegate {
         var parent: AlbumZoomableMediaGrid
         weak var collectionView: UICollectionView?
         weak var pinchRecognizer: UIPinchGestureRecognizer?
         weak var selectionPanRecognizer: UIPanGestureRecognizer?
-        private var pinchStartScale: CGFloat = MediaGridLayout.defaultScale
-        private var transientScale: CGFloat?
+        private var pinchStartColumnCount = MediaGridLayout.defaultAlbumColumnCount
+        private var transientColumnCount: Int?
+        private var pinchAnchorIndexPath: IndexPath?
+        private var pinchViewportAnchorY: CGFloat = 0
         private var isPinching = false
         private var selectedDuringPan = Set<String>()
         private var selectedDuringLongPress = Set<String>()
@@ -333,9 +482,16 @@ struct AlbumZoomableMediaGrid: UIViewRepresentable {
         private var pendingVisibleItemsReport: DispatchWorkItem?
         private var contentHeightUpdateScheduled = false
         private var renderedItems: [AlbumGridItemRenderState]?
+        private var thumbnailPrefetchTasks: [String: (token: UUID, task: Task<Void, Never>)] = [:]
+        private let interactionFrameSampler = AlbumInteractionFrameSampler()
 
         init(_ parent: AlbumZoomableMediaGrid) {
             self.parent = parent
+        }
+
+        deinit {
+            pendingVisibleItemsReport?.cancel()
+            thumbnailPrefetchTasks.values.forEach { $0.task.cancel() }
         }
 
         func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int {
@@ -356,6 +512,7 @@ struct AlbumZoomableMediaGrid: UIViewRepresentable {
                 thumbnail: parent.cachedThumbnailProvider(item),
                 videoDuration: parent.videoDurationProvider(item),
                 thumbnailProvider: { await thumbnailProvider(item) },
+                isFavorite: item.isFavorite,
                 isSelectionMode: parent.isSelectionMode,
                 isSelected: parent.selectedItemIds.contains(item.id)
             )
@@ -370,6 +527,7 @@ struct AlbumZoomableMediaGrid: UIViewRepresentable {
             guard parent.items.indices.contains(indexPath.item) else { return }
             visibleItemIDs.insert(parent.items[indexPath.item].id)
             scheduleVisibleItemsReport()
+            requestNextPageIfNeeded(maxRequestedIndex: indexPath.item)
         }
 
         func collectionView(
@@ -395,22 +553,81 @@ struct AlbumZoomableMediaGrid: UIViewRepresentable {
             }
         }
 
+        func collectionView(_ collectionView: UICollectionView, prefetchItemsAt indexPaths: [IndexPath]) {
+            if let maxRequestedIndex = indexPaths.map(\.item).max() {
+                requestNextPageIfNeeded(maxRequestedIndex: maxRequestedIndex)
+            }
+            for indexPath in indexPaths where parent.items.indices.contains(indexPath.item) {
+                let item = parent.items[indexPath.item]
+                guard parent.cachedThumbnailProvider(item) == nil,
+                      thumbnailPrefetchTasks[item.id] == nil else {
+                    continue
+                }
+                let provider = parent.thumbnailProvider
+                let token = UUID()
+                let task = Task { @MainActor [weak self] in
+                    _ = await provider(item)
+                    guard self?.thumbnailPrefetchTasks[item.id]?.token == token else { return }
+                    self?.thumbnailPrefetchTasks[item.id] = nil
+                }
+                thumbnailPrefetchTasks[item.id] = (token, task)
+            }
+        }
+
+        func collectionView(_ collectionView: UICollectionView, cancelPrefetchingForItemsAt indexPaths: [IndexPath]) {
+            for indexPath in indexPaths where parent.items.indices.contains(indexPath.item) {
+                let itemID = parent.items[indexPath.item].id
+                thumbnailPrefetchTasks.removeValue(forKey: itemID)?.task.cancel()
+            }
+        }
+
+        func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+            pendingVisibleItemsReport?.cancel()
+            pendingVisibleItemsReport = nil
+            interactionFrameSampler.start(label: "scroll")
+        }
+
+        func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+            guard !decelerate else { return }
+            interactionFrameSampler.finish(itemCount: parent.items.count)
+            scheduleVisibleItemsReport()
+        }
+
+        func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+            interactionFrameSampler.finish(itemCount: parent.items.count)
+            scheduleVisibleItemsReport()
+        }
+
         @objc func handlePinch(_ recognizer: UIPinchGestureRecognizer) {
             guard let collectionView else { return }
             switch recognizer.state {
             case .began:
                 isPinching = true
-                pinchStartScale = parent.scale
-                transientScale = parent.scale
+                pinchStartColumnCount = MediaGridLayout.clampedAlbumColumnCount(parent.columnCount)
+                transientColumnCount = pinchStartColumnCount
+                let location = recognizer.location(in: collectionView)
+                pinchAnchorIndexPath = collectionView.indexPathForItem(at: location)
+                    ?? collectionView.indexPathsForVisibleItems.min(by: {
+                        abs((collectionView.layoutAttributesForItem(at: $0)?.center.y ?? 0) - location.y) <
+                            abs((collectionView.layoutAttributesForItem(at: $1)?.center.y ?? 0) - location.y)
+                    })
+                pinchViewportAnchorY = location.y - collectionView.contentOffset.y
+                interactionFrameSampler.start(label: "pinch")
             case .changed:
-                transientScale = MediaGridLayout.clampedScale(pinchStartScale * recognizer.scale)
-                applyInteractiveCellScale()
+                transientColumnCount = MediaGridLayout.settledAlbumColumnCount(
+                    startingColumnCount: pinchStartColumnCount,
+                    gestureScale: recognizer.scale
+                )
+                applyInteractiveCellScale(gestureScale: recognizer.scale)
             case .ended, .cancelled, .failed:
-                let proposedScale = transientScale ?? parent.scale
-                let snapped = MediaGridLayout.snappedScale(proposedScale, containerWidth: collectionView.bounds.width)
-                transientScale = snapped
+                let settledColumnCount = MediaGridLayout.settledAlbumColumnCount(
+                    startingColumnCount: pinchStartColumnCount,
+                    gestureScale: recognizer.scale
+                )
+                transientColumnCount = settledColumnCount
                 isPinching = false
                 let startedAt = CFAbsoluteTimeGetCurrent()
+                parent.columnCount = settledColumnCount
                 UIView.animate(
                     withDuration: 0.24,
                     delay: 0,
@@ -421,14 +638,16 @@ struct AlbumZoomableMediaGrid: UIViewRepresentable {
                     self.clearInteractiveCellScale()
                     self.applyLayout(animated: false)
                     collectionView.layoutIfNeeded()
+                    self.restorePinchAnchor()
                 } completion: { _ in
-                    self.parent.scale = snapped
-                    self.transientScale = nil
+                    self.transientColumnCount = nil
+                    self.pinchAnchorIndexPath = nil
                     self.applyLayout(animated: false)
                     self.updateContentHeight()
+                    self.interactionFrameSampler.finish(itemCount: self.parent.items.count)
                     let elapsedMs = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
                     if elapsedMs > 16 {
-                        mediaGridPerformanceLogger.info("Album pinch settled scale=\(snapped, privacy: .public) itemCount=\(self.parent.items.count, privacy: .public) elapsedMs=\(String(format: "%.1f", elapsedMs), privacy: .public)")
+                        mediaGridPerformanceLogger.info("Album pinch settled columns=\(settledColumnCount, privacy: .public) itemCount=\(self.parent.items.count, privacy: .public) elapsedMs=\(String(format: "%.1f", elapsedMs), privacy: .public)")
                     }
                 }
             default:
@@ -500,6 +719,12 @@ struct AlbumZoomableMediaGrid: UIViewRepresentable {
                 visibleItemIDs.removeAll(keepingCapacity: true)
                 collectionView.reloadData()
                 scheduleVisibleItemsReport()
+            case let .append(range):
+                reason = "append"
+                renderedItems = nextItems
+                collectionView.performBatchUpdates {
+                    collectionView.insertItems(at: range.map { IndexPath(item: $0, section: 0) })
+                }
             case let .reconfigure(changedIndices):
                 reason = "visible-items"
                 let changedIndexSet = Set(changedIndices)
@@ -510,7 +735,11 @@ struct AlbumZoomableMediaGrid: UIViewRepresentable {
                     collectionView.reconfigureItems(at: visibleChanges)
                 }
             }
-            renderedItems = nextItems
+            if case .append = plan {
+                // The data source count must be updated before the batch insertion.
+            } else {
+                renderedItems = nextItems
+            }
             let elapsedMs = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
             if elapsedMs > 16 {
                 mediaGridPerformanceLogger.info("Album grid update reason=\(reason, privacy: .public) itemCount=\(self.parent.items.count, privacy: .public) elapsedMs=\(String(format: "%.1f", elapsedMs), privacy: .public)")
@@ -523,7 +752,7 @@ struct AlbumZoomableMediaGrid: UIViewRepresentable {
                 return
             }
             let width = max(collectionView.bounds.width, MediaGridLayout.minimumTileSize)
-            let tile = MediaGridLayout.tileMinimum(for: width, scale: currentLayoutScale)
+            let tile = MediaGridLayout.albumTileSize(for: width, columnCount: currentLayoutColumnCount)
             let tileSize = CGSize(width: tile, height: tile)
             guard abs(layout.itemSize.width - tileSize.width) > 0.5 || abs(layout.itemSize.height - tileSize.height) > 0.5 else {
                 return
@@ -561,22 +790,53 @@ struct AlbumZoomableMediaGrid: UIViewRepresentable {
             }
         }
 
-        private var currentLayoutScale: CGFloat {
-            MediaGridLayout.layoutScale(
-                committedScale: parent.scale,
-                proposedScale: transientScale ?? parent.scale,
-                isPinching: isPinching
-            )
+        private var currentLayoutColumnCount: Int {
+            MediaGridLayout.clampedAlbumColumnCount(transientColumnCount ?? parent.columnCount)
         }
 
-        private func applyInteractiveCellScale() {
-            let proposedScale = transientScale ?? parent.scale
-            let visualScale = MediaGridLayout.tileInteractionScale(
-                effectiveScale: proposedScale,
-                committedScale: parent.scale
-            )
+        private func applyInteractiveCellScale(gestureScale: CGFloat) {
+            let visualScale = min(max(1 + (gestureScale - 1) * 0.12, 0.88), 1.12)
             for cell in collectionView?.visibleCells ?? [] {
                 cell.transform = CGAffineTransform(scaleX: visualScale, y: visualScale)
+            }
+        }
+
+        private func restorePinchAnchor() {
+            guard let collectionView,
+                  let pinchAnchorIndexPath,
+                  let attributes = collectionView.layoutAttributesForItem(at: pinchAnchorIndexPath) else {
+                return
+            }
+            let minimumOffsetY = -collectionView.adjustedContentInset.top
+            let maximumOffsetY = max(
+                minimumOffsetY,
+                collectionView.collectionViewLayout.collectionViewContentSize.height
+                    - collectionView.bounds.height
+                    + collectionView.adjustedContentInset.bottom
+            )
+            let offsetY = AlbumGridZoomAnchorPolicy.contentOffset(
+                itemCenterY: attributes.center.y,
+                viewportAnchorY: pinchViewportAnchorY,
+                minimumOffsetY: minimumOffsetY,
+                maximumOffsetY: maximumOffsetY
+            )
+            collectionView.setContentOffset(CGPoint(x: collectionView.contentOffset.x, y: offsetY), animated: false)
+        }
+
+        private func requestNextPageIfNeeded(maxRequestedIndex: Int) {
+            guard let collectionView,
+                  let layout = collectionView.collectionViewLayout as? UICollectionViewFlowLayout else {
+                return
+            }
+            let rowHeight = max(layout.itemSize.height + layout.minimumLineSpacing, 1)
+            let visibleRows = max(Int(ceil(collectionView.bounds.height / rowHeight)), 1)
+            let estimatedVisibleCount = visibleRows * currentLayoutColumnCount
+            if AlbumMediaLoadTriggerPolicy.shouldLoadMore(
+                maxRequestedIndex: maxRequestedIndex,
+                loadedCount: parent.items.count,
+                estimatedVisibleCount: estimatedVisibleCount
+            ) {
+                parent.loadMoreAction()
             }
         }
 
@@ -589,7 +849,13 @@ struct AlbumZoomableMediaGrid: UIViewRepresentable {
         private func scheduleVisibleItemsReport() {
             pendingVisibleItemsReport?.cancel()
             let work = DispatchWorkItem { [weak self] in
-                guard let self else { return }
+                guard let self, let collectionView = self.collectionView,
+                      AlbumGridVisibleItemsReportPolicy.shouldReport(
+                        isDragging: collectionView.isDragging,
+                        isDecelerating: collectionView.isDecelerating
+                      ) else {
+                    return
+                }
                 self.parent.visibleItemIDsDidChange(self.visibleItemIDs)
             }
             pendingVisibleItemsReport = work
@@ -602,6 +868,7 @@ struct AlbumZoomableMediaGrid: UIViewRepresentable {
                     id: item.id,
                     thumbnailIdentity: item.encryptedThumbPath ?? "",
                     statusIdentity: "\(item.kind.rawValue)|\(item.syncStatusRawValue)|\(item.assetStateRawValue)|\(item.updatedAt.timeIntervalSince1970)",
+                    isFavorite: item.isFavorite,
                     isSelected: parent.selectedItemIds.contains(item.id),
                     isSelectionMode: parent.isSelectionMode
                 )
@@ -644,6 +911,7 @@ private final class AlbumMediaCollectionCell: UICollectionViewCell {
     private let mediaBadge = UIImageView()
     private let durationLabel = UILabel()
     private let syncDot = UIView()
+    private let favoriteBadge = UIImageView()
     private let selectionCircle = UIImageView()
     private let selectionBorder = CAShapeLayer()
     private var mediaBadgeWidthConstraint: NSLayoutConstraint?
@@ -655,6 +923,10 @@ private final class AlbumMediaCollectionCell: UICollectionViewCell {
     private var thumbnailTask: Task<Void, Never>?
     private(set) var representedItemID: String?
     private var representedThumbnailIdentity: String?
+    private var representedKind: VaultItemKind?
+    private var representedVideoDuration: Double?
+    private var representedIsFavorite = false
+    private var lastBadgeLayoutWidth: CGFloat = 0
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -678,7 +950,7 @@ private final class AlbumMediaCollectionCell: UICollectionViewCell {
         mediaBadge.contentMode = .center
         mediaBadge.translatesAutoresizingMaskIntoConstraints = false
 
-        durationLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
+        durationLabel.font = .monospacedDigitSystemFont(ofSize: 9, weight: .semibold)
         durationLabel.textColor = .white
         durationLabel.textAlignment = .left
         durationLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -687,6 +959,18 @@ private final class AlbumMediaCollectionCell: UICollectionViewCell {
         mediaBadgeBackground.translatesAutoresizingMaskIntoConstraints = false
 
         syncDot.translatesAutoresizingMaskIntoConstraints = false
+
+        favoriteBadge.image = UIImage(
+            systemName: "heart.fill",
+            withConfiguration: UIImage.SymbolConfiguration(pointSize: 11, weight: .bold)
+        )
+        favoriteBadge.tintColor = .white
+        favoriteBadge.contentMode = .scaleAspectFit
+        favoriteBadge.layer.shadowColor = UIColor.black.cgColor
+        favoriteBadge.layer.shadowOpacity = 0.7
+        favoriteBadge.layer.shadowRadius = 2
+        favoriteBadge.layer.shadowOffset = CGSize(width: 0, height: 1)
+        favoriteBadge.translatesAutoresizingMaskIntoConstraints = false
 
         selectionCircle.tintColor = .systemBlue
         selectionCircle.backgroundColor = UIColor.black.withAlphaComponent(0.45)
@@ -702,6 +986,7 @@ private final class AlbumMediaCollectionCell: UICollectionViewCell {
         mediaBadgeBackground.addSubview(mediaBadge)
         mediaBadgeBackground.addSubview(durationLabel)
         contentView.addSubview(syncDot)
+        contentView.addSubview(favoriteBadge)
         contentView.addSubview(selectionCircle)
 
         let selectionCircleTopConstraint = selectionCircle.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 6)
@@ -712,7 +997,7 @@ private final class AlbumMediaCollectionCell: UICollectionViewCell {
         self.selectionCircleLeadingConstraint = selectionCircleLeadingConstraint
         self.selectionCircleWidthConstraint = selectionCircleWidthConstraint
         self.selectionCircleHeightConstraint = selectionCircleHeightConstraint
-        let mediaBadgeWidthConstraint = mediaBadgeBackground.widthAnchor.constraint(equalToConstant: 28)
+        let mediaBadgeWidthConstraint = mediaBadgeBackground.widthAnchor.constraint(equalToConstant: 22)
         self.mediaBadgeWidthConstraint = mediaBadgeWidthConstraint
 
         NSLayoutConstraint.activate([
@@ -733,11 +1018,11 @@ private final class AlbumMediaCollectionCell: UICollectionViewCell {
             mediaBadgeBackground.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 6),
             mediaBadgeBackground.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -6),
             mediaBadgeWidthConstraint,
-            mediaBadgeBackground.heightAnchor.constraint(equalToConstant: 28),
+            mediaBadgeBackground.heightAnchor.constraint(equalToConstant: 22),
 
             mediaBadge.leadingAnchor.constraint(equalTo: mediaBadgeBackground.leadingAnchor),
             mediaBadge.centerYAnchor.constraint(equalTo: mediaBadgeBackground.centerYAnchor),
-            mediaBadge.widthAnchor.constraint(equalToConstant: 28),
+            mediaBadge.widthAnchor.constraint(equalToConstant: 20),
             mediaBadge.heightAnchor.constraint(equalTo: mediaBadgeBackground.heightAnchor),
 
             durationLabel.leadingAnchor.constraint(equalTo: mediaBadge.trailingAnchor, constant: -1),
@@ -748,6 +1033,11 @@ private final class AlbumMediaCollectionCell: UICollectionViewCell {
             syncDot.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -6),
             syncDot.widthAnchor.constraint(equalToConstant: 7),
             syncDot.heightAnchor.constraint(equalToConstant: 7),
+
+            favoriteBadge.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 6),
+            favoriteBadge.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 6),
+            favoriteBadge.widthAnchor.constraint(equalToConstant: 17),
+            favoriteBadge.heightAnchor.constraint(equalToConstant: 17),
 
             selectionCircleTopConstraint,
             selectionCircleLeadingConstraint,
@@ -771,6 +1061,13 @@ private final class AlbumMediaCollectionCell: UICollectionViewCell {
         selectionBorder.path = UIBezierPath(roundedRect: contentView.bounds, cornerRadius: cornerRadius).cgPath
         mediaBadgeBackground.layer.cornerRadius = mediaBadgeBackground.bounds.height / 2
         syncDot.layer.cornerRadius = syncDot.bounds.width / 2
+        if abs(lastBadgeLayoutWidth - bounds.width) > 0.5 {
+            lastBadgeLayoutWidth = bounds.width
+            if let representedKind {
+                configureMediaBadge(for: representedKind, videoDuration: representedVideoDuration)
+                configureFavorite(isFavorite: representedIsFavorite, isSelectionMode: !selectionCircle.isHidden)
+            }
+        }
         updateSelectionMetrics()
     }
 
@@ -780,6 +1077,10 @@ private final class AlbumMediaCollectionCell: UICollectionViewCell {
         thumbnailTask = nil
         representedItemID = nil
         representedThumbnailIdentity = nil
+        representedKind = nil
+        representedVideoDuration = nil
+        representedIsFavorite = false
+        lastBadgeLayoutWidth = 0
         imageView.image = nil
         placeholderIcon.image = nil
         placeholderLabel.text = nil
@@ -787,8 +1088,9 @@ private final class AlbumMediaCollectionCell: UICollectionViewCell {
         mediaBadge.image = nil
         durationLabel.text = nil
         durationLabel.isHidden = true
-        mediaBadgeWidthConstraint?.constant = 28
+        mediaBadgeWidthConstraint?.constant = 22
         mediaBadgeBackground.backgroundColor = UIColor.black.withAlphaComponent(0.34)
+        favoriteBadge.isHidden = true
         selectionCircle.image = nil
         selectionCircle.isHidden = true
         selectionBorder.strokeColor = UIColor.clear.cgColor
@@ -799,6 +1101,7 @@ private final class AlbumMediaCollectionCell: UICollectionViewCell {
         thumbnail: UIImage?,
         videoDuration: Double?,
         thumbnailProvider: @escaping @MainActor () async -> UIImage?,
+        isFavorite: Bool,
         isSelectionMode: Bool,
         isSelected: Bool
     ) {
@@ -811,6 +1114,9 @@ private final class AlbumMediaCollectionCell: UICollectionViewCell {
         }
         representedItemID = item.id
         representedThumbnailIdentity = thumbnailIdentity
+        representedKind = item.kind
+        representedVideoDuration = videoDuration
+        representedIsFavorite = isFavorite
 
         if let thumbnail {
             thumbnailTask?.cancel()
@@ -839,6 +1145,7 @@ private final class AlbumMediaCollectionCell: UICollectionViewCell {
         configureMediaBadge(for: item.kind, videoDuration: videoDuration)
         syncDot.backgroundColor = syncDotColor(for: item.syncStatus)
         configureSelection(isSelectionMode: isSelectionMode, isSelected: isSelected)
+        configureFavorite(isFavorite: isFavorite, isSelectionMode: isSelectionMode)
     }
 
     private func showThumbnail(_ thumbnail: UIImage) {
@@ -876,14 +1183,18 @@ private final class AlbumMediaCollectionCell: UICollectionViewCell {
             mediaBadge.image = UIImage(systemName: "play.fill")
             mediaBadgeBackground.isHidden = false
             mediaBadgeBackground.backgroundColor = UIColor.black.withAlphaComponent(0.38)
-            if let videoDuration {
-                durationLabel.text = AlbumVideoDurationFormatter.text(for: videoDuration, compact: bounds.width < 62)
+            let presentation = AlbumVideoDurationLayout.presentation(for: bounds.width)
+            if let videoDuration, presentation != .iconOnly {
+                let compact = presentation == .compact
+                durationLabel.font = .monospacedDigitSystemFont(ofSize: compact ? 8 : 9, weight: .semibold)
+                durationLabel.text = AlbumVideoDurationFormatter.text(for: videoDuration, compact: compact)
                 durationLabel.isHidden = false
-                mediaBadgeWidthConstraint?.constant = bounds.width < 62 ? 44 : 64
+                let requestedWidth = 20 + durationLabel.intrinsicContentSize.width + 7
+                mediaBadgeWidthConstraint?.constant = min(max(requestedWidth, 34), max(bounds.width - 8, 22))
             } else {
                 durationLabel.text = nil
                 durationLabel.isHidden = true
-                mediaBadgeWidthConstraint?.constant = 28
+                mediaBadgeWidthConstraint?.constant = 22
             }
         case .livePhoto:
             mediaBadge.image = UIImage(systemName: "livephoto")
@@ -891,13 +1202,17 @@ private final class AlbumMediaCollectionCell: UICollectionViewCell {
             mediaBadgeBackground.backgroundColor = .clear
             durationLabel.text = nil
             durationLabel.isHidden = true
-            mediaBadgeWidthConstraint?.constant = 28
+            mediaBadgeWidthConstraint?.constant = 22
         default:
             mediaBadgeBackground.isHidden = true
             durationLabel.text = nil
             durationLabel.isHidden = true
-            mediaBadgeWidthConstraint?.constant = 28
+            mediaBadgeWidthConstraint?.constant = 22
         }
+    }
+
+    private func configureFavorite(isFavorite: Bool, isSelectionMode: Bool) {
+        favoriteBadge.isHidden = !isFavorite || isSelectionMode || bounds.width < 34
     }
 
     private func syncDotColor(for status: VaultSyncStatus) -> UIColor {
