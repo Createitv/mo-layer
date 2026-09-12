@@ -234,8 +234,8 @@ enum AlbumVideoDurationLayout {
     }
 
     static func metrics(tileWidth: CGFloat, duration: Double?) -> Metrics {
-        let inset = min(max(tileWidth * 0.035, 2), 8)
-        let availableWidth = max(tileWidth - inset * 2, 1)
+        var inset = min(max(tileWidth * 0.035, 2), 8)
+        var availableWidth = max(tileWidth - inset * 2, 1)
         let font = UIFont.monospacedDigitSystemFont(ofSize: min(max(tileWidth * 0.1, 10), 15), weight: .semibold)
         let iconPointSize = min(max(tileWidth * 0.085, 6), 14)
         var iconWidth = iconPointSize + 3
@@ -250,6 +250,10 @@ enum AlbumVideoDurationLayout {
         // Keep the duration readable even when a long clip has a very narrow tile.
         if textWidth(text) + iconWidth + inset > availableWidth {
             iconWidth = 0
+        }
+        if textWidth(text) + inset > availableWidth {
+            inset = max(0, min(inset, (tileWidth - textWidth(text)) / 3))
+            availableWidth = max(tileWidth - inset * 2, 1)
         }
         return Metrics(
             text: text,

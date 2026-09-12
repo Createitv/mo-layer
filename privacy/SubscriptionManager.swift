@@ -496,7 +496,7 @@ final class SubscriptionManager: NSObject, ObservableObject {
     private func applyDeveloperAccessIfNeeded() -> Bool {
         guard Self.grantsDeveloperAccessInDebug else { return false }
         isPro = true
-        statusText = L.string("Developer Access")
+        statusText = restoreFeedback?.message ?? L.string("Developer Access")
         activeProductIdentifier = activeProductIdentifier ?? Self.lifetime
         activeExpirationDate = nil
         return true

@@ -4119,14 +4119,14 @@ struct VaultFileDisplayDescriptor {
             icon = "text.alignleft"
             label = "Markdown"
             tint = AppTheme.primary
-        } else if ["txt", "json", "xml", "yaml", "yml", "log"].contains(ext) || mime.hasPrefix("text/") {
-            icon = "doc.plaintext.fill"
-            label = ext.isEmpty ? L.string("Text") : ext.uppercased()
-            tint = AppTheme.secondaryText
         } else if ["swift", "js", "ts", "tsx", "jsx", "html", "css", "py", "java", "kt", "c", "cpp", "h", "m", "mm", "php", "rb", "go", "rs", "sh", "sql"].contains(ext) {
             icon = "curlybraces"
             label = ext.uppercased()
             tint = AppTheme.ink
+        } else if ["txt", "json", "xml", "yaml", "yml", "log"].contains(ext) || mime.hasPrefix("text/") {
+            icon = "doc.plaintext.fill"
+            label = ext.isEmpty ? L.string("Text") : ext.uppercased()
+            tint = AppTheme.secondaryText
         } else if kind == .archive || ["zip", "rar", "7z", "tar", "gz", "tgz", "bz2", "xz", "jar", "ipa", "apk"].contains(ext) || mime.contains("zip") || mime.contains("archive") || mime.contains("compressed") {
             icon = "archivebox.fill"
             label = ext.isEmpty ? L.string("Archive") : ext.uppercased()
