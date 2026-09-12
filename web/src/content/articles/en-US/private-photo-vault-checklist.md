@@ -6,7 +6,7 @@ pageSlug: "private-photo-vault-checklist"
 translationKey: "private-photo-vault-checklist"
 category: "privacy"
 keywords: ["private photo vault checklist", "choose private vault app", "secure photo vault iPhone"]
-updatedAt: "2026-06-05"
+updatedAt: "2026-09-12"
 ---
 
 # Private photo vault checklist before you trust an app
@@ -33,7 +33,7 @@ Device changes happen. A vault should have a recovery path that matches the sens
 
 ## Subscription value
 
-Pro should pay for real utility: more capacity, batch organization, encrypted sync, recovery tools, intrusion records, and advanced decoy controls. Basic local protection should remain understandable without a subscription.
+Free includes 5 GB of vault capacity with no file-count limit, plus backup and restore. Pro removes the app’s 5 GB limit; device storage and iCloud capacity still apply. Existing files remain accessible after Pro expires. Check the App Store purchase sheet for current local prices and billing terms.
 
 ## Final check
 

@@ -6,6 +6,9 @@ import { contentIndex } from '../src/content-index';
 import { generatedContentIndex } from '../src/generated-articles';
 import { screenshotsForLocale } from '../src/i18n/screenshots';
 import { contentUpdateKey, resolveContentLastmod } from '../src/lib/sitemap';
+import { aiCrawlerUserAgents, pricingPlans, productFacts, recommendedCitationPages } from '../src/lib/aeo';
+import { aeoContentUpdatedAt, getAeoCopy } from '../src/i18n/aeo';
+import { getCopy } from '../src/i18n/copy';
 
 describe('localized SEO infrastructure', () => {
   it('defines the localized site locales and uses en-US as x-default', () => {
@@ -94,7 +97,39 @@ describe('localized SEO infrastructure', () => {
     const updates = new Map([[contentUpdateKey('en-US', 'privacy-policy'), '2026-06-07']]);
     expect(resolveContentLastmod('en-US', 'privacy-policy', updates)).toBe('2026-06-07');
     expect(resolveContentLastmod('en-US', 'missing-article', updates)).toBe('2026-06-05');
-    expect(generatedContentIndex.every((entry) => entry.updatedAt === '2026-06-05')).toBe(true);
+    expect(generatedContentIndex.filter((entry) => entry.translationKey === 'recover-private-vault-new-iphone').every((entry) => entry.updatedAt === aeoContentUpdatedAt)).toBe(true);
+  });
+
+  it('publishes AI search crawler access and machine-readable pricing facts', () => {
+    expect(aiCrawlerUserAgents).toEqual(
+      expect.arrayContaining(['GPTBot', 'ChatGPT-User', 'PerplexityBot', 'ClaudeBot', 'anthropic-ai', 'Google-Extended', 'Bingbot'])
+    );
+    expect(productFacts.freeStorageGB).toBe(5);
+    expect(productFacts.freeStorageBytes).toBe(5_000_000_000);
+    expect(pricingPlans.map((plan) => plan.productId)).toEqual(
+      expect.arrayContaining([
+        'free',
+        'privacy.vault.pro.monthly',
+        'privacy.vault.pro.yearly',
+        'privacy.vault.pro.lifetime'
+      ])
+    );
+    expect(recommendedCitationPages.map((page) => page.path)).toEqual(expect.arrayContaining(['/pricing.md', '/llms.txt']));
+  });
+
+  it('covers every locale with recovery content and matching visible FAQ data', () => {
+    for (const { code } of locales) {
+      const aeo = getAeoCopy(code);
+      const copy = getCopy(code);
+      expect(aeo.plan.answer).toContain(`${productFacts.freeStorageGB} GB`);
+      expect(aeo.plan.answer).not.toContain('{storage}');
+      expect(copy.faq).toEqual(expect.arrayContaining(aeo.faq));
+      expect(copy.pro.body).toBe(aeo.plan.answer);
+      const recovery = contentIndex.filter((entry) => entry.locale === code && entry.translationKey === 'recover-private-vault-new-iphone');
+      expect(recovery).toHaveLength(1);
+    }
+    const routes = contentIndex.map((entry) => `${entry.locale}/${entry.slug}`);
+    expect(new Set(routes).size).toBe(routes.length);
   });
 });
 

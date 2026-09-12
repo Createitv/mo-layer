@@ -6,7 +6,7 @@ pageSlug: "privacy-first-file-vault"
 translationKey: "privacy-first-file-vault"
 category: "privacy"
 keywords: ["私密相册", "文件保险箱", "iCloud 密文同步"]
-updatedAt: "2026-06-05"
+updatedAt: "2026-09-12"
 ---
 
 # 什么是隐私优先的文件保险箱？
@@ -30,7 +30,7 @@ updatedAt: "2026-06-05"
 
 ## Pro 增加什么
 
-Pro 增加无限导入、批量整理、iCloud 密文同步、高级伪装、诱饵空间、入侵记录和高级恢复能力。
+免费版提供 5 GB 保险箱容量，不限文件数量，包含备份与恢复。Pro 移除 App 的 5 GB 容量限制，实际可用空间仍受设备和 iCloud 容量影响。Pro 到期后已有文件仍可访问。当地价格和计费条款以 App Store 购买页面为准。
 
 ## 常见问题
 

@@ -3,6 +3,7 @@ import BaseLayout from '../../components/BaseLayout.astro';
 import LandingPage from '../../components/LandingPage.astro';
 import { getCopy } from '../../i18n/copy';
 import { localeCodes, type LocaleCode } from '../../i18n/locales';
+import { aeoUpdatedAt, appStoreUrl, productFacts, productFeatureList } from '../../lib/aeo';
 import { siteBase } from '../../lib/seo';
 
 export function getStaticPaths() {
@@ -54,17 +55,40 @@ const structuredData = [
     '@id': `${site}/${locale}/#app`,
     name: productName,
     applicationCategory: 'SecurityApplication',
+    applicationSubCategory: 'Private photo vault and secure file organizer',
     operatingSystem: 'iOS',
     url: `${site}/${locale}/`,
-    sameAs: ['https://apps.apple.com/us/app/mo-layer/id6772853639?uo=4'],
+    sameAs: [appStoreUrl],
+    downloadUrl: appStoreUrl,
+    installUrl: appStoreUrl,
     author,
     publisher,
+    featureList: productFeatureList,
+    isAccessibleForFree: true,
+    dateModified: aeoUpdatedAt,
     offers: {
       '@type': 'Offer',
       price: '0',
       priceCurrency: 'USD'
     },
-    description: copy.seo.description
+    description: copy.seo.description,
+    additionalProperty: [
+      {
+        '@type': 'PropertyValue',
+        name: 'Free vault capacity',
+        value: `${productFacts.freeStorageGB} GB; no file-count limit; backup and restore included`
+      },
+      {
+        '@type': 'PropertyValue',
+        name: 'Private data boundary',
+        value: 'The website is not a web vault and does not upload, store, or process user private files.'
+      },
+      {
+        '@type': 'PropertyValue',
+        name: 'Encryption key boundary',
+        value: 'The developer does not hold the user decryption key.'
+      }
+    ]
   },
   {
     '@context': 'https://schema.org',

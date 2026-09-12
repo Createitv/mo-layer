@@ -6,7 +6,7 @@ pageSlug: "privacy-first-file-vault"
 translationKey: "privacy-first-file-vault"
 category: "privacy"
 keywords: ["privater fototresor", "sicherer datei organizer", "verschlüsselte iCloud synchronisierung"]
-updatedAt: "2026-06-05"
+updatedAt: "2026-09-12"
 ---
 
 # Was ist ein datenschutzorientierter Dateitresor?
@@ -30,4 +30,4 @@ Mo Layer ist lokal ausgerichtet. Inhalte bleiben standardmäßig auf Ihrem Gerä
 
 ## Was Pro ergänzt
 
-Pro ergänzt unbegrenzte Importe, Stapelorganisation, verschlüsselte iCloud-Synchronisierung, erweiterte Tarnung, Ersatzbereiche, Eindringlingsprotokolle und erweiterte Wiederherstellung.
+Kostenlos enthalten sind 5 GB Tresorkapazität ohne Begrenzung der Dateianzahl sowie Backup und Wiederherstellung. Pro hebt die 5 GB-Grenze der App auf; Geräte- und iCloud-Speicher bleiben begrenzt. Vorhandene Dateien bleiben nach Ablauf von Pro zugänglich. Aktuelle lokale Preise und Zahlungsbedingungen stehen im Kaufdialog des App Store.

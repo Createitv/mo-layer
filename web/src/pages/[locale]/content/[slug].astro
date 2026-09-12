@@ -4,6 +4,7 @@ import BaseLayout from '../../../components/BaseLayout.astro';
 import { contentIndex } from '../../../content-index';
 import { generatedArticles } from '../../../generated-articles';
 import { getCopy } from '../../../i18n/copy';
+import { articleAnswers, articleUpdatedAt, appleHiddenAlbumUrl, getAeoCopy } from '../../../i18n/aeo';
 import { defaultLocale, localeCodes, type LocaleCode } from '../../../i18n/locales';
 import { canonicalUrl, siteBase } from '../../../lib/seo';
 
@@ -33,6 +34,10 @@ const pageSlug = markdownArticle?.data.pageSlug ?? generatedArticle.slug;
 const path = `/content/${pageSlug}`;
 const site = siteBase(Astro.site);
 const copy = getCopy(locale);
+const aeo = getAeoCopy(locale);
+const answers = articleAnswers(locale, articleData.translationKey);
+const updatedAt = articleUpdatedAt(locale, articleData.translationKey, articleData.updatedAt);
+const relatedArticles = contentIndex.filter((entry) => entry.locale === locale && entry.slug !== pageSlug && !['privacy-policy', 'terms-of-service'].includes(entry.translationKey)).slice(0, 3);
 const author = {
   '@type': 'Person',
   '@id': 'https://lingxiaoyao.cn/#person',
@@ -58,7 +63,7 @@ if (defaultArticle) {
     href: canonicalUrl(site, defaultArticle.locale, `/content/${defaultArticle.slug}`)
   });
 }
-const structuredData = [
+const structuredData: Record<string, unknown>[] = [
   {
     '@context': 'https://schema.org',
     '@type': 'Article',
@@ -68,8 +73,7 @@ const structuredData = [
     keywords: articleData.keywords,
     author,
     publisher,
-    datePublished: articleData.updatedAt,
-    dateModified: articleData.updatedAt,
+    dateModified: updatedAt,
     url: `${site}/${locale}/content/${pageSlug}/`,
     mainEntityOfPage: {
       '@type': 'WebPage',
@@ -81,10 +85,21 @@ const structuredData = [
     '@type': 'BreadcrumbList',
     itemListElement: [
       { '@type': 'ListItem', position: 1, name: 'Mo Layer', item: `${site}/${locale}/` },
-      { '@type': 'ListItem', position: 2, name: copy.nav.content, item: `${site}/${locale}/content/${pageSlug}/` }
+      { '@type': 'ListItem', position: 2, name: copy.nav.content, item: `${site}/${locale}/content/` },
+      { '@type': 'ListItem', position: 3, name: articleData.title, item: `${site}/${locale}/content/${pageSlug}/` }
     ]
   }
 ];
+if (answers.length) {
+  structuredData.push({
+    '@context': 'https://schema.org',
+    '@type': 'FAQPage',
+    mainEntity: answers.map(({ question, answer }) => ({
+      '@type': 'Question', name: question,
+      acceptedAnswer: { '@type': 'Answer', text: answer }
+    }))
+  });
+}
 ---
 
 <BaseLayout
@@ -97,6 +112,10 @@ const structuredData = [
 >
   <section class="container article-shell">
     <article class="article-body">
+      <p class="article-meta">
+        {aeo.labels.author}: <a href={author.url} rel="author">{author.name}</a>
+        · {aeo.labels.updated}: <time datetime={updatedAt}>{new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeZone: 'UTC' }).format(new Date(`${updatedAt}T00:00:00Z`))}</time>
+      </p>
       {Content ? (
         <Content />
       ) : (
@@ -104,6 +123,7 @@ const structuredData = [
           <>
             {index === 0 ? <h1>{block.heading}</h1> : <h2>{block.heading}</h2>}
             {block.paragraphs.map((paragraph) => <p>{paragraph}</p>)}
+            {block.steps && <ol>{block.steps.map((step) => <li>{step}</li>)}</ol>}
             {block.bullets && (
               <ul>
                 {block.bullets.map((bullet) => <li>{bullet}</li>)}
@@ -111,6 +131,25 @@ const structuredData = [
             )}
           </>
         ))
+      )}
+      {articleData.translationKey === 'hidden-album-vs-private-vault' && <p><a href={appleHiddenAlbumUrl}>{aeo.labels.source}</a></p>}
+      {answers.length > 0 && (
+        <section class="article-answers" aria-labelledby="article-answers-title">
+          <h2 id="article-answers-title">{copy.labels.faqTitle}</h2>
+          {answers.map((item) => (
+            <section>
+              <h3>{item.question}</h3>
+              <p>{item.answer}</p>
+              {item.question === aeo.comparison.question && <p><a href={appleHiddenAlbumUrl}>{aeo.labels.source}</a></p>}
+            </section>
+          ))}
+        </section>
+      )}
+      {relatedArticles.length > 0 && (
+        <nav class="article-related" aria-label={aeo.labels.related}>
+          <h2>{aeo.labels.related}</h2>
+          <ul>{relatedArticles.map((entry) => <li><a href={`/${locale}/content/${entry.slug}/`}>{entry.title}</a></li>)}</ul>
+        </nav>
       )}
     </article>
     <aside class="article-aside">

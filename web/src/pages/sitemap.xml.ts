@@ -3,12 +3,18 @@ import { getCollection } from 'astro:content';
 import { contentIndex } from '../content-index';
 import { generatedArticles } from '../generated-articles';
 import { defaultLocale, localeCodes, type LocaleCode } from '../i18n/locales';
+import { aeoUpdatedAt } from '../lib/aeo';
+import { articleUpdatedAt } from '../i18n/aeo';
 import { buildHreflangLinks, canonicalUrl, siteBase, type HreflangLink } from '../lib/seo';
 import { contentUpdateKey, resolveContentLastmod } from '../lib/sitemap';
 
 const staticPages = [
-  { path: '/', updatedAt: '2026-06-05' },
-  { path: '/content', updatedAt: '2026-06-05' }
+  { path: '/', updatedAt: aeoUpdatedAt },
+  { path: '/content', updatedAt: aeoUpdatedAt }
+];
+const machineReadablePages = [
+  { loc: '/llms.txt', updatedAt: aeoUpdatedAt },
+  { loc: '/pricing.md', updatedAt: aeoUpdatedAt }
 ];
 function renderUrlEntry(loc: string, updatedAt: string, hreflangLinks: HreflangLink[]) {
   const alternates = hreflangLinks
@@ -61,11 +67,15 @@ export const GET: APIRoute = async ({ site }) => {
     }
   }
 
+  for (const page of machineReadablePages) {
+    entries.push(renderUrlEntry(`${base}${page.loc}`, page.updatedAt, []));
+  }
+
   for (const item of contentIndex) {
     entries.push(
       renderUrlEntry(
         canonicalUrl(base, item.locale, `/content/${item.slug}`),
-        item.updatedAt ?? resolveContentLastmod(item.locale, item.slug, updatesByKey),
+        articleUpdatedAt(item.locale, item.translationKey, item.updatedAt ?? resolveContentLastmod(item.locale, item.slug, updatesByKey)),
         articleHreflangLinks(base, item.translationKey)
       )
     );

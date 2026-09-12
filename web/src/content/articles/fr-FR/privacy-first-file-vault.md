@@ -6,7 +6,7 @@ pageSlug: "privacy-first-file-vault"
 translationKey: "privacy-first-file-vault"
 category: "privacy"
 keywords: ["coffre photo privé", "fichiers privés", "synchronisation iCloud chiffrée"]
-updatedAt: "2026-06-05"
+updatedAt: "2026-09-12"
 ---
 
 # Qu’est-ce qu’un coffre-fort de fichiers privé ?
@@ -30,4 +30,4 @@ Mo Layer privilégie le stockage local. Vos contenus restent sur votre appareil 
 
 ## Ce que Pro ajoute
 
-Pro ajoute les imports illimités, l’organisation par lots, la synchronisation iCloud chiffrée, le déguisement avancé, les espaces de secours, les historiques d’intrusion et la récupération avancée.
+La version gratuite comprend 5 GB de capacité, sans limite du nombre de fichiers, avec sauvegarde et restauration. Pro supprime la limite de 5 GB de l’app ; les capacités de l’appareil et d’iCloud restent applicables. Les fichiers existants restent accessibles après l’expiration de Pro. Consultez les prix locaux et les conditions de facturation sur l’écran d’achat de l’App Store.

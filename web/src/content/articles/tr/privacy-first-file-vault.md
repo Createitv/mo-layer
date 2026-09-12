@@ -6,7 +6,7 @@ pageSlug: "privacy-first-file-vault"
 translationKey: "privacy-first-file-vault"
 category: "privacy"
 keywords: ["özel fotoğraf kasası", "güvenli dosya düzenleyici", "şifreli iCloud senkronizasyonu"]
-updatedAt: "2026-06-05"
+updatedAt: "2026-09-12"
 ---
 
 # Gizlilik odaklı dosya kasası nedir?
@@ -30,7 +30,7 @@ Mo Layer yerel önceliklidir. İçerikleriniz varsayılan olarak cihazınızda k
 
 ## Pro neler ekler?
 
-Pro kapasite, kurtarma ve kontrol sağlar: sınırsız içe aktarma, toplu düzenleme, şifreli iCloud senkronizasyonu, gelişmiş gizleme, aldatma kontrolleri, giriş kayıtları ve gelişmiş kurtarma.
+Ücretsiz sürüm, dosya sayısı sınırı olmadan 5 GB kasa kapasitesi, yedekleme ve geri yükleme sunar. Pro, uygulamanın 5 GB sınırını kaldırır; cihaz ve iCloud kapasitesi sınırları geçerliliğini korur. Pro sona erdiğinde mevcut dosyalara erişilebilir. Güncel yerel fiyatlar ve faturalandırma koşulları için App Store satın alma ekranına bakın.
 
 ## Sık sorulan soru
 

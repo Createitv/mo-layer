@@ -1,10 +1,12 @@
 import type { ContentIndexEntry } from './content-index';
 import type { LocaleCode } from './i18n/locales';
+import { aeoContentUpdatedAt, getAeoCopy } from './i18n/aeo';
 
 export type GeneratedArticleBlock = {
   heading: string;
   paragraphs: string[];
   bullets?: string[];
+  steps?: string[];
 };
 
 export type GeneratedArticle = ContentIndexEntry & {
@@ -509,7 +511,7 @@ const localizedTopicCopy: Record<LocaleCode, Record<'hidden-album-vs-private-vau
 
 const generatedLocales = Object.keys(localizedTopicCopy) as LocaleCode[];
 
-export const generatedArticles: GeneratedArticle[] = generatedLocales.flatMap((locale) =>
+const existingGeneratedArticles: GeneratedArticle[] = generatedLocales.flatMap((locale) =>
   (Object.keys(localizedTopicCopy[locale]) as Array<keyof (typeof localizedTopicCopy)[typeof locale]>).map((translationKey) => {
     const copy = localizedTopicCopy[locale][translationKey];
     return {
@@ -531,6 +533,39 @@ export const generatedArticles: GeneratedArticle[] = generatedLocales.flatMap((l
     };
   })
 );
+
+export const generatedArticles: GeneratedArticle[] = [
+  ...existingGeneratedArticles.map((article) => {
+    if (article.translationKey !== 'hidden-album-vs-private-vault') return article;
+    const copy = getAeoCopy(article.locale);
+    return {
+      ...article,
+      updatedAt: aeoContentUpdatedAt,
+      blocks: [
+        { heading: article.title, paragraphs: [copy.comparison.answer] },
+        { heading: copy.recovery.question, paragraphs: [copy.recovery.answer], steps: copy.steps },
+        { heading: copy.plan.question, paragraphs: [copy.plan.answer] }
+      ]
+    };
+  }),
+  ...generatedLocales.map((locale) => {
+    const copy = getAeoCopy(locale);
+    return {
+      locale,
+      slug: 'recover-private-vault-new-iphone',
+      translationKey: 'recover-private-vault-new-iphone',
+      title: copy.recovery.question,
+      description: copy.recovery.answer,
+      category: 'privacy',
+      keywords: ['Mo Layer', 'iPhone', 'iCloud'],
+      updatedAt: aeoContentUpdatedAt,
+      blocks: [
+        { heading: copy.recovery.question, paragraphs: [copy.recovery.answer], steps: copy.steps },
+        { heading: copy.plan.question, paragraphs: [copy.plan.answer] }
+      ]
+    };
+  })
+];
 
 export const generatedContentIndex: ContentIndexEntry[] = generatedArticles.map(({ blocks, category, keywords, ...entry }) => entry);
 

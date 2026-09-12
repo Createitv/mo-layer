@@ -1,5 +1,6 @@
 ---
 import { contentIndex } from '../content-index';
+import { appleHiddenAlbumUrl, getAeoCopy } from '../i18n/aeo';
 import { getCopy } from '../i18n/copy';
 import { screenshotsForLocale } from '../i18n/screenshots';
 import type { LocaleCode } from '../i18n/locales';
@@ -13,6 +14,16 @@ const heroScreenshot = screenshots[0] ?? {
   alt: 'Mo Layer app preview showing organized private photos'
 };
 const galleryScreenshots = screenshots.slice(1);
+const aeo = getAeoCopy(locale);
+const aeoSummary = {
+  heading: aeo.overview,
+  answer: copy.seo.description,
+  rows: [
+    [aeo.labels.platform, 'iPhone / iOS'],
+    [aeo.labels.privacy, copy.privacy.body],
+    [aeo.labels.plans, aeo.plan.answer]
+  ]
+};
 ---
 
 <section class="hero container">
@@ -43,6 +54,28 @@ const galleryScreenshots = screenshots.slice(1);
     {copy.trust.map((item) => <div class="trust-item">{item}</div>)}
   </div>
 </section>
+
+{aeoSummary && (
+  <section class="section container aeo-answer" aria-labelledby="aeo-answer-title">
+    <div class="answer-panel">
+      <div>
+        <span class="eyebrow">{aeo.labels.overview}</span>
+        <h2 id="aeo-answer-title">{aeoSummary.heading}</h2>
+        <p>{aeoSummary.answer}</p>
+      </div>
+      <table class="answer-table">
+        <tbody>
+          {aeoSummary.rows.map(([label, value]) => (
+            <tr>
+              <th scope="row">{label}</th>
+              <td>{value}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  </section>
+)}
 
 <section class="section container" id="features">
   <div class="section-heading">
@@ -89,9 +122,9 @@ const galleryScreenshots = screenshots.slice(1);
   <div class="pro-panel">
     <h2>{copy.pro.title}</h2>
     <p>{copy.pro.body}</p>
-    <ul class="pro-list">
+    {copy.pro.features.length > 0 && <ul class="pro-list">
       {copy.pro.features.map((feature) => <li>{feature}</li>)}
-    </ul>
+    </ul>}
   </div>
 </section>
 
@@ -129,6 +162,7 @@ const galleryScreenshots = screenshots.slice(1);
       <article class="faq-item">
         <h3>{item.question}</h3>
         <p>{item.answer}</p>
+        {item.question === aeo.comparison.question && <a href={appleHiddenAlbumUrl}>{aeo.labels.source}</a>}
       </article>
     ))}
   </div>

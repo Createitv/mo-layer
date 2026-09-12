@@ -6,7 +6,7 @@ pageSlug: "privacy-first-file-vault"
 translationKey: "privacy-first-file-vault"
 category: "privacy"
 keywords: ["cofre de fotos privado", "organizador de arquivos seguro", "sincronização iCloud criptografada"]
-updatedAt: "2026-06-05"
+updatedAt: "2026-09-12"
 ---
 
 # O que é um cofre de arquivos com foco em privacidade?
@@ -30,7 +30,7 @@ Mo Layer é local-first. Seu conteúdo fica no dispositivo por padrão. Se a sin
 
 ## O que o Pro adiciona
 
-Pro adiciona capacidade, recuperação e controle: importações ilimitadas, organização em lote, sincronização iCloud criptografada, disfarce avançado, controles isca, registros de intrusão e recuperação avançada.
+O plano gratuito inclui 5 GB de capacidade, sem limite de quantidade de arquivos, além de backup e restauração. O Pro remove o limite de 5 GB do app; o armazenamento do aparelho e do iCloud continua sendo necessário. Os arquivos existentes permanecem acessíveis após o vencimento do Pro. Consulte os preços locais e os termos de cobrança na tela de compra da App Store.
 
 ## Pergunta frequente
 

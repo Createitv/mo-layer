@@ -2,6 +2,7 @@
 import '../styles/global.css';
 import { buildHreflangLinks, canonicalUrl, siteBase, type HreflangLink } from '../lib/seo';
 import { getCopy } from '../i18n/copy';
+import { getAeoCopy } from '../i18n/aeo';
 import { localeInfo, locales, type LocaleCode } from '../i18n/locales';
 
 type Props = {
@@ -27,6 +28,7 @@ const {
 } = Astro.props;
 const site = siteBase(Astro.site);
 const copy = getCopy(locale);
+const aeo = getAeoCopy(locale);
 const info = localeInfo(locale);
 const canonical = canonicalUrl(site, locale, path);
 const hreflangLinks = customHreflangLinks ?? buildHreflangLinks(site, path);
@@ -94,7 +96,7 @@ const author = {
           <div class="footer-author">
             <p>© 2026 {info.name}. {copy.seo.description}</p>
             <p>
-              Author:
+              {aeo.labels.author}:
               <a href={author.url} target="_blank" rel="author noopener noreferrer">{author.name}</a>
               · WeChat: {author.wechat}
               · <a href={`mailto:${author.email}`}>{author.email}</a>

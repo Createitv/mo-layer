@@ -6,7 +6,7 @@ pageSlug: "private-photo-vault-checklist"
 translationKey: "private-photo-vault-checklist"
 category: "privacy"
 keywords: ["iPhone 私密相册", "私密相册选择", "文件保险箱", "加密相册"]
-updatedAt: "2026-06-05"
+updatedAt: "2026-09-12"
 ---
 
 # 选择 iPhone 私密相册前应该检查什么？
@@ -41,7 +41,7 @@ updatedAt: "2026-06-05"
 
 ## 5. Pro 是否解决真实问题？
 
-订阅不应该只卖一个密码入口。更合理的 Pro 功能应该围绕容量、批量导入、密文同步、恢复能力、诱饵控制、入侵记录和高级整理能力展开。
+免费版提供 5 GB 保险箱容量，不限文件数量，包含备份与恢复。Pro 移除 App 的 5 GB 容量限制，实际可用空间仍受设备和 iCloud 容量影响。Pro 到期后已有文件仍可访问。当地价格和计费条款以 App Store 购买页面为准。
 
 如果一个私密相册的付费点只是基础锁定，长期价值通常不够清楚。墨层的 Pro 更接近把私人档案空间做完整。
 

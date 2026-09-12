@@ -6,7 +6,7 @@ pageSlug: "privacy-first-file-vault"
 translationKey: "privacy-first-file-vault"
 category: "privacy"
 keywords: ["privé fotokluis", "veilige bestandsorganizer", "versleutelde iCloud-sync"]
-updatedAt: "2026-06-05"
+updatedAt: "2026-09-12"
 ---
 
 # Wat is een privacygerichte bestandskluis?
@@ -30,7 +30,7 @@ Mo Layer is local-first. Je inhoud blijft standaard op je apparaat. Als versleut
 
 ## Wat Pro toevoegt
 
-Pro richt zich op capaciteit, herstel en controle: onbeperkte imports, batchorganisatie, versleutelde iCloud-sync, geavanceerde vermomming, decoybediening, inbraaklogboeken en geavanceerd herstel.
+Gratis omvat 5 GB kluisruimte zonder limiet op het aantal bestanden, plus reservekopieën en herstel. Pro verwijdert de app-limiet van 5 GB; de opslagruimte van je apparaat en iCloud blijft bepalend. Bestaande bestanden blijven toegankelijk na afloop van Pro. Actuele lokale prijzen en betalingsvoorwaarden staan in het aankoopscherm van de App Store.
 
 ## Veelgestelde vraag
 

@@ -6,7 +6,7 @@ pageSlug: "privacy-first-file-vault"
 translationKey: "privacy-first-file-vault"
 category: "privacy"
 keywords: ["비밀 앨범", "개인 파일 보관함", "iCloud 암호화 동기화"]
-updatedAt: "2026-06-05"
+updatedAt: "2026-09-12"
 ---
 
 # 개인정보 중심 파일 보관함이란?
@@ -30,4 +30,4 @@ Mo Layer는 로컬 우선 방식입니다. 콘텐츠는 기본적으로 기기�
 
 ## Pro가 추가하는 기능
 
-Pro는 무제한 가져오기, 일괄 정리, iCloud 암호화 동기화, 고급 위장, 예비 공간, 침입 기록, 고급 복구를 제공합니다.
+무료 버전은 파일 수 제한 없이 5 GB 보관함 용량과 백업 및 복구를 제공합니다. Pro는 앱의 5 GB 제한을 없애지만 기기와 iCloud 용량 제한은 여전히 적용됩니다. Pro가 만료되어도 기존 파일에 접근할 수 있습니다. 현재 지역별 가격과 결제 조건은 App Store 구매 화면에서 확인하세요.

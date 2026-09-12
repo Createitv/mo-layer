@@ -550,6 +550,67 @@ h1 {
   gap: 16px;
 }
 
+.aeo-answer {
+  padding-top: 46px;
+}
+
+.answer-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 0.86fr) minmax(320px, 1fr);
+  gap: 28px;
+  align-items: start;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-large);
+  background: rgba(255, 255, 255, 0.78);
+  padding: clamp(28px, 5vw, 52px);
+  box-shadow: var(--shadow-soft);
+}
+
+.answer-panel h2 {
+  margin: 8px 0 14px;
+  font-size: clamp(2rem, 4vw, 3.4rem);
+  letter-spacing: -0.035em;
+}
+
+.answer-panel p {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 1.12rem;
+}
+
+.answer-table {
+  width: 100%;
+  border-collapse: collapse;
+  overflow: hidden;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  background: var(--paper);
+  font-size: 0.96rem;
+}
+
+.answer-table th,
+.answer-table td {
+  border-bottom: 1px solid var(--line-soft);
+  padding: 14px 16px;
+  vertical-align: top;
+  text-align: start;
+}
+
+.answer-table tr:last-child th,
+.answer-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.answer-table th {
+  width: 34%;
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.answer-table td {
+  color: var(--muted);
+}
+
 .article-card {
   display: flex;
   min-height: 236px;
@@ -663,6 +724,24 @@ h1 {
 .article-body a {
   color: var(--blue);
   text-decoration: none;
+}
+
+.article-meta {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.article-answers,
+.article-related {
+  margin-block-start: 2rem;
+  padding-block-start: 1rem;
+  border-top: 1px solid var(--line-soft);
+}
+
+.article-body,
+.answer-table td,
+.faq-item {
+  overflow-wrap: anywhere;
 }
 
 .article-aside {
@@ -885,7 +964,8 @@ h1 {
   .content-grid,
   .faq-grid,
   .pro-list,
-  .poster-grid {
+  .poster-grid,
+  .answer-panel {
     grid-template-columns: 1fr;
   }
 

@@ -6,7 +6,7 @@ pageSlug: "privacy-first-file-vault"
 translationKey: "privacy-first-file-vault"
 category: "privacy"
 keywords: ["写真 保管庫", "秘密アルバム", "iCloud 暗号化同期"]
-updatedAt: "2026-06-05"
+updatedAt: "2026-09-12"
 ---
 
 # プライバシー重視のファイル保管庫とは
@@ -30,4 +30,4 @@ Mo Layerはローカル優先です。コンテンツは標準でデバイス上
 
 ## Proで追加される機能
 
-Proでは無制限読み込み、まとめ整理、iCloud暗号化同期、高度な偽装、予備スペース、侵入記録、高度な復元を利用できます。
+無料版はファイル数の制限なしで 5 GB の保管庫容量を利用でき、バックアップと復元も含まれます。Pro はアプリの 5 GB 制限を解除しますが、端末と iCloud の空き容量は必要です。Pro の終了後も既存ファイルにアクセスできます。最新の地域別価格と請求条件は App Store の購入画面で確認してください。

@@ -1,28 +1,12 @@
 import type { APIRoute } from 'astro';
+import { aiCrawlerUserAgents } from '../lib/aeo';
 import { siteBase } from '../lib/seo';
 
 export const GET: APIRoute = ({ site }) => {
   const base = siteBase(site);
-  return new Response(`User-agent: OAI-SearchBot
-Allow: /
+  const allowBlocks = aiCrawlerUserAgents.map((agent) => `User-agent: ${agent}\nAllow: /`).join('\n\n');
 
-User-agent: ChatGPT-User
-Allow: /
-
-User-agent: PerplexityBot
-Allow: /
-
-User-agent: Perplexity-User
-Allow: /
-
-User-agent: Claude-SearchBot
-Allow: /
-
-User-agent: Claude-User
-Allow: /
-
-User-agent: Googlebot
-Allow: /
+  return new Response(`${allowBlocks}
 
 User-agent: *
 Allow: /

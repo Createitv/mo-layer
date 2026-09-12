@@ -6,7 +6,7 @@ pageSlug: "privacy-first-file-vault"
 translationKey: "privacy-first-file-vault"
 category: "privacy"
 keywords: ["caja fuerte fotos", "archivos privados", "sincronización iCloud cifrada"]
-updatedAt: "2026-06-05"
+updatedAt: "2026-09-12"
 ---
 
 # Qué es una caja fuerte privada de archivos
@@ -30,4 +30,4 @@ Mo Layer prioriza el almacenamiento local. El contenido permanece en su disposit
 
 ## Qué añade Pro
 
-Pro añade importaciones ilimitadas, organización por lotes, sincronización iCloud cifrada, disfraz avanzado, espacios alternativos, registros de intrusión y recuperación avanzada.
+La versión gratuita incluye 5 GB de capacidad, sin límite de archivos, además de copia de seguridad y recuperación. Pro elimina el límite de 5 GB de la app; siguen aplicándose los límites del dispositivo y de iCloud. Los archivos existentes siguen accesibles al caducar Pro. Consulta los precios locales y las condiciones de cobro en la pantalla de compra del App Store.

@@ -6,7 +6,7 @@ pageSlug: "encrypted-icloud-private-vault"
 translationKey: "encrypted-icloud-private-vault"
 category: "privacy"
 keywords: ["encrypted iCloud private vault", "private vault recovery", "encrypted photo sync"]
-updatedAt: "2026-06-05"
+updatedAt: "2026-09-12"
 ---
 
 # How encrypted iCloud sync works in a private vault
@@ -35,4 +35,4 @@ Encrypted sync should not mean public sharing, web viewing, advertising analysis
 - Does the app separate product feedback from private vault content?
 - Does the recovery model match your risk level?
 
-For Mo Layer, Pro focuses on capacity, encrypted sync, recovery tools, batch organization, and advanced controls while keeping the local protection model clear.
+Free includes 5 GB of vault capacity with no file-count limit, plus backup and restore. Pro removes the app’s 5 GB limit; device storage and iCloud capacity still apply. Existing files remain accessible after Pro expires. Check the App Store purchase sheet for current local prices and billing terms.

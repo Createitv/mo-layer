@@ -6,7 +6,7 @@ pageSlug: "privacy-first-file-vault"
 translationKey: "privacy-first-file-vault"
 category: "privacy"
 keywords: ["kho ảnh riêng", "trình sắp xếp tệp an toàn", "đồng bộ iCloud mã hóa"]
-updatedAt: "2026-06-05"
+updatedAt: "2026-09-12"
 ---
 
 # Kho tệp ưu tiên quyền riêng tư là gì?
@@ -30,7 +30,7 @@ Mo Layer ưu tiên lưu cục bộ. Nội dung của bạn mặc định ở tr�
 
 ## Pro bổ sung gì
 
-Pro tập trung vào dung lượng, phục hồi và kiểm soát: nhập không giới hạn, sắp xếp hàng loạt, đồng bộ iCloud mã hóa, ngụy trang nâng cao, kiểm soát mồi, nhật ký xâm nhập và phục hồi nâng cao.
+Bản miễn phí có 5 GB dung lượng kho, không giới hạn số tệp, cùng sao lưu và khôi phục. Pro bỏ giới hạn 5 GB của ứng dụng; dung lượng thiết bị và iCloud vẫn là giới hạn thực tế. Tệp hiện có vẫn truy cập được khi Pro hết hạn. Xem giá địa phương và điều khoản thanh toán hiện hành trên màn hình mua hàng App Store.
 
 ## Câu hỏi thường gặp
 

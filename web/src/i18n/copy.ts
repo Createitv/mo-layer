@@ -1,4 +1,5 @@
 import type { LocaleCode } from './locales';
+import { getAeoCopy } from './aeo';
 
 type LandingCopy = {
   nav: { features: string; privacy: string; content: string; feedback: string; download: string };
@@ -309,5 +310,16 @@ const localized: Record<LocaleCode, LandingCopy> = {
 };
 
 export function getCopy(locale: LocaleCode): LandingCopy {
-  return localized[locale];
+  const copy = localized[locale];
+  const aeo = getAeoCopy(locale);
+  return {
+    ...copy,
+    labels: {
+      ...copy.labels,
+      contentTitle: aeo.labels.related,
+      contentBody: `${aeo.comparison.question} ${aeo.recovery.question}`
+    },
+    pro: { title: aeo.labels.plans, body: aeo.plan.answer, features: [] },
+    faq: [...copy.faq.slice(0, 2), ...aeo.faq]
+  };
 }

@@ -6,31 +6,21 @@ pageSlug: "hidden-album-vs-private-vault"
 translationKey: "hidden-album-vs-private-vault"
 category: "privacy"
 keywords: ["hidden album vs private vault", "private photo vault iPhone", "locked album alternative"]
-updatedAt: "2026-06-05"
+updatedAt: "2026-09-12"
 ---
 
-# Hidden album vs private photo vault: what is the difference?
+# Is Apple’s Hidden album enough?
 
-The iPhone hidden album is useful for quick separation. A private photo vault is built for a stricter privacy boundary, better organization, and recovery planning.
+Apple’s Hidden album can require authentication on supported systems and is suitable for hiding photos and videos. Mo Layer provides a separate archive for media and documents, with folders and a decoy space. Choose based on file types, organization and recovery needs; a separate app is not automatically more secure.
 
-## What a hidden album does well
+## How do I recover Mo Layer on a new iPhone?
 
-A hidden album can remove photos from the main camera roll view. It is convenient, built into the system, and good for content that only needs light separation.
+Recovery requires an existing encrypted iCloud backup and access to the vault key through iCloud Keychain or your recovery key. Reinstalling the app or restoring a Pro purchase alone does not recover missing files or keys.
 
-## Where a private vault is different
+1. Before changing phones, check that iCloud backup has completed and keep your recovery key in a safe place outside the vault.
+2. Sign in to the same Apple Account on the new iPhone. Open Mo Layer and follow the recovery prompts; use your recovery key if the vault key is unavailable.
+3. Open important files to verify recovery before erasing the old device. Originals may download when opened; keep network access available.
 
-A private vault is designed as a dedicated archive. It can organize private photos, videos, screenshots, IDs, contracts, receipts, and files into one space instead of relying on the public photo library structure.
+## What is free, and what does Pro change?
 
-Mo Layer focuses on this dedicated-vault model. It is local-first by default, supports optional encrypted iCloud sync, and keeps the product experience closer to a quiet file tool than a public gallery.
-
-## When a private vault is a better fit
-
-- You store more than photos, such as documents, contracts, screenshots, and receipts.
-- You want private content separated from the everyday camera roll.
-- You need albums, favorites, recent imports, and file categories for private material.
-- You care about discreet access and realistic decoy behavior.
-- You want an encrypted recovery path when changing devices.
-
-## The practical rule
-
-Use a hidden album for light hiding. Use a private vault when the content is sensitive enough to need organization, encryption boundaries, recovery planning, and a calmer everyday access pattern.
+Free includes 5 GB of vault capacity with no file-count limit, plus backup and restore. Pro removes the app’s 5 GB limit; device storage and iCloud capacity still apply. Existing files remain accessible after Pro expires. Check the App Store purchase sheet for current local prices and billing terms.

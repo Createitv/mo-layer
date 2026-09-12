@@ -6,7 +6,7 @@ pageSlug: "privacy-first-file-vault"
 translationKey: "privacy-first-file-vault"
 category: "privacy"
 keywords: ["private photo vault", "secure file organizer", "encrypted iCloud sync"]
-updatedAt: "2026-06-05"
+updatedAt: "2026-09-12"
 ---
 
 # What is a privacy-first file vault?
@@ -30,7 +30,7 @@ Mo Layer is local-first. Your content stays on your device by default. If encryp
 
 ## What Pro adds
 
-Pro focuses on capacity, recovery, and control: unlimited imports, batch organization, encrypted iCloud sync, advanced disguise, decoy controls, intrusion records, and advanced recovery.
+Free includes 5 GB of vault capacity with no file-count limit, plus backup and restore. Pro removes the app’s 5 GB limit; device storage and iCloud capacity still apply. Existing files remain accessible after Pro expires. Check the App Store purchase sheet for current local prices and billing terms.
 
 ## Frequently asked question
 

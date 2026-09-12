@@ -6,7 +6,7 @@ pageSlug: "privacy-first-file-vault"
 translationKey: "privacy-first-file-vault"
 category: "privacy"
 keywords: ["brankas foto pribadi", "pengelola file aman", "sinkronisasi iCloud terenkripsi"]
-updatedAt: "2026-06-05"
+updatedAt: "2026-09-12"
 ---
 
 # Apa itu brankas file yang mengutamakan privasi?
@@ -30,7 +30,7 @@ Mo Layer mengutamakan penyimpanan lokal. Konten Anda tetap berada di perangkat s
 
 ## Apa yang ditambahkan Pro
 
-Pro menambahkan kapasitas, pemulihan, dan kontrol: impor tanpa batas, organisasi massal, sinkronisasi iCloud terenkripsi, penyamaran lanjutan, kontrol umpan, catatan intrusi, dan pemulihan lanjutan.
+Versi gratis mencakup kapasitas brankas 5 GB tanpa batas jumlah file, serta pencadangan dan pemulihan. Pro menghapus batas 5 GB aplikasi; kapasitas perangkat dan iCloud tetap berlaku. File yang ada tetap dapat diakses setelah Pro berakhir. Lihat harga lokal dan ketentuan penagihan terbaru di layar pembelian App Store.
 
 ## Pertanyaan umum
 

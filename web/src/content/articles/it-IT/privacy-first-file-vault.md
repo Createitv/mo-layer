@@ -6,7 +6,7 @@ pageSlug: "privacy-first-file-vault"
 translationKey: "privacy-first-file-vault"
 category: "privacy"
 keywords: ["cassaforte foto privata", "archivio file sicuro", "sincronizzazione iCloud cifrata"]
-updatedAt: "2026-06-05"
+updatedAt: "2026-09-12"
 ---
 
 # Che cos’è un archivio privato per file?
@@ -30,7 +30,7 @@ Mo Layer è local-first. I contenuti restano sul dispositivo per impostazione pr
 
 ## Cosa aggiunge Pro
 
-Pro aggiunge capacità e controllo: importazioni illimitate, organizzazione in batch, sincronizzazione iCloud cifrata, travestimento avanzato, controlli esca, registri di intrusione e recupero avanzato.
+La versione gratuita include 5 GB di capacità senza limite al numero di file, oltre a backup e ripristino. Pro elimina il limite di 5 GB dell’app; restano i limiti del dispositivo e di iCloud. I file esistenti restano accessibili alla scadenza di Pro. Prezzi locali e condizioni di fatturazione sono indicati nella schermata di acquisto dell’App Store.
 
 ## Domanda frequente
 
