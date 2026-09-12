@@ -1,0 +1,34 @@
+{
+  "appId": "6772853639",
+  "version": "1.0.9",
+  "versionId": "daaf4c86-b92e-4ff8-b0f0-e640f7ce2be8",
+  "buildId": "7e4952c3-90c6-4b75-837d-175acd1144a1",
+  "platform": "IOS",
+  "submissionId": "91bbb6d8-1448-465e-984e-2cdbc1fa9f7c",
+  "submittedDate": "2026-09-12T02:37:57.795Z",
+  "buildAttachment": {
+    "versionId": "daaf4c86-b92e-4ff8-b0f0-e640f7ce2be8",
+    "buildId": "7e4952c3-90c6-4b75-837d-175acd1144a1",
+    "currentBuildId": "7e4952c3-90c6-4b75-837d-175acd1144a1",
+    "alreadyAttached": true
+  },
+  "bundleId": "app.landlady.www.privacy",
+  "buildNumber": "8",
+  "sourceCommit": "cc204f900d96ef537a574b152255ccca70d38582",
+  "verifiedStateAtSubmission": "WAITING_FOR_REVIEW",
+  "releaseType": "AFTER_APPROVAL",
+  "validation": {
+    "errors": 0,
+    "blocking": 0,
+    "warnings": 2
+  },
+  "testing": {
+    "deviceRuntimeTestsPassed": 174,
+    "hostFileDependentTestsExcludedFromDeviceRun": 21,
+    "localizationKeyParity": {
+      "locales": 8,
+      "keysPerLocale": 868
+    }
+  },
+  "reviewScreenshotAttachmentId": "f9702daa-1128-4bc9-956e-c44a10faa1b3"
+}
