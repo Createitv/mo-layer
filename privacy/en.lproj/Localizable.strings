@@ -769,3 +769,110 @@
 "Play Live Photo" = "Play Live Photo";
 "Zoom Out" = "Zoom Out";
 "Zoom In" = "Zoom In";
+
+/* Verified photo transfer */
+"%d duplicates skipped. Their system originals are kept." = "%d duplicates skipped. Their system originals are kept.";
+"%d of %d saved in Mo Layer" = "%d of %d saved in Mo Layer";
+"%d photos still need importing. Their system originals are kept." = "%d photos still need importing. Their system originals are kept.";
+"%d system originals moved to Recently Deleted." = "%d system originals moved to Recently Deleted.";
+"Allow access to the selected photos in Settings, then retry. Originals have not been deleted." = "Allow access to the selected photos in Settings, then retry. Originals have not been deleted.";
+"The selected items could not be linked to your photo library. Keep Full Access enabled, reopen Photos, and try again. Originals have not been deleted." = "The selected items could not be linked to your photo library. Keep Full Access enabled, reopen Photos, and try again. Originals have not been deleted.";
+"Photo Calendar" = "Photo Calendar";
+"Previous Month" = "Previous Month";
+"Next Month" = "Next Month";
+"No media for this calendar" = "No media for this calendar";
+"Photos and videos will appear on their capture dates." = "Photos and videos will appear on their capture dates.";
+"Background transfer" = "Background transfer";
+"Continue transfer" = "Continue transfer";
+"Delete %d system originals…" = "Delete %d system originals…";
+"Delete verified system originals?" = "Delete verified system originals?";
+"Deleting system originals does not require cloud backup. Keep a backup if you need recovery after losing the phone or deleting the app." = "Deleting system originals does not require cloud backup. Keep a backup if you need recovery after losing the phone or deleting the app.";
+"Deletion needs confirmation. Check Photos; Mo Layer cannot verify it with the current photo access." = "Deletion needs confirmation. Check Photos; Mo Layer cannot verify it with the current photo access.";
+"Encrypted copies uploaded to iCloud." = "Encrypted copies uploaded to iCloud.";
+"Encrypted photo transfer" = "Encrypted photo transfer";
+"Finish and keep remaining originals" = "Finish and keep remaining originals";
+"Finish this transfer?" = "Finish this transfer?";
+"Items needing attention" = "Items needing attention";
+"Local copies are saved separately from iCloud. Cloud backup is pending or incomplete." = "Local copies are saved separately from iCloud. Cloud backup is pending or incomplete.";
+"Mo Layer will recheck both copies before asking iOS to delete. Originals go to Recently Deleted; iCloud Photos deletion syncs to your other devices. Local storage is not a cloud backup." = "Mo Layer will recheck both copies before asking iOS to delete. Originals go to Recently Deleted; iCloud Photos deletion syncs to your other devices. Local storage is not a cloud backup.";
+"No originals could be safely deleted. Review the transfer details and retry." = "No originals could be safely deleted. Review the transfer details and retry.";
+"On iOS 26, Mo Layer requests continued background processing. Older systems allow limited background time. If iOS stops the task or you force quit, unlock Mo Layer and tap Continue. Originals are never deleted automatically." = "On iOS 26, Mo Layer requests continued background processing. Older systems allow limited background time. If iOS stops the task or you force quit, unlock Mo Layer and tap Continue. Originals are never deleted automatically.";
+"Open Photos → Recently Deleted → unlock → select only the photos you transferred → Delete. Mo Layer cannot clear Recently Deleted or verify that you cleared it." = "Open Photos → Recently Deleted → unlock → select only the photos you transferred → Delete. Mo Layer cannot clear Recently Deleted or verify that you cleared it.";
+"Pause transfer" = "Pause transfer";
+"Photo access settings" = "Photo access settings";
+"Photo transfer" = "Photo transfer";
+"Recently Deleted" = "Recently Deleted";
+"Review photo transfer" = "Review photo transfer";
+"Save first. Optionally delete system originals after verification." = "Save first. Optionally delete system originals after verification.";
+"Saved Mo Layer copies remain. Any unfinished imports and original-deletion reminders will be dismissed. All remaining system originals are kept." = "Saved Mo Layer copies remain. Any unfinished imports and original-deletion reminders will be dismissed. All remaining system originals are kept.";
+"Saved locally in Mo Layer. This is not an iCloud backup." = "Saved locally in Mo Layer. This is not an iCloud backup.";
+"Saving photo %d of %d" = "Saving photo %d of %d";
+"Saving to Mo Layer" = "Saving to Mo Layer";
+"System deletion was cancelled or failed. Your Mo Layer copies are safe; originals were not confirmed deleted." = "System deletion was cancelled or failed. Your Mo Layer copies are safe; originals were not confirmed deleted.";
+"The original could not be downloaded completely. Please retry." = "The original could not be downloaded completely. Please retry.";
+"The saved transfer could not be opened. No system originals will be deleted." = "The saved transfer could not be opened. No system originals will be deleted.";
+"The system original changed after import. It has been kept; import the updated photo again." = "The system original changed after import. It has been kept; import the updated photo again.";
+"The vault import limit has been reached. Open Pro or free space in the vault, then continue." = "The vault import limit has been reached. Open Pro or free space in the vault, then continue.";
+"This edited or multi-resource photo cannot yet be transferred losslessly. The original has been kept." = "This edited or multi-resource photo cannot yet be transferred losslessly. The original has been kept.";
+"Transfer paused. Unlock Mo Layer and tap Continue to resume. System originals are kept." = "Transfer paused. Unlock Mo Layer and tap Continue to resume. System originals are kept.";
+"Uploading encrypted copies to iCloud" = "Uploading encrypted copies to iCloud";
+"Verify and delete originals" = "Verify and delete originals";
+"Verifying original %d of %d" = "Verifying original %d of %d";
+"With iCloud Photos enabled, deletion also applies to other devices using the same photo library." = "With iCloud Photos enabled, deletion also applies to other devices using the same photo library.";
+"iCloud backup" = "iCloud backup";
+"Import needs attention" = "Import needs attention";
+"Import complete" = "Import complete";
+"Items remaining: %d" = "Items remaining: %d";
+"Finish importing and keep originals" = "Finish importing and keep originals";
+"Saved in Mo Layer: %d" = "Saved in Mo Layer: %d";
+"Delete the originals from Photos?" = "Delete the originals from Photos?";
+"Delete originals (%d)" = "Delete originals (%d)";
+"Keep originals" = "Keep originals";
+"Items: %d" = "Items: %d";
+"No readable photo or video resource was found. The original has been kept." = "No readable photo or video resource was found. The original has been kept.";
+"Originals with edits or extra resources are kept in Photos." = "Originals with edits or extra resources are kept in Photos.";
+
+// Platform equivalents
+"Open System Settings" = "Open System Settings";
+"Import document images from Photos or Files" = "Import document images from Photos or Files";
+"Import from Photos or Files" = "Import from Photos or Files";
+"Open the App Store, select your account, choose Redeem Gift Card or Code, then return to Mo Layer and tap Restore Purchases." = "Open the App Store, select your account, choose Redeem Gift Card or Code, then return to Mo Layer and tap Restore Purchases.";
+"Mo Layer requests permissions only when needed. Review or change this app’s permissions in System Settings." = "Mo Layer requests permissions only when needed. Review or change this app’s permissions in System Settings.";
+"Default follows your device language and region. Choose a language here to override it inside the app." = "Default follows your device language and region. Choose a language here to override it inside the app.";
+"You can delete vault items, manage permissions in System Settings, and choose whether to use iCloud features." = "You can delete vault items, manage permissions in System Settings, and choose whether to use iCloud features.";
+"Set up device authentication in System Settings. The app only receives a yes or no result from the system." = "Set up device authentication in System Settings. The app only receives a yes or no result from the system.";
+"Open System Settings, sign in to iCloud, and allow this app to use iCloud. Your data remains encrypted locally until iCloud is available." = "Open System Settings, sign in to iCloud, and allow this app to use iCloud. Your data remains encrypted locally until iCloud is available.";
+"Adult-content warnings are controlled by the system, not by this app." = "Adult-content warnings are controlled by the system, not by this app.";
+"Sensitive Content Warning is managed by the system. Mo Layer cannot turn it off for you." = "Sensitive Content Warning is managed by the system. Mo Layer cannot turn it off for you.";
+"Where available, manage Sensitive Content Warning in System Settings > Privacy & Security." = "Where available, manage Sensitive Content Warning in System Settings > Privacy & Security.";
+
+// Purchase restoration after reinstall
+"Already purchased Pro?" = "Already purchased Pro?";
+"If you reinstalled Mo Layer or changed devices, restore purchases with the Apple Account used for your original purchase. You do not need to buy lifetime Pro again." = "If you reinstalled Mo Layer or changed devices, restore purchases with the Apple Account used for your original purchase. You do not need to buy lifetime Pro again.";
+
+/* Storage capacity and membership */
+"Your free 5 GB is full, or this file exceeds the remaining space. Open Pro to keep adding. Existing files stay available." = "Your free 5 GB is full, or this file exceeds the remaining space. Open Pro to keep adding. Existing files stay available.";
+"Free includes 5 GB, unlimited file count, automatic backup, and restore. Pro removes the 5 GB app limit." = "Free includes 5 GB, unlimited file count, automatic backup, and restore. Pro removes the 5 GB app limit.";
+"Choose your Pro plan" = "Choose your Pro plan";
+"Membership plans are currently unavailable. You can keep using your free storage." = "Membership plans are currently unavailable. You can keep using your free storage.";
+"Your library" = "Your library";
+"Free · 5 GB" = "Free · 5 GB";
+"Counts files in every folder, including cloud-only files. No file count limit." = "Counts files in every folder, including cloud-only files. No file count limit.";
+"Every folder, ready to use" = "Every folder, ready to use";
+"Default folders and automatic encrypted backup are included for everyone." = "Default folders and automatic encrypted backup are included for everyone.";
+"Your files come back with you" = "Your files come back with you";
+"Reinstall or change devices using the same iCloud account. Existing backups remain available after Pro ends." = "Reinstall or change devices using the same iCloud account. Existing backups remain available after Pro ends.";
+"More room with Pro" = "More room with Pro";
+"Free includes 5 GB. Pro removes the app limit; backups still use your own iCloud storage." = "Free includes 5 GB. Pro removes the app limit; backups still use your own iCloud storage.";
+"%@ once. No subscription renewal." = "%@ once. No subscription renewal.";
+"3 days free, then %@ / %@. Renews automatically unless canceled in Apple subscription settings." = "3 days free, then %@ / %@. Renews automatically unless canceled in Apple subscription settings.";
+"%@ / %@. Renews automatically unless canceled in Apple subscription settings. Trial eligibility is confirmed by Apple." = "%@ / %@. Renews automatically unless canceled in Apple subscription settings. Trial eligibility is confirmed by Apple.";
+"Room for what matters." = "Room for what matters.";
+"Start with 5 GB free. Keep every memory within reach." = "Start with 5 GB free. Keep every memory within reach.";
+"year" = "year";
+"month" = "month";
+"Retry" = "Retry";
+
+"Unlimited vault storage" = "Unlimited vault storage";
+
+"No app storage limit. Backups use your own iCloud storage." = "No app storage limit. Backups use your own iCloud storage.";

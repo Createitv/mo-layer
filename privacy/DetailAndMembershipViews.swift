@@ -181,139 +181,164 @@ struct VaultItemDetailView: View {
     }
 }
 
+enum MembershipPresentationContext {
+    case navigation
+    case modal
+
+    var showsDismissControl: Bool {
+        self == .modal
+    }
+}
+
 struct MembershipView: View {
+    @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var subscription: SubscriptionManager
     var isRequiredBeforeUse = false
+    let presentationContext: MembershipPresentationContext
+    #if DEBUG
+    @State private var previewsPaywall = ProcessInfo.processInfo.arguments.contains("-review-membership-capture")
+    #endif
+
+    private var showsActiveMembership: Bool {
+        #if DEBUG
+        subscription.isPro && !previewsPaywall
+        #else
+        subscription.isPro
+        #endif
+    }
+
     @State private var selectedProductID = SubscriptionManager.yearly
     @State private var isRestoringPurchases = false
     @State private var isRedeemingOfferCode = false
+    @State private var showOfferCodeInstructions = false
 
-    init(isRequiredBeforeUse: Bool = false) {
+    init(
+        isRequiredBeforeUse: Bool = false,
+        presentationContext: MembershipPresentationContext = .navigation
+    ) {
         self.isRequiredBeforeUse = isRequiredBeforeUse
+        self.presentationContext = presentationContext
     }
+
+    @Query private var vaultItems: [VaultItem]
 
     var body: some View {
         NavigationStack {
-            GeometryReader { proxy in
-                let layout = ProPaywallLayout(width: proxy.size.width)
-
-                ScrollView {
-                    VStack(spacing: layout.sectionSpacing) {
-                        membershipHero(layout: layout)
-
-                        MembershipStatusCard(summary: subscription.membershipStatusSummary)
-
-                        if subscription.loadState == .loading {
-                            ProgressView(L.string("Loading subscription plans..."))
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 8)
-                        }
-
-                        if case .failed(let message) = subscription.loadState {
-                            AppCard {
-                                Label(message, systemImage: "exclamationmark.triangle")
-                                    .foregroundStyle(AppTheme.warning)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                            }
-                        }
-
-                        ProAccessComparisonCard(
-                            isPro: subscription.accessLevel.allowsImportAndCloudSync,
-                            layout: layout
-                        )
-
-                        HStack(spacing: layout.planSpacing) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    if showsActiveMembership {
+                        activeMembershipCard
+                    } else {
+                        membershipHero
+                        Text(L.string("No app storage limit. Backups use your own iCloud storage."))
+                            .font(.caption)
+                            .foregroundStyle(AppTheme.secondaryText)
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text(L.string("Choose your Pro plan"))
+                                .font(.title3.bold())
                             ForEach(displayPackages, id: \.storeProduct.productIdentifier) { package in
-                                ProPlanOptionCard(
-                                    title: localizedName(for: package),
-                                    price: package.localizedPriceString,
-                                    productID: package.storeProduct.productIdentifier,
-                                    badge: badgeTitle(for: package),
-                                    layout: layout,
-                                    isSelected: selectedProductID == package.storeProduct.productIdentifier,
-                                    action: {
-                                        selectedProductID = package.storeProduct.productIdentifier
-                                    }
-                                )
-                                .frame(maxWidth: .infinity)
+                                membershipPlan(package)
+                            }
+                            if subscription.loadState == .loading {
+                                ProgressView(L.string("Loading subscription plans..."))
+                            }
+                            if case .failed(let message) = subscription.loadState {
+                                Text(message).font(.callout).foregroundStyle(AppTheme.warning)
+                                Button(L.string("Retry")) { Task { await subscription.load() } }
+                            } else if subscription.loadState == .loaded && displayPackages.isEmpty {
+                                Text(L.string("Membership plans are currently unavailable. You can keep using your free storage."))
+                                    .font(.callout).foregroundStyle(AppTheme.secondaryText)
                             }
                         }
+                    }
 
-                        if !subscription.missingProductIDs.isEmpty {
-                            VStack(spacing: 10) {
-                                ForEach(subscription.missingProductIDs, id: \.self) { productID in
-                                    ProPlanPlaceholderCard(
-                                        title: localizedName(forProductID: productID),
-                                        badge: productID == SubscriptionManager.lifetime ? L.string("Recommended") : nil
-                                    )
-                                }
-                            }
+                    if let feedback = subscription.restoreFeedback {
+                        RestorePurchaseFeedbackView(feedback: feedback)
+                    } else if let statusMessage {
+                        Text(statusMessage).font(.caption).foregroundStyle(AppTheme.secondaryText)
+                    }
+                    VStack(spacing: 16) {
+                        HStack(spacing: 24) {
+                            Button(L.string("Restore Purchases")) { restorePurchases() }
+                                .accessibilityIdentifier("membership.restoreAfterReinstall")
+                            Button(L.string("Redeem Code")) { redeemOfferCode() }
                         }
-
+                        .disabled(isRestoringPurchases || isRedeemingOfferCode || subscription.isPurchasing)
+                        HStack(spacing: 24) {
+                            Link(L.string("Privacy Policy"), destination: SubscriptionManager.privacyPolicyURL)
+                            Link(L.string("Terms of Use"), destination: SubscriptionManager.termsOfUseURL)
+                        }
+                    }
+                    .font(.caption.weight(.medium))
+                    .frame(maxWidth: .infinity)
+                }
+                .padding(24)
+                .frame(maxWidth: 600)
+                .frame(maxWidth: .infinity)
+            }
+            .background(AppTheme.background)
+            .safeAreaInset(edge: .bottom) {
+                if !showsActiveMembership {
+                    VStack(spacing: 10) {
                         Button {
+                            #if DEBUG
+                            guard !previewsPaywall else { return }
+                            #endif
                             guard let selectedPackage else { return }
                             Task { await subscription.purchase(selectedPackage) }
                         } label: {
-                            Label(L.string("Open Pro and keep adding"), systemImage: "lock.open.fill")
+                            HStack {
+                                if subscription.isPurchasing { ProgressView().tint(.white) }
+                                Text(selectedPackage.map(actionTitle) ?? L.string("Open Pro"))
+                                    .font(.headline)
+                            }
+                            .frame(maxWidth: .infinity, minHeight: 52)
+                            .foregroundStyle(.white)
+                            .background(AppTheme.primary, in: RoundedRectangle(cornerRadius: 16))
                         }
-                        .buttonStyle(AppButtonStyle())
-                        .disabled(selectedPackage == nil || subscription.loadState == .loading)
-                        .opacity(selectedPackage == nil ? 0.55 : 1)
-
-                        Text(L.string("Subscriptions are managed by Apple and can be canceled anytime in Apple ID subscription settings."))
-                            .font(.caption)
-                            .foregroundStyle(AppTheme.secondaryText)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 14)
-
-                        HStack(spacing: 18) {
-                            Link(destination: SubscriptionManager.privacyPolicyURL) {
-                                Label(L.string("Privacy Policy"), systemImage: "hand.raised.fill")
-                            }
-
-                            Link(destination: SubscriptionManager.termsOfUseURL) {
-                                Label(L.string("Terms of Use"), systemImage: "doc.text.fill")
-                            }
-                        }
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(AppTheme.primary)
-
-                        HStack(spacing: 18) {
-                            Button {
-                                redeemOfferCode()
-                            } label: {
-                                Label(isRedeemingOfferCode ? L.string("Opening") : L.string("Redeem Code"), systemImage: "ticket.fill")
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(AppTheme.primary)
-                            }
-                            .disabled(isRedeemingOfferCode || isRestoringPurchases)
-
-                            Button {
-                                restorePurchases()
-                            } label: {
-                                Label(isRestoringPurchases ? L.string("Restoring") : L.string("Restore Purchases"), systemImage: "arrow.clockwise")
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(AppTheme.primary)
-                            }
-                            .disabled(isRestoringPurchases || isRedeemingOfferCode)
-                        }
-                        .padding(.top, 2)
-
-                        if let restoreFeedback = subscription.restoreFeedback {
-                            RestorePurchaseFeedbackView(feedback: restoreFeedback)
-                        } else if let statusMessage {
-                            Text(statusMessage)
-                                .font(.caption)
+                        .buttonStyle(.plain)
+                        .disabled(selectedPackage == nil || subscription.isPurchasing || subscription.loadState == .loading)
+                        .opacity(selectedPackage == nil ? 0.5 : 1)
+                        .accessibilityIdentifier("membership.purchase")
+                        if let selectedPackage {
+                            Text(purchaseDisclosure(for: selectedPackage))
+                                .font(.caption2)
                                 .foregroundStyle(AppTheme.secondaryText)
                                 .multilineTextAlignment(.center)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                     }
-                    .padding(layout.screenPadding)
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 12)
+                    .frame(maxWidth: 600)
+                    .frame(maxWidth: .infinity)
+                    .background(.regularMaterial)
                 }
-                .background(AppGlassBackground().ignoresSafeArea())
             }
             .navigationTitle(L.string("Pro"))
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                #if DEBUG
+                if showsActiveMembership {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Preview Paywall", systemImage: "eye") { previewsPaywall = true }
+                            .labelStyle(.iconOnly)
+                            .accessibilityIdentifier("membership.previewPaywall")
+                    }
+                }
+                #endif
+                if presentationContext.showsDismissControl {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button(L.string("Close")) { dismiss() }
+                            .accessibilityIdentifier("membership.close")
+                    }
+                }
+            }
+            .alert(L.string("Redeem Code"), isPresented: $showOfferCodeInstructions) {
+                Button(L.string("OK"), role: .cancel) {}
+            } message: {
+                Text(L.string("Open the App Store, select your account, choose Redeem Gift Card or Code, then return to Mo Layer and tap Restore Purchases."))
+            }
             .task {
                 await subscription.load()
                 selectDefaultPackageIfNeeded()
@@ -322,6 +347,122 @@ struct MembershipView: View {
                 selectDefaultPackageIfNeeded()
             }
         }
+    }
+
+    private var storageCard: some View {
+        let used = VaultStoragePolicy.usedBytes(in: vaultItems)
+        let progress = min(Double(used) / Double(VaultStoragePolicy.freeByteLimit), 1)
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label(L.string("Your library"), systemImage: "externaldrive")
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Text(showsActiveMembership ? L.string("Pro Active") : L.string("Free · 5 GB"))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(AppTheme.primary)
+            }
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(ByteCountFormatter.string(fromByteCount: used, countStyle: .file))
+                    .font(.system(.largeTitle, design: .rounded, weight: .bold))
+                if !showsActiveMembership {
+                    Text("/ 5 GB").font(.subheadline).foregroundStyle(AppTheme.secondaryText)
+                }
+            }
+            if !showsActiveMembership {
+                ProgressView(value: progress).tint(progress >= 1 ? AppTheme.warning : AppTheme.primary)
+            }
+            Text(L.string("Counts files in every folder, including cloud-only files. No file count limit."))
+                .font(.caption).foregroundStyle(AppTheme.secondaryText)
+        }
+        .padding(20)
+        .background(AppTheme.card, in: RoundedRectangle(cornerRadius: 20))
+    }
+
+    private var activeMembershipCard: some View {
+        let summary = subscription.membershipStatusSummary
+        let used = VaultStoragePolicy.usedBytes(in: vaultItems)
+        return VStack(alignment: .leading, spacing: 24) {
+            HStack {
+                Text(summary.planTitle)
+                    .font(.title2.bold())
+                Spacer(minLength: 8)
+                Label(summary.stateTitle, systemImage: "checkmark.seal.fill")
+                    .font(.caption.weight(.semibold))
+            }
+            .foregroundStyle(AppTheme.primary)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Image(systemName: "infinity")
+                    .font(.system(size: 72, weight: .medium))
+                    .foregroundStyle(AppTheme.primary)
+                    .accessibilityHidden(true)
+                Text(L.string("Unlimited vault storage"))
+                    .font(.system(.largeTitle, design: .rounded, weight: .bold))
+                    .fixedSize(horizontal: false, vertical: true)
+                if !summary.expirationText.isEmpty {
+                    Text(summary.expirationText)
+                        .font(.subheadline)
+                        .foregroundStyle(AppTheme.secondaryText)
+                }
+            }
+
+            Divider()
+            HStack {
+                Text(L.string("Your library"))
+                    .foregroundStyle(AppTheme.secondaryText)
+                Spacer()
+                Text(ByteCountFormatter.string(fromByteCount: used, countStyle: .file))
+                    .fontWeight(.semibold)
+            }
+            .font(.subheadline)
+            Text(L.string("No app storage limit. Backups use your own iCloud storage."))
+                .font(.caption)
+                .foregroundStyle(AppTheme.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppTheme.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 24))
+        .accessibilityIdentifier("membership.activeCard")
+    }
+
+    private func membershipPlan(_ package: Package) -> some View {
+        let selected = selectedProductID == package.storeProduct.productIdentifier
+        return Button {
+            selectedProductID = package.storeProduct.productIdentifier
+        } label: {
+            HStack(spacing: 14) {
+                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                    .font(.title2).foregroundStyle(selected ? AppTheme.primary : AppTheme.secondaryText)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(localizedName(for: package)).font(.headline)
+                    if let badge = badgeTitle(for: package) {
+                        Text(badge).font(.caption.weight(.medium)).foregroundStyle(AppTheme.primary)
+                    }
+                }
+                Spacer(minLength: 8)
+                Text(package.localizedPriceString).font(.title3.weight(.semibold))
+                    .multilineTextAlignment(.trailing)
+            }
+            .foregroundStyle(AppTheme.ink)
+            .padding(18)
+            .background(selected ? AppTheme.primary.opacity(0.07) : AppTheme.card, in: RoundedRectangle(cornerRadius: 18))
+            .overlay(RoundedRectangle(cornerRadius: 18).stroke(selected ? AppTheme.primary : AppTheme.line, lineWidth: selected ? 2 : 1))
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? [.isSelected] : [])
+    }
+
+    private func purchaseDisclosure(for package: Package) -> String {
+        if package.storeProduct.productIdentifier == SubscriptionManager.lifetime {
+            return L.format("%@ once. No subscription renewal.", package.localizedPriceString)
+        }
+        let price = package.localizedPriceString
+        let period = package.storeProduct.productIdentifier == SubscriptionManager.yearly ? L.string("year") : L.string("month")
+        if subscription.offersThreeDayTrial(package) {
+            return L.format("3 days free, then %@ / %@. Renews automatically unless canceled in Apple subscription settings.", price, period)
+        }
+        return L.format("%@ / %@. Renews automatically unless canceled in Apple subscription settings. Trial eligibility is confirmed by Apple.", price, period)
     }
 
     private func restorePurchases() {
@@ -335,6 +476,10 @@ struct MembershipView: View {
 
     private func redeemOfferCode() {
         guard !isRedeemingOfferCode else { return }
+        guard OfferCodePresentationPolicy.action(for: PlatformCapabilities.routes.offerCode) == .openSystemSheet else {
+            showOfferCodeInstructions = true
+            return
+        }
         isRedeemingOfferCode = true
         Task { @MainActor in
             await subscription.redeemOfferCode()
@@ -355,7 +500,7 @@ struct MembershipView: View {
 
     private var statusMessage: String? {
         if subscription.isPro {
-            return L.string("Pro Active")
+            return nil
         }
         if case .failed = subscription.loadState {
             return nil
@@ -363,40 +508,11 @@ struct MembershipView: View {
         return subscription.statusText
     }
 
-    private func membershipHero(layout: ProPaywallLayout) -> some View {
-        VStack(spacing: 16) {
-            Image("ProPaywallHero")
-                .resizable()
-                .scaledToFill()
-                .frame(height: layout.heroImageHeight)
-                .frame(maxWidth: .infinity)
-                .clipped()
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(Color.white.opacity(0.08))
-                )
-            VStack(alignment: .leading, spacing: 8) {
-                Text(L.string("Keep adding, open Pro"))
-                    .font(.system(size: layout.heroTitleSize, weight: .bold, design: .rounded))
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [AppTheme.ink, AppTheme.warning],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                    )
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
-                Text(L.string("Without Pro you can only view. Pro lets you keep importing encrypted files."))
-                    .font(.system(size: layout.heroSubtitleSize, weight: .regular, design: .rounded))
-                    .foregroundStyle(AppTheme.secondaryText)
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .frame(maxWidth: .infinity, alignment: .center)
-        }
-        .padding(.top, 6)
+    private var membershipHero: some View {
+        Label(L.string("Unlimited vault storage"), systemImage: "infinity")
+            .font(.title2.bold())
+            .foregroundStyle(AppTheme.primary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private func selectDefaultPackageIfNeeded() {
@@ -439,45 +555,15 @@ struct MembershipView: View {
         }
     }
 
-    private func localizedDescription(for package: Package) -> String {
-        let product = package.storeProduct
-        switch product.productIdentifier {
-        case SubscriptionManager.monthly:
-            return L.string("Try Pro for 3 days, then continue monthly. Cancel anytime in Apple ID settings.")
-        case SubscriptionManager.yearly:
-            return L.string("Try Pro for 3 days, then keep a lower yearly price for long-term protection.")
-        case SubscriptionManager.lifetime:
-            return L.string("Pay once to unlock current Pro vault features permanently for this Apple ID.")
-        default:
-            if shouldUseStoreKitText(product.localizedDescription) {
-                return product.localizedDescription
-            }
-            return product.localizedDescription
-        }
-    }
-
     private func actionTitle(for package: Package) -> String {
-        switch package.storeProduct.productIdentifier {
-        case SubscriptionManager.monthly, SubscriptionManager.yearly:
-            return L.string("Start 3-Day Trial")
-        case SubscriptionManager.lifetime:
-            return L.string("Unlock Lifetime")
-        default:
-            return package.localizedPriceString
-        }
+        if subscription.offersThreeDayTrial(package) { return L.string("Start 3-Day Trial") }
+        return package.storeProduct.productIdentifier == SubscriptionManager.lifetime
+            ? L.string("Unlock Lifetime") : L.string("Open Pro")
     }
 
     private func badgeTitle(for package: Package) -> String? {
-        switch package.storeProduct.productIdentifier {
-        case SubscriptionManager.monthly:
-            return L.string("3-day trial")
-        case SubscriptionManager.yearly:
-            return L.string("Better value")
-        case SubscriptionManager.lifetime:
-            return L.string("Recommended")
-        default:
-            return nil
-        }
+        if subscription.offersThreeDayTrial(package) { return L.string("3-day trial") }
+        return package.storeProduct.productIdentifier == SubscriptionManager.yearly ? L.string("Better value") : nil
     }
 
     private func shouldUseStoreKitText(_ text: String) -> Bool {

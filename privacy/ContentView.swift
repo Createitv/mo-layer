@@ -30,34 +30,53 @@ struct ContentView: View {
         AppLanguage(rawValue: language) ?? .english
     }
 
+    private var isReviewMembershipCapture: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("-review-membership-capture")
+        #else
+        false
+        #endif
+    }
+
     var body: some View {
         Group {
-            if !hasSeenFirstRunGuide && !auth.isConfigured {
+            if isReviewMembershipCapture {
+                MembershipView(isRequiredBeforeUse: false, presentationContext: .modal)
+            } else if !hasSeenFirstRunGuide && !auth.isConfigured {
                 FirstRunGuideView {
                     hasSeenFirstRunGuide = true
                 }
+                .accessibilityIdentifier("onboarding.root")
             } else if !auth.isConfigured {
                 OnboardingView()
+                    .accessibilityIdentifier("onboarding.root")
             } else {
                 switch auth.sessionMode {
                 case .cover:
                     if auth.requiresBiometricUnlock {
                         BiometricLockView()
+                            .accessibilityIdentifier("lock.root")
                     } else if auth.requiresGestureUnlock {
                         LockView()
+                            .accessibilityIdentifier("lock.root")
                     } else {
                         MainAppView()
+                            .accessibilityIdentifier("vault.root")
                     }
                 case .gestureGate:
                     if auth.requiresGestureUnlock {
                         LockView()
+                            .accessibilityIdentifier("lock.root")
                     } else {
                         MainAppView()
+                            .accessibilityIdentifier("vault.root")
                     }
                 case .realVault:
                     MainAppView()
+                            .accessibilityIdentifier("vault.root")
                 case .decoyVault:
                     DecoyVaultView()
+                        .accessibilityIdentifier("vault.root")
                 }
             }
         }
@@ -65,13 +84,21 @@ struct ContentView: View {
         .task {
             startBackgroundLaunchRefresh()
         }
+        .task(id: subscription.activeExpirationDate) {
+            guard let expiration = subscription.activeExpirationDate else { return }
+            let delay = max(0, expiration.timeIntervalSinceNow)
+            do {
+                try await Task.sleep(for: .seconds(delay))
+                await subscription.refreshEntitlements()
+            } catch { /* A changed entitlement cancels the previous expiration task. */ }
+        }
         .fullScreenCover(isPresented: $showQuickRecording) {
             AudioRecorderView(autoStart: true) { url, completion in
                 saveQuickRecording(url, completion: completion)
             }
         }
         .fullScreenCover(isPresented: $showQuickRecordingMembership) {
-            MembershipView(isRequiredBeforeUse: true)
+            MembershipView(isRequiredBeforeUse: true, presentationContext: .modal)
                 .environmentObject(subscription)
         }
         .sheet(isPresented: $showCloudRestore) {
@@ -99,7 +126,7 @@ struct ContentView: View {
             )
         }
         .fullScreenCover(isPresented: $showSharedImportMembership) {
-            MembershipView(isRequiredBeforeUse: false)
+            MembershipView(isRequiredBeforeUse: false, presentationContext: .modal)
                 .environmentObject(subscription)
         }
         .fullScreenCover(item: $sharedImportResult) { result in
@@ -130,6 +157,8 @@ struct ContentView: View {
             refreshRecoverableVaultData()
             handleStoredQuickRecordingRequest()
             Task {
+                await subscription.refreshEntitlements()
+                await checkForCloudRestore()
                 if remoteChanges.pendingReason != nil {
                     await handlePendingRemoteCloudChangeIfNeeded()
                 } else {
@@ -147,6 +176,9 @@ struct ContentView: View {
             if isRequired {
                 showCloudRestore = true
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: VaultStorageQuota.limitReached)) { _ in
+            showSharedImportMembership = true
         }
         .onChange(of: subscription.canImportAndSync) { _, canWrite in
             vaultStore.setWriteAccess(canWrite)
@@ -235,11 +267,6 @@ struct ContentView: View {
         didCheckCloudRestore = true
         auth.refreshConfigurationFromSecureStorage()
         refreshRecoverableVaultData()
-        guard !auth.isConfigured else {
-            hasSeenFirstRunGuide = true
-            hasRecoverableVaultData = true
-            return
-        }
         await sync.checkAccountStatus()
         let result = await vaultStore.checkForRemoteVaultRestore(context: modelContext, sync: sync)
         switch result {
@@ -255,6 +282,7 @@ struct ContentView: View {
                 message: summary.displayText
             )
         case .failed(let message):
+            didCheckCloudRestore = false
             cloudRestoreNotice = CloudRestoreNotice(
                 title: L.string("iCloud Restore Failed"),
                 message: message
@@ -322,7 +350,8 @@ struct ContentView: View {
     }
 
     private func handleQuickRecordingAction(_ action: QuickAction?) {
-        guard action == .recorder else { return }
+        // Desktop commands stay queued until the authenticated vault view consumes them.
+        guard !PlatformCapabilities.isMacCatalyst, action == .recorder else { return }
         quickActions.consume(.recorder)
         QuickRecordingRequestStore.requestQuickRecording()
         handleStoredQuickRecordingRequest()
@@ -562,15 +591,15 @@ struct ContentView: View {
     private func canImportVaultItems(count incomingCount: Int) -> Bool {
         let descriptor = FetchDescriptor<VaultItem>()
         let items = (try? modelContext.fetch(descriptor)) ?? []
-        return VaultFreeImportPolicy.canImport(
-            currentCount: VaultFreeImportPolicy.countedItemCount(in: items),
-            incomingCount: incomingCount,
+        return VaultStoragePolicy.canImport(
+            usedBytes: VaultStoragePolicy.usedBytes(in: items),
+            incomingBytes: incomingCount > 0 ? 1 : 0,
             isPro: subscription.isPro
         )
     }
 
     private func freeImportLimitMessage() -> String {
-        L.format("Free vaults can hold up to %d photos, videos, audio, and files. Open Pro to keep adding.", VaultFreeImportPolicy.freeItemLimit)
+        VaultStoragePolicy.limitMessage
     }
 }
 

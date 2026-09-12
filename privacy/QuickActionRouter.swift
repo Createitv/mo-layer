@@ -93,3 +93,24 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         }
     }
 }
+
+#if targetEnvironment(macCatalyst)
+@MainActor
+struct MoLayerCommands: Commands {
+    var body: some Commands {
+        CommandMenu(L.string("Mo Layer")) {
+            if PlatformCapabilities.routes.shortcutEntry == .commands {
+                Button(L.string("Import")) {
+                    QuickActionRouter.shared.handleShortcut(type: QuickAction.importHub.rawValue)
+                }
+                .keyboardShortcut("i", modifiers: .command)
+
+                Button(L.string("Record Audio")) {
+                    QuickActionRouter.shared.handleShortcut(type: QuickAction.recorder.rawValue)
+                }
+                .keyboardShortcut("r", modifiers: [.command, .shift])
+            }
+        }
+    }
+}
+#endif

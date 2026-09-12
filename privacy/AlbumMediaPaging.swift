@@ -157,6 +157,20 @@ final class AlbumMediaPagingController {
     private var cursor: AlbumMediaCursor?
     private var generation = 0
 
+    static func fetchAll(scope: AlbumMediaScope, context: ModelContext) throws -> [VaultItem] {
+        var allItems: [VaultItem] = []
+        var cursor: AlbumMediaCursor?
+        var hasMore = true
+        while hasMore {
+            let page = try fetchPage(scope: scope, cursor: cursor, limit: 500, context: context)
+            allItems.append(contentsOf: page.items)
+            hasMore = page.hasMore
+            cursor = page.items.last.map { AlbumMediaCursorPolicy.cursor(createdAt: $0.createdAt, id: $0.id) }
+            if page.items.isEmpty { break }
+        }
+        return allItems
+    }
+
     func loadFirstPage(scope: AlbumMediaScope, context: ModelContext) async {
         generation &+= 1
         let requestGeneration = generation

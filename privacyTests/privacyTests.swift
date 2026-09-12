@@ -895,6 +895,27 @@ struct privacyTests {
         #expect(AlbumGridVisibleItemsReportPolicy.shouldReport(isDragging: false, isDecelerating: false))
     }
 
+    @Test func mediaPreviewRepairContinuesBeyondFirstBatchEvenWhenDownloadsFail() {
+        let orderedIDs = (0..<120).map(String.init)
+        let visibleIDs = Set(orderedIDs)
+        var attemptedIDs = Set<String>()
+        var batches: [Int] = []
+        while true {
+            let candidates = MediaPreviewRepairBatchPolicy.candidateIDs(
+                orderedItemIDs: orderedIDs,
+                visibleItemIDs: visibleIDs,
+                repairNeededItemIDs: visibleIDs,
+                attemptedItemIDs: attemptedIDs
+            )
+            guard !candidates.isEmpty else { break }
+            #expect(attemptedIDs.isDisjoint(with: candidates))
+            attemptedIDs.formUnion(candidates)
+            batches.append(candidates.count)
+        }
+        #expect(batches == [48, 48, 24])
+        #expect(attemptedIDs == visibleIDs)
+    }
+
     @Test func albumPageMergeAppendsOnlyNewStableIDs() {
         let merged = AlbumMediaPageMergePolicy.merge(
             existingIDs: ["a", "b"],
@@ -1067,9 +1088,45 @@ struct privacyTests {
         #expect(AlbumVideoDurationFormatter.text(for: 3661, compact: true) == "1h")
         #expect(AlbumVideoDurationFormatter.text(for: 65, compact: true) == "1m")
         #expect(AlbumVideoDurationFormatter.text(for: 12, compact: true) == "12s")
-        #expect(AlbumVideoDurationLayout.presentation(for: 96) == .full)
-        #expect(AlbumVideoDurationLayout.presentation(for: 54) == .compact)
-        #expect(AlbumVideoDurationLayout.presentation(for: 32) == .iconOnly)
+    }
+
+    @Test @MainActor func albumVideoDurationRemainsReadableAcrossTileWidths() {
+        for width in [CGFloat(32), 38, 42, 50, 54, 64, 96, 120, 390, 768] {
+            for duration in [Double(0), 12, 65, 3599, 3661, 360000] {
+                let metrics = AlbumVideoDurationLayout.metrics(tileWidth: width, duration: duration)
+                let text = metrics.text ?? ""
+                let textWidth = ceil((text as NSString).size(withAttributes: [.font: metrics.font]).width)
+                #expect(!text.isEmpty)
+                #expect(metrics.font.pointSize >= 10)
+                #expect(metrics.width <= width - metrics.inset * 2)
+                #expect(textWidth + metrics.iconWidth + metrics.inset <= metrics.width)
+                #expect(metrics.iconPointSize <= width * 0.2)
+            }
+        }
+    }
+
+    @Test @MainActor func albumMediaBadgesUseUniformProportionalMetricsForSupportedColumnCounts() {
+        let oneColumn = AlbumMediaBadgeLayout.metrics(forColumnCount: 1)
+        let threeColumns = AlbumMediaBadgeLayout.metrics(forColumnCount: 3)
+        let fiveColumns = AlbumMediaBadgeLayout.metrics(forColumnCount: 5)
+        let sevenColumns = AlbumMediaBadgeLayout.metrics(forColumnCount: 7)
+
+        #expect(oneColumn.textPointSize == 15)
+        #expect(threeColumns.textPointSize == 12)
+        #expect(fiveColumns.textPointSize == 10)
+        #expect(sevenColumns.textPointSize == 8)
+        #expect(oneColumn.videoWidth > threeColumns.videoWidth)
+        #expect(threeColumns.videoWidth > fiveColumns.videoWidth)
+        #expect(fiveColumns.videoWidth > sevenColumns.videoWidth)
+        #expect(AlbumMediaBadgeLayout.metrics(forColumnCount: 4) == threeColumns)
+    }
+
+    @Test @MainActor func albumLivePhotoBadgeAndPlaybackRequireAnExplicitTrigger() {
+        #expect(AlbumMediaBadgeLayout.markerText(for: .livePhoto) == nil)
+        #expect(AlbumMediaBadgeLayout.markerText(for: .video) == nil)
+        #expect(!LivePhotoPlaybackPolicy.shouldStart(playbackTrigger: 0, lastPlaybackTrigger: 0))
+        #expect(LivePhotoPlaybackPolicy.shouldStart(playbackTrigger: 1, lastPlaybackTrigger: 0))
+        #expect(!LivePhotoPlaybackPolicy.shouldStart(playbackTrigger: 1, lastPlaybackTrigger: 1))
     }
 
     @Test @MainActor func vaultMetadataDecodesWithoutMediaDurationForExistingItems() throws {
@@ -1114,10 +1171,30 @@ struct privacyTests {
         #expect(FullscreenMediaLoadingPolicy.loadMode(itemIndex: 0, selectedIndex: nil, itemKind: .image) == .none)
     }
 
+    @Test func fullscreenPreviewPagingStartsAtTappedItemAndAcceptsOnlyKnownPages() {
+        var paging = MediaPreviewPagingState(itemIDs: ["newest", "middle", "oldest"], initialItemID: "middle")
+
+        #expect(paging.selectedItemID == "middle")
+        #expect(paging.selectedIndex == 1)
+        let selectedKnownPage = paging.select(itemID: "oldest")
+        #expect(selectedKnownPage)
+        #expect(paging.selectedItemID == "oldest")
+        let selectedMissingPage = paging.select(itemID: "missing")
+        #expect(!selectedMissingPage)
+        #expect(paging.selectedItemID == "oldest")
+    }
+
+    @Test func fullscreenPreviewPagingFallsBackToFirstAvailableItem() {
+        let paging = MediaPreviewPagingState(itemIDs: ["first", "second"], initialItemID: "missing")
+
+        #expect(paging.selectedItemID == "first")
+        #expect(paging.selectedIndex == 0)
+    }
+
     @Test func fullscreenOriginalImagePreviewDoesNotStageCroppedThumbnail() {
         #expect(!FullscreenMediaStagingPolicy.shouldShowThumbnailBeforeOriginal(kind: .image))
         #expect(!FullscreenMediaStagingPolicy.shouldShowThumbnailBeforeOriginal(kind: .livePhoto))
-        #expect(FullscreenMediaStagingPolicy.shouldShowThumbnailBeforeOriginal(kind: .video))
+        #expect(!FullscreenMediaStagingPolicy.shouldShowThumbnailBeforeOriginal(kind: .video))
     }
 
     @Test func activeVideoPlaybackPreventsIdleSleepOnlyWhileVisible() {
@@ -1126,24 +1203,95 @@ struct privacyTests {
         #expect(!VideoPlayerIdleTimerPolicy.shouldDisableIdleTimer(isPlaying: true, isVisible: false))
     }
 
-    @Test func videoPreviewOwnsOneItemWithoutPreviousNextPaging() throws {
-        let source = try String(
-            contentsOf: repositoryRoot()
-                .appendingPathComponent("privacy")
-                .appendingPathComponent("MainViews.swift"),
-            encoding: .utf8
+    @Test func livePhotoBadgeDescriptorIsExclusiveToLivePhotos() {
+        #expect(AlbumMediaBadgeLayout.markerText(for: .livePhoto) == nil)
+        #expect(AlbumMediaBadgeLayout.markerSystemImage(for: .livePhoto) == "livephoto")
+        #expect(AlbumMediaBadgeLayout.markerText(for: .image) == nil)
+        #expect(AlbumMediaBadgeLayout.markerSystemImage(for: .video) == nil)
+    }
+
+    @Test func livePhotoLongPressCreatesAPlaybackRequestForOnlyTheCurrentPage() {
+        let first = LivePhotoPlaybackPolicy.triggerAfterLongPress(
+            currentTrigger: 0,
+            pressedItemID: "live-1",
+            selectedItemID: "live-1",
+            itemKind: .livePhoto
+        )
+        let wrongPage = LivePhotoPlaybackPolicy.triggerAfterLongPress(
+            currentTrigger: first,
+            pressedItemID: "live-2",
+            selectedItemID: "live-1",
+            itemKind: .livePhoto
+        )
+        let staticImage = LivePhotoPlaybackPolicy.triggerAfterLongPress(
+            currentTrigger: first,
+            pressedItemID: "image-1",
+            selectedItemID: "image-1",
+            itemKind: .image
         )
 
-        #expect(source.contains("struct MediaPreviewSelection: Identifiable"))
-        #expect(source.contains("let item: VaultItem"))
-        #expect(!source.contains("LazyHStack(spacing: 0)"))
-        #expect(!source.contains(".scrollTargetBehavior(.paging)"))
-        #expect(source.contains("VideoPlayerTransportControls("))
-        #expect(source.contains("alignment: .center"))
-        #expect(source.contains("AVPlayerItemFailedToPlayToEndTimeErrorKey"))
-        #expect(source.contains(".AVPlayerItemPlaybackStalled"))
-        #expect(!source.contains("ForEach(previewWindowItems)"))
-        #expect(!source.contains("let items: [VaultItem]\n    let initialItemId"))
+        #expect(first == 1)
+        #expect(wrongPage == first)
+        #expect(staticImage == first)
+    }
+
+    @Test func photoTransferSelectionValidationDistinguishesMissingIdentifiersFromPermission() {
+        #expect(PhotoTransferSelectionPolicy.validate(itemCount: 2, identifiers: ["asset-1", "asset-2"]) == .valid(["asset-1", "asset-2"]))
+        #expect(PhotoTransferSelectionPolicy.validate(itemCount: 2, identifiers: ["asset-1"]) == .missingIdentifiers)
+        #expect(PhotoTransferSelectionPolicy.validate(itemCount: 0, identifiers: []) == .empty)
+    }
+
+    @Test func mediaCalendarUsesCaptureDateBeforeImportFallbacks() {
+        let captured = Date(timeIntervalSince1970: 400)
+        let located = Date(timeIntervalSince1970: 300)
+        let imported = Date(timeIntervalSince1970: 200)
+        let created = Date(timeIntervalSince1970: 100)
+
+        #expect(MediaCalendarDatePolicy.displayDate(capturedAt: captured, locationCapturedAt: located, importedAt: imported, itemCreatedAt: created) == captured)
+        #expect(MediaCalendarDatePolicy.displayDate(capturedAt: nil, locationCapturedAt: located, importedAt: imported, itemCreatedAt: created) == located)
+        #expect(MediaCalendarDatePolicy.displayDate(capturedAt: nil, locationCapturedAt: nil, importedAt: imported, itemCreatedAt: created) == imported)
+        #expect(MediaCalendarDatePolicy.displayDate(capturedAt: nil, locationCapturedAt: nil, importedAt: nil, itemCreatedAt: created) == created)
+    }
+
+    @Test func mediaCalendarGroupsMediaByLocalCalendarDay() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(secondsFromGMT: 0))
+        let records = [
+            MediaCalendarRecord(id: "a", date: Date(timeIntervalSince1970: 1_767_225_600)), // 2026-01-01 00:00 UTC
+            MediaCalendarRecord(id: "b", date: Date(timeIntervalSince1970: 1_767_311_999)), // 2026-01-01 23:59:59 UTC
+            MediaCalendarRecord(id: "c", date: Date(timeIntervalSince1970: 1_767_312_000))  // 2026-01-02 00:00 UTC
+        ]
+
+        let grouped = MediaCalendarPolicy.groupedIDs(records: records, calendar: calendar)
+
+        #expect(grouped.count == 2)
+        #expect(grouped[calendar.startOfDay(for: records[0].date)] == ["a", "b"])
+        #expect(grouped[calendar.startOfDay(for: records[2].date)] == ["c"])
+    }
+
+    @Test func mediaCalendarMonthGridUsesCompleteWeeks() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(secondsFromGMT: 0))
+        calendar.firstWeekday = 2
+        let january = try #require(calendar.date(from: DateComponents(year: 2026, month: 1, day: 15)))
+
+        let cells = MediaCalendarPolicy.monthCells(containing: january, calendar: calendar)
+
+        #expect(cells.count == 35)
+        #expect(cells.prefix(3).allSatisfy { $0 == nil })
+        #expect(calendar.component(.day, from: try #require(cells[3])) == 1)
+        #expect(calendar.component(.day, from: try #require(cells[33])) == 31)
+        #expect(cells[34] == nil)
+    }
+
+    @Test func mediaCalendarUsesTheNewestItemOfEachDayAsItsBackground() {
+        let records = [
+            MediaCalendarRecord(id: "newest", date: Date(timeIntervalSince1970: 300)),
+            MediaCalendarRecord(id: "older", date: Date(timeIntervalSince1970: 100))
+        ]
+
+        #expect(MediaCalendarPolicy.representativeID(records: records) == "newest")
+        #expect(MediaCalendarPolicy.representativeID(records: []) == nil)
     }
 
     @Test func mediaGridScaleStorageSeparatesHomeCategories() {
@@ -1763,7 +1911,7 @@ struct privacyTests {
         #expect(failed.message == L.string("Restore purchase failed. Please try again."))
     }
 
-    @Test func membershipAccessSeparatesActiveExpiredAndLockedStates() {
+    @Test func membershipCapacityDoesNotLockExistingFiles() {
         #expect(SubscriptionManager.accessLevel(isPro: true, hasActivatedPro: false) == .activePro)
         #expect(SubscriptionManager.accessLevel(isPro: false, hasActivatedPro: true) == .expiredReadOnly)
         #expect(SubscriptionManager.accessLevel(isPro: false, hasActivatedPro: false) == .lockedUntilPro)
@@ -1772,37 +1920,114 @@ struct privacyTests {
         #expect(MembershipAccessLevel.activePro.allowsImportAndCloudSync)
         #expect(MembershipAccessLevel.expiredReadOnly.allowsVaultEntry)
         #expect(MembershipAccessLevel.expiredReadOnly.allowsCloudPull)
-        #expect(!MembershipAccessLevel.expiredReadOnly.allowsImportAndCloudSync)
-        #expect(!MembershipAccessLevel.lockedUntilPro.allowsVaultEntry)
-        #expect(!MembershipAccessLevel.lockedUntilPro.allowsCloudPull)
-        #expect(!MembershipAccessLevel.lockedUntilPro.allowsImportAndCloudSync)
+        #expect(MembershipAccessLevel.expiredReadOnly.allowsImportAndCloudSync)
+        #expect(MembershipAccessLevel.lockedUntilPro.allowsVaultEntry)
+        #expect(MembershipAccessLevel.lockedUntilPro.allowsCloudPull)
+        #expect(MembershipAccessLevel.lockedUntilPro.allowsImportAndCloudSync)
     }
 
-    @Test func moLayerEntryActionExplainsProOnlyToNeverSubscribedUsers() {
+    @Test func moLayerEntryIsAvailableToEveryPlan() {
         #expect(MembershipAccessLevel.activePro.moLayerEntryAction == .enter)
         #expect(MembershipAccessLevel.expiredReadOnly.moLayerEntryAction == .enter)
-        #expect(MembershipAccessLevel.lockedUntilPro.moLayerEntryAction == .explainPro)
+        #expect(MembershipAccessLevel.lockedUntilPro.moLayerEntryAction == .enter)
     }
 
-    @Test func freeImportPolicyAllowsFirstNinetyNineVaultFilesBeforePro() {
-        #expect(VaultFreeImportPolicy.freeItemLimit == 99)
-        #expect(VaultFreeImportPolicy.canImport(currentCount: 0, incomingCount: 1, isPro: false))
-        #expect(VaultFreeImportPolicy.canImport(currentCount: 98, incomingCount: 1, isPro: false))
-        #expect(!VaultFreeImportPolicy.canImport(currentCount: 99, incomingCount: 1, isPro: false))
-        #expect(!VaultFreeImportPolicy.canImport(currentCount: 98, incomingCount: 2, isPro: false))
-        #expect(VaultFreeImportPolicy.canImport(currentCount: 250, incomingCount: 20, isPro: true))
+    @Test func modalMembershipPresentationProvidesDismissControl() {
+        #expect(MembershipPresentationContext.modal.showsDismissControl)
+        #expect(!MembershipPresentationContext.navigation.showsDismissControl)
     }
 
-    @Test func freeImportPolicyCountsOnlyActiveMediaFileItems() {
-        let image = VaultItem(kind: .image, encryptedMetadata: Data(), byteSize: 1)
-        let video = VaultItem(kind: .video, encryptedMetadata: Data(), byteSize: 1)
-        let audio = VaultItem(kind: .audio, encryptedMetadata: Data(), byteSize: 1)
-        let document = VaultItem(kind: .document, encryptedMetadata: Data(), byteSize: 1)
-        let link = VaultItem(kind: .link, encryptedMetadata: Data(), byteSize: 0)
-        let deletedArchive = VaultItem(kind: .archive, encryptedMetadata: Data(), byteSize: 1)
-        deletedArchive.deletedAt = Date()
+    @Test func macUsesDesktopEquivalentRoutes() {
+        let routes = PlatformFeatureRoutes.resolve(
+            platform: .macCatalyst,
+            cameraAvailable: false,
+            documentScannerAvailable: false
+        )
 
-        #expect(VaultFreeImportPolicy.countedItemCount(in: [image, video, audio, document, link, deletedArchive]) == 4)
+        #expect(routes.mediaCapture == .importMedia)
+        #expect(routes.documentScan == .importMedia)
+        #expect(routes.backgroundProgress == .inAppAndNotification)
+        #expect(routes.shortcutEntry == .commands)
+        #expect(routes.offerCode == .appStoreInstructions)
+        #expect(routes.videoBrightness == .playerEffect)
+    }
+
+    @Test func iPhoneAndIPadKeepNativeMobileRoutesWhenAvailable() {
+        for platform in [MoLayerPlatform.iPhone, .iPad] {
+            let routes = PlatformFeatureRoutes.resolve(
+                platform: platform,
+                cameraAvailable: true,
+                documentScannerAvailable: true
+            )
+
+            #expect(routes.mediaCapture == .nativeCamera)
+            #expect(routes.documentScan == .visionKit)
+            #expect(routes.backgroundProgress == .liveActivity)
+            #expect(routes.shortcutEntry == .homeScreen)
+            #expect(routes.offerCode == .systemSheet)
+            #expect(routes.videoBrightness == .systemDisplay)
+        }
+    }
+
+    @Test func storageCapacityUsesFiveDecimalGigabytesWithNoFileCountLimit() {
+        let limit = VaultStoragePolicy.freeByteLimit
+        #expect(limit == 5_000_000_000)
+        #expect(VaultStoragePolicy.canImport(usedBytes: 0, incomingBytes: limit, isPro: false))
+        #expect(VaultStoragePolicy.canImport(usedBytes: limit - 1, incomingBytes: 1, isPro: false))
+        #expect(!VaultStoragePolicy.canImport(usedBytes: limit, incomingBytes: 1, isPro: false))
+        #expect(!VaultStoragePolicy.canImport(usedBytes: 0, incomingBytes: limit + 1, isPro: false))
+        #expect(!VaultStoragePolicy.canImport(usedBytes: Int64.max, incomingBytes: Int64.max, isPro: false))
+        #expect(VaultStoragePolicy.canImport(usedBytes: limit + 1, incomingBytes: limit, isPro: true))
+        #expect(!VaultStoragePolicy.canImport(usedBytes: -1, incomingBytes: 1, isPro: false))
+        #expect(!VaultStoragePolicy.canImport(usedBytes: 0, incomingBytes: -1, isPro: true))
+    }
+
+    @Test func storageCapacityIncludesAllFoldersAndCloudOnlyFiles() {
+        let items = (0..<250).map { _ in VaultItem(kind: .image, encryptedMetadata: Data(), byteSize: 1) }
+        let cloudVideo = VaultItem(kind: .video, encryptedMetadata: Data(), byteSize: 1_000, folderId: "hidden")
+        cloudVideo.assetState = .cloudOnly
+        let deleted = VaultItem(kind: .archive, encryptedMetadata: Data(), byteSize: 9_000)
+        deleted.deletedAt = Date()
+        #expect(VaultStoragePolicy.usedBytes(in: items + [cloudVideo, deleted]) == 1_250)
+        #expect(VaultStoragePolicy.canImport(usedBytes: 1_250, incomingBytes: 1, isPro: false))
+    }
+
+    @MainActor
+    @Test func storageReservationsPreventConcurrentImportsFromExceedingCapacity() throws {
+        let previous = VaultStorageQuota.hasProAccess
+        let previousExpiry = VaultStorageQuota.proExpirationDate
+        VaultStorageQuota.hasProAccess = false
+        defer {
+            VaultStorageQuota.proExpirationDate = previousExpiry
+            VaultStorageQuota.hasProAccess = previous
+        }
+        let container = try ModelContainer(for: VaultItem.self, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        let context = ModelContext(container)
+        let first = try VaultStorageQuota.reserve(bytes: VaultStoragePolicy.freeByteLimit - 1, context: context)
+        defer { VaultStorageQuota.release(first) }
+        #expect(throws: VaultStorageQuota.LimitError.self) {
+            try VaultStorageQuota.reserve(bytes: 2, context: context)
+        }
+        let lastByte = try VaultStorageQuota.reserve(bytes: 1, context: context)
+        VaultStorageQuota.release(lastByte)
+        VaultStorageQuota.release(first)
+        let afterRelease = try VaultStorageQuota.reserve(bytes: VaultStoragePolicy.freeByteLimit, context: context)
+        VaultStorageQuota.release(afterRelease)
+    }
+
+    @MainActor
+    @Test func expiredTrialReturnsToFreeCapacityWithoutLockingReadAccess() {
+        let previous = VaultStorageQuota.hasProAccess
+        let previousExpiry = VaultStorageQuota.proExpirationDate
+        defer {
+            VaultStorageQuota.proExpirationDate = previousExpiry
+            VaultStorageQuota.hasProAccess = previous
+        }
+        VaultStorageQuota.hasProAccess = true
+        VaultStorageQuota.proExpirationDate = Date(timeIntervalSinceNow: -1)
+        #expect(!VaultStorageQuota.hasProAccess)
+        #expect(MembershipAccessLevel.expiredReadOnly.allowsCloudPull)
+        #expect(MembershipAccessLevel.expiredReadOnly.allowsVaultEntry)
     }
 
     @Test func membershipStatusSummaryShowsPlanAndExpiration() throws {
@@ -1840,7 +2065,7 @@ struct privacyTests {
             expirationDate: nil,
             referenceDate: Date(timeIntervalSince1970: 0)
         )
-        #expect(readOnlySummary.stateTitle == L.string("Read-Only Protection"))
+        #expect(readOnlySummary.stateTitle == L.string("Free Plan"))
         #expect(readOnlySummary.expirationText == L.string("Expired or inactive"))
     }
 

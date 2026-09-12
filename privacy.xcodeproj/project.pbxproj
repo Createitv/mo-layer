@@ -452,15 +452,15 @@
 /* Begin XCBuildConfiguration section */
 		FE153F752FB9B264004FFC9E /* Debug */ = {
 			isa = XCBuildConfiguration;
-				buildSettings = {
-					ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-					ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-					CODE_SIGN_ENTITLEMENTS = privacy/privacy.entitlements;
-					"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = "privacy/privacy-mac.entitlements";
-					CODE_SIGN_IDENTITY = "Apple Development";
-					CODE_SIGN_STYLE = Automatic;
-					CURRENT_PROJECT_VERSION = 5;
-					DEVELOPMENT_TEAM = 677U99F8TX;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = privacy/privacy.entitlements;
+				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = "privacy/privacy-mac.entitlements";
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 8;
+				DEVELOPMENT_TEAM = 677U99F8TX;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = privacy/Info.plist;
@@ -474,10 +474,10 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-					MARKETING_VERSION = 1.0.7;
-					PRODUCT_BUNDLE_IDENTIFIER = app.landlady.www.privacy;
-					PRODUCT_NAME = "$(TARGET_NAME)";
-					STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				MARKETING_VERSION = 1.0.9;
+				PRODUCT_BUNDLE_IDENTIFIER = app.landlady.www.privacy;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
 				SUPPORTS_MACCATALYST = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -497,7 +497,7 @@
 				CODE_SIGN_ENTITLEMENTS = privacy/privacy.entitlements;
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = "privacy/privacy-mac.entitlements";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 8;
 				DEVELOPMENT_TEAM = 677U99F8TX;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -512,7 +512,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0.7;
+				MARKETING_VERSION = 1.0.9;
 				PRODUCT_BUNDLE_IDENTIFIER = app.landlady.www.privacy;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -653,11 +653,11 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 8;
 				DEVELOPMENT_TEAM = 677U99F8TX;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
-				MARKETING_VERSION = 1.0.7;
+				MARKETING_VERSION = 1.0.9;
 				PRODUCT_BUNDLE_IDENTIFIER = app.landlady.www.privacyTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
@@ -675,11 +675,11 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 8;
 				DEVELOPMENT_TEAM = 677U99F8TX;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
-				MARKETING_VERSION = 1.0.7;
+				MARKETING_VERSION = 1.0.9;
 				PRODUCT_BUNDLE_IDENTIFIER = app.landlady.www.privacyTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
@@ -696,10 +696,10 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 8;
 				DEVELOPMENT_TEAM = 677U99F8TX;
 				GENERATE_INFOPLIST_FILE = YES;
-				MARKETING_VERSION = 1.0.7;
+				MARKETING_VERSION = 1.0.9;
 				PRODUCT_BUNDLE_IDENTIFIER = app.landlady.www.privacyUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
@@ -716,10 +716,10 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 8;
 				DEVELOPMENT_TEAM = 677U99F8TX;
 				GENERATE_INFOPLIST_FILE = YES;
-				MARKETING_VERSION = 1.0.7;
+				MARKETING_VERSION = 1.0.9;
 				PRODUCT_BUNDLE_IDENTIFIER = app.landlady.www.privacyUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
@@ -734,12 +734,12 @@
 		};
 		FE8800082FC9000000A00001 /* Debug */ = {
 			isa = XCBuildConfiguration;
-				buildSettings = {
-					APPLICATION_EXTENSION_API_ONLY = YES;
-					CODE_SIGN_IDENTITY = "Apple Development";
-					CODE_SIGN_STYLE = Automatic;
-					CURRENT_PROJECT_VERSION = 5;
-					DEVELOPMENT_TEAM = 677U99F8TX;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 8;
+				DEVELOPMENT_TEAM = 677U99F8TX;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = privacyLiveActivity/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
@@ -748,10 +748,10 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.0.7;
-					PRODUCT_BUNDLE_IDENTIFIER = app.landlady.www.privacy.LiveActivity;
-					PRODUCT_NAME = "$(TARGET_NAME)";
-					SKIP_INSTALL = YES;
+				MARKETING_VERSION = 1.0.9;
+				PRODUCT_BUNDLE_IDENTIFIER = app.landlady.www.privacy.LiveActivity;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
@@ -767,7 +767,7 @@
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 8;
 				DEVELOPMENT_TEAM = 677U99F8TX;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = privacyLiveActivity/Info.plist;
@@ -777,7 +777,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.0.7;
+				MARKETING_VERSION = 1.0.9;
 				PRODUCT_BUNDLE_IDENTIFIER = app.landlady.www.privacy.LiveActivity;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
@@ -793,12 +793,12 @@
 		};
 		FE9900212FC43A1100A00001 /* Debug */ = {
 			isa = XCBuildConfiguration;
-				buildSettings = {
-					CODE_SIGN_ENTITLEMENTS = privacyShareExtension/privacyShareExtension.entitlements;
-					CODE_SIGN_IDENTITY = "Apple Development";
-					CODE_SIGN_STYLE = Automatic;
-					CURRENT_PROJECT_VERSION = 5;
-					DEVELOPMENT_TEAM = 677U99F8TX;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = privacyShareExtension/privacyShareExtension.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 8;
+				DEVELOPMENT_TEAM = 677U99F8TX;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = privacyShareExtension/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
@@ -807,10 +807,10 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-					MARKETING_VERSION = 1.0.7;
-					PRODUCT_BUNDLE_IDENTIFIER = app.landlady.www.privacy.ShareExtension;
-					PRODUCT_NAME = "$(TARGET_NAME)";
-					SKIP_INSTALL = YES;
+				MARKETING_VERSION = 1.0.9;
+				PRODUCT_BUNDLE_IDENTIFIER = app.landlady.www.privacy.ShareExtension;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
@@ -826,7 +826,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = privacyShareExtension/privacyShareExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 8;
 				DEVELOPMENT_TEAM = 677U99F8TX;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = privacyShareExtension/Info.plist;
@@ -836,7 +836,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.0.7;
+				MARKETING_VERSION = 1.0.9;
 				PRODUCT_BUNDLE_IDENTIFIER = app.landlady.www.privacy.ShareExtension;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;

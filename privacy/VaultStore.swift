@@ -383,13 +383,18 @@ enum VaultImportArtifactBuilder {
         source: String,
         kind: VaultItemKind,
         importFingerprint: String?,
-        captureLocation: VaultCaptureLocation? = nil
+        capturedAt: Date? = nil,
+        captureLocation: VaultCaptureLocation? = nil,
+        itemID: String = UUID().uuidString,
+        rootKeyOverride: SymmetricKey? = nil
     ) async throws -> VaultImportPreparedItem {
-        let rootKey = try VaultCryptoService.ensureRootKey()
+        let rootKey = try rootKeyOverride ?? VaultCryptoService.ensureRootKey()
         let fileKey = VaultCryptoService.newFileKey()
-        let itemId = UUID().uuidString
-        let encryptedFile = try VaultCryptoService.encrypt(data, using: fileKey)
-        let encryptedFilePath = try VaultFileStore.writeEncryptedObject(encryptedFile, itemId: itemId)
+        let itemId = itemID
+        let encryptedFilePath = try await Task.detached(priority: .userInitiated) {
+            let encrypted = try VaultCryptoService.encrypt(data, using: fileKey)
+            return try VaultFileStore.writeEncryptedObject(encrypted, itemId: itemId)
+        }.value
 
         let thumbData = await makeThumbnailData(
             from: data,
@@ -413,6 +418,7 @@ enum VaultImportArtifactBuilder {
             importedAt: Date(),
             remoteURL: nil,
             originalExtension: (originalName as NSString).pathExtension,
+            capturedAt: capturedAt,
             captureLocation: captureLocation,
             mediaDurationSeconds: await mediaDurationSeconds(
                 from: data,
@@ -441,14 +447,10 @@ enum VaultImportArtifactBuilder {
     ) async -> Data? {
         switch kind {
         case .image:
-            guard let image = UIImage(data: data) else { return nil }
-            return renderThumbnailData(from: image)
+            return await downsampleThumbnail(data)
         case .livePhoto:
-            guard let package = try? PropertyListDecoder().decode(LivePhotoPackage.self, from: data),
-                  let image = UIImage(data: package.stillData) else {
-                return nil
-            }
-            return renderThumbnailData(from: image)
+            guard let package = try? PropertyListDecoder().decode(LivePhotoPackage.self, from: data) else { return nil }
+            return await downsampleThumbnail(package.stillData)
         case .video:
             return await makeVideoThumbnailData(
                 from: data,
@@ -457,6 +459,18 @@ enum VaultImportArtifactBuilder {
         default:
             return nil
         }
+    }
+
+    private static func downsampleThumbnail(_ data: Data) async -> Data? {
+        await Task.detached(priority: .userInitiated) {
+            guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+                  let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                    kCGImageSourceCreateThumbnailFromImageAlways: true,
+                    kCGImageSourceCreateThumbnailWithTransform: true,
+                    kCGImageSourceThumbnailMaxPixelSize: 640
+                  ] as CFDictionary) else { return nil }
+            return UIImage(cgImage: image).jpegData(compressionQuality: 0.72)
+        }.value
     }
 
     private static func makeVideoThumbnailData(from data: Data, preferredExtension: String?) async -> Data? {
@@ -714,28 +728,22 @@ final class VaultStore: ObservableObject {
             var descriptor = FetchDescriptor<VaultManifest>()
             descriptor.fetchLimit = 1
             if try context.fetch(descriptor).isEmpty {
-                if allowsCloudSync, let remoteManifest = await sync.fetchRemoteManifest() {
-                    if try restoreRemoteManifestUsingAvailableKey(remoteManifest, context: context) {
-                        let summary = await syncCloudToLocal(
-                            context: context,
-                            sync: sync,
-                            allowsCloudSync: allowsCloudSync,
-                            allowsCloudWrite: canWriteCloud,
-                            purpose: .reinstallRestore
-                        )
-                        restoreStatusMessage = summary.displayText
-                    } else {
-                        lastError = L.string("An existing iCloud vault was found. Restore it with iCloud Keychain or your recovery key before creating a new vault.")
+                if allowsCloudSync {
+                    let result = await checkForRemoteVaultRestore(context: context, sync: sync)
+                    switch result {
+                    case .restoredAutomatically, .needsRecoveryKey, .failed:
+                        return
+                    case .noRemoteVault:
+                        break
                     }
-                    return
-                } else {
+                }
+                // Another launch task may have restored the manifest while we awaited iCloud.
+                if try context.fetch(descriptor).isEmpty {
                     let rootKey = try VaultCryptoService.ensureRootKey()
                     let manifest = try makeLocalManifest(rootKey: rootKey)
                     context.insert(manifest)
                     try context.save()
-                    if canWriteCloud {
-                        _ = await sync.syncManifest(manifest)
-                    }
+                    if canWriteCloud { _ = await sync.syncManifest(manifest) }
                     try? context.save()
                 }
             }
@@ -830,7 +838,19 @@ final class VaultStore: ObservableObject {
         }
     }
 
+    private var remoteRestoreTask: Task<RemoteVaultRestoreCheck, Never>?
+
     func checkForRemoteVaultRestore(context: ModelContext, sync: CloudKitSyncService) async -> RemoteVaultRestoreCheck {
+        if let remoteRestoreTask { return await remoteRestoreTask.value }
+        let task = Task { @MainActor in
+            await self.performRemoteVaultRestore(context: context, sync: sync)
+        }
+        remoteRestoreTask = task
+        defer { remoteRestoreTask = nil }
+        return await task.value
+    }
+
+    private func performRemoteVaultRestore(context: ModelContext, sync: CloudKitSyncService) async -> RemoteVaultRestoreCheck {
         do {
             var descriptor = FetchDescriptor<VaultManifest>()
             descriptor.fetchLimit = 1
@@ -839,6 +859,7 @@ final class VaultStore: ObservableObject {
             }
 
             guard let remoteManifest = await sync.fetchRemoteManifest() else {
+                if let message = sync.lastSyncError { return .failed(message) }
                 return .noRemoteVault
             }
 
@@ -847,7 +868,9 @@ final class VaultStore: ObservableObject {
                 let summary = await syncCloudToLocal(
                     context: context,
                     sync: sync,
-                    purpose: .reinstallRestore
+                    allowsCloudWrite: false,
+                    purpose: .reinstallRestore,
+                    downloadsOriginals: false
                 )
                 restoreStatusMessage = summary.displayText
                 return .restoredAutomatically(summary)
@@ -885,6 +908,8 @@ final class VaultStore: ObservableObject {
                 return .skippedDuplicate
             }
 
+            let reservation = try VaultStorageQuota.reserve(bytes: Int64(data.count), context: context)
+            defer { VaultStorageQuota.release(reservation) }
             let prepared = try await VaultImportArtifactBuilder.prepare(
                 data: data,
                 originalName: originalName,
@@ -907,9 +932,8 @@ final class VaultStore: ObservableObject {
                 importFingerprint: prepared.importFingerprint
             )
             context.insert(item)
-            if saveImmediately {
-                try context.save()
-            }
+            try context.save()
+            VaultStorageQuota.release(reservation)
             logger.info("Imported item \(prepared.itemId, privacy: .public), kind \(kind.rawValue, privacy: .public), file \(prepared.encryptedFilePath, privacy: .public), thumb \(prepared.encryptedThumbPath ?? "none", privacy: .public)")
             if syncAfterImport {
                 let synced = await sync.syncItem(item)
@@ -928,11 +952,9 @@ final class VaultStore: ObservableObject {
 
     private func isDuplicateImport(_ importFingerprint: String?, context: ModelContext) throws -> Bool {
         guard let importFingerprint else { return false }
-        let items = try context.fetch(FetchDescriptor<VaultItem>())
-        return items.contains { item in
-            item.deletedAt == nil
-                && item.importFingerprint == importFingerprint
-        }
+        var descriptor = FetchDescriptor<VaultItem>(predicate: #Predicate { $0.deletedAt == nil && $0.importFingerprint == importFingerprint })
+        descriptor.fetchLimit = 1
+        return try context.fetchCount(descriptor) > 0
     }
 
     func importLink(
@@ -1933,53 +1955,84 @@ final class VaultStore: ObservableObject {
 
         var repairedCount = 0
         var generatedPreviewNeedsSync = false
-        for item in candidates {
-            var repairedItem = false
-            var generatedLocalChange = false
-
-            if VaultCloudAssetDownloadPolicy.needsLocalPreview(item) {
-                if await downloadThumbnailIfAvailable(for: item, sync: sync) {
-                    repairedItem = true
-                } else if VaultFileStore.fileExists(path: item.encryptedFilePath),
-                          item.assetState == .local,
-                          let encryptedThumbPath = await makeEncryptedThumbnail(for: item) {
-                    item.encryptedThumbPath = encryptedThumbPath
-                    repairedItem = true
-                    generatedLocalChange = true
+        await withTaskGroup(of: (Bool, Bool).self) { group in
+            var nextIndex = 0
+            func enqueueNext() {
+                guard !Task.isCancelled, nextIndex < candidates.count else { return }
+                let item = candidates[nextIndex]
+                nextIndex += 1
+                group.addTask { @MainActor in
+                    guard !Task.isCancelled else { return (false, false) }
+                    return await self.repairMediaPreview(for: item, context: context, sync: sync, syncAfterRepair: syncAfterRepair)
                 }
             }
+            for _ in 0..<4 {
+                enqueueNext()
+            }
+            for await (repairedItem, needsSync) in group {
+                if repairedItem {
+                    repairedCount += 1
+                }
+                generatedPreviewNeedsSync = generatedPreviewNeedsSync || needsSync
+                if Task.isCancelled {
+                    group.cancelAll()
+                } else {
+                    enqueueNext()
+                }
+            }
+        }
+        if repairedCount > 0 {
+            logger.info("Repaired media previews for \(repairedCount, privacy: .public) vault items")
+        }
+        return generatedPreviewNeedsSync
+    }
 
-            if VaultMediaPreviewRepairPolicy.needsVideoDuration(
-                kind: item.kind,
-                storedDuration: metadata(for: item)?.mediaDurationSeconds,
-                hasLocalOriginal: item.assetState == .local && VaultFileStore.fileExists(path: item.encryptedFilePath)
-            ), await repairMissingVideoDuration(for: item) {
+    private func repairMediaPreview(
+        for item: VaultItem,
+        context: ModelContext,
+        sync: CloudKitSyncService,
+        syncAfterRepair: Bool
+    ) async -> (Bool, Bool) {
+        var repairedItem = false
+        var generatedLocalChange = false
+
+        if VaultCloudAssetDownloadPolicy.needsLocalPreview(item) {
+            if await downloadThumbnailIfAvailable(for: item, sync: sync) {
+                repairedItem = true
+            } else if !Task.isCancelled, VaultFileStore.fileExists(path: item.encryptedFilePath),
+                      item.assetState == .local,
+                      let encryptedThumbPath = await makeEncryptedThumbnail(for: item) {
+                item.encryptedThumbPath = encryptedThumbPath
                 repairedItem = true
                 generatedLocalChange = true
             }
-
-            if generatedLocalChange {
-                item.updatedAt = Date()
-                if syncAfterRepair {
-                    item.localRevision += 1
-                    item.syncStatus = .pending
-                    generatedPreviewNeedsSync = true
-                }
-                if item.syncStatus == .synced {
-                    releaseLocalOriginalIfBackedUp(for: item)
-                }
-            }
-            if repairedItem {
-                repairedCount += 1
-            }
         }
 
-        if repairedCount > 0 {
-            logger.info("Generated missing media previews for \(repairedCount, privacy: .public) vault items")
+        if !Task.isCancelled, VaultMediaPreviewRepairPolicy.needsVideoDuration(
+            kind: item.kind,
+            storedDuration: metadata(for: item)?.mediaDurationSeconds,
+            hasLocalOriginal: item.assetState == .local && VaultFileStore.fileExists(path: item.encryptedFilePath)
+        ), await repairMissingVideoDuration(for: item) {
+            repairedItem = true
+            generatedLocalChange = true
+        }
+
+        if generatedLocalChange {
+            item.updatedAt = Date()
+            if syncAfterRepair {
+                item.localRevision += 1
+                item.syncStatus = .pending
+            }
+            if item.syncStatus == .synced {
+                releaseLocalOriginalIfBackedUp(for: item)
+            }
+        }
+        if repairedItem {
+            // Publish each completed thumbnail instead of waiting for the slowest download.
             try? context.save()
             objectWillChange.send()
         }
-        return generatedPreviewNeedsSync
+        return (repairedItem, generatedLocalChange && syncAfterRepair)
     }
 
     private func repairMissingVideoDuration(for item: VaultItem) async -> Bool {
@@ -2150,7 +2203,8 @@ final class VaultStore: ObservableObject {
         for item: VaultItem,
         trigger: VaultOriginalReleaseTrigger = .successfulSync
     ) -> Bool {
-        guard VaultOptimizedStoragePolicy.isEnabledByDefault,
+        guard !PhotoTransferCoordinator.shared.pinnedVaultIDs.contains(item.id),
+              VaultOptimizedStoragePolicy.isEnabledByDefault,
               item.deletedAt == nil,
               item.kind != .link,
               item.syncStatus == .synced,
@@ -2336,6 +2390,7 @@ final class VaultStore: ObservableObject {
             }
 
             for item in itemsToSync {
+                if PhotoTransferCoordinator.shared.isRunning && PhotoTransferCoordinator.shared.pinnedVaultIDs.contains(item.id) { continue }
                 let success = await sync.syncItem(item)
                 if success {
                     releaseLocalOriginalIfBackedUp(for: item)

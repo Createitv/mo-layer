@@ -513,6 +513,7 @@ final class CloudKitSyncService: ObservableObject {
                 lastSyncError = nil
                 appendLog("iCloud account available")
             case .noAccount:
+                confirmedUploadBytes.removeAll()
                 state = .unavailable(L.string("Not signed into iCloud. Items remain encrypted locally."))
                 lastSyncError = state.detail
                 appendLog("iCloud account unavailable: noAccount")
@@ -668,35 +669,63 @@ final class CloudKitSyncService: ObservableObject {
 
     func fetchRemoteManifest() async -> CKRecord? {
         guard await ensureCloudAvailable() else { return nil }
-
-        state = .syncing
-        let primaryID = CKRecord.ID(recordName: primaryManifestRecordName)
         do {
-            let primary = try await database.record(for: primaryID)
-            state = .synced(Date())
-            lastSyncError = nil
-            appendLog("Fetched primary VaultManifest record=\(primaryID.recordName)")
-            return primary
-        } catch {
-            if !isUnknownItem(error) {
-                appendLog(describe(error, context: "Primary VaultManifest fetch failed record=\(primaryID.recordName)"))
-            } else {
-                appendLog("Primary VaultManifest not found record=\(primaryID.recordName); checking legacy manifest records")
+            let primaryID = CKRecord.ID(recordName: primaryManifestRecordName)
+            do {
+                let primary = try await database.record(for: primaryID)
+                lastSyncError = nil
+                return primary
+            } catch {
+                guard isUnknownItem(error) else { throw error }
             }
+            let records = try await checkedRecords(recordType: "VaultManifest")
+            lastSyncError = nil
+            return Self.userRecords(from: records).max {
+                ($0["updatedAt"] as? Date ?? .distantPast) < ($1["updatedAt"] as? Date ?? .distantPast)
+            }
+        } catch {
+            let message = userFacingMessage(for: error, fallback: L.string("Unable to read from iCloud."))
+            lastSyncError = message
+            state = .failed(message)
+            return nil
         }
+    }
 
-        let records = Self.userRecords(from: await fetchRecords(recordType: "VaultManifest"))
-        let latest = records.max {
-            ($0["updatedAt"] as? Date ?? .distantPast) < ($1["updatedAt"] as? Date ?? .distantPast)
+    /// Unlike a best-effort list, this fails if any page or record could not be read.
+    private func checkedRecords(recordType: String, desiredKeys: [String]? = nil) async throws -> [CKRecord] {
+        let query = CKQuery(recordType: recordType, predicate: NSPredicate(value: true))
+        var page = try await database.records(matching: query, desiredKeys: desiredKeys)
+        var records = try page.matchResults.map { try $0.1.get() }
+        while let cursor = page.queryCursor {
+            page = try await database.records(continuingMatchFrom: cursor, desiredKeys: desiredKeys)
+            records.append(contentsOf: try page.matchResults.map { try $0.1.get() })
         }
-        state = .synced(Date())
-        lastSyncError = nil
-        if let latest {
-            appendLog("Fetched legacy VaultManifest record=\(latest.recordID.recordName)")
-        } else {
-            appendLog("No remote VaultManifest found")
+        return records
+    }
+
+    private var pendingUploadBytes: [String: Int64] = [:]
+    private var confirmedUploadBytes: [String: Int64] = [:]
+
+    private func reserveCloudCapacity(for item: VaultItem) async throws {
+        let records = Self.userRecords(from: try await checkedRecords(
+            recordType: "VaultItem", desiredKeys: ["byteSize", "deletedAt"]
+        )).filter { $0["deletedAt"] == nil }
+        // A retried upload may already exist remotely even if local acknowledgement was lost.
+        if records.contains(where: { $0.recordID.recordName == item.id }) { return }
+        let remoteIDs = Set(records.map { $0.recordID.recordName })
+        var sizes = records.map { max(0, ($0["byteSize"] as? NSNumber)?.int64Value ?? 0) }
+        // CloudKit query indexes may lag a successful upload; keep acknowledged bytes counted.
+        let localUploads = confirmedUploadBytes.merging(pendingUploadBytes) { _, pending in pending }
+        sizes.append(contentsOf: localUploads.filter { !remoteIDs.contains($0.key) && $0.key != item.id }.map(\.value))
+        let used = sizes.reduce(Int64(0)) { partial, next in
+            let (sum, overflow) = partial.addingReportingOverflow(next)
+            return overflow ? Int64.max : sum
         }
-        return latest
+        guard VaultStoragePolicy.canImport(usedBytes: used, incomingBytes: item.byteSize, isPro: VaultStorageQuota.hasProAccess) else {
+            NotificationCenter.default.post(name: VaultStorageQuota.limitReached, object: nil)
+            throw VaultStorageQuota.LimitError()
+        }
+        pendingUploadBytes[item.id] = item.byteSize
     }
 
     func fetchRemoteManifestCandidates() async -> [CKRecord] {
@@ -726,6 +755,13 @@ final class CloudKitSyncService: ObservableObject {
             appendLog("Skipped VaultItem sync id=\(item.id): \(item.lastSyncError ?? "cloud unavailable")")
             return false
         }
+
+        // Previously backed-up content remains editable and recoverable after Pro expires.
+        if !VaultStorageQuota.hasProAccess, item.deletedAt == nil, item.cloudRecordName == nil {
+            do { try await reserveCloudCapacity(for: item) }
+            catch { return failItemSync(item, reason: error.localizedDescription) }
+        }
+        defer { pendingUploadBytes[item.id] = nil }
 
         state = .syncing
         let fileURL = VaultFileStore.assetURL(for: item.encryptedFilePath)
@@ -785,6 +821,7 @@ final class CloudKitSyncService: ObservableObject {
                     record["thumbAsset"] = thumbAsset
                 }
             }
+            confirmedUploadBytes[saved.recordID.recordName] = item.deletedAt == nil ? item.byteSize : nil
             item.cloudRecordName = saved.recordID.recordName
             item.syncStatus = .synced
             item.lastSyncError = nil

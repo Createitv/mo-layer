@@ -769,3 +769,110 @@
 "Play Live Photo" = "播放 Live Photo";
 "Zoom Out" = "縮小";
 "Zoom In" = "放大";
+
+/* Verified photo transfer */
+"%d duplicates skipped. Their system originals are kept." = "已跳過 %d 個重復項目，它們的系統原件已保留。";
+"%d of %d saved in Mo Layer" = "已將 %d / %d 項存入墨層";
+"%d photos still need importing. Their system originals are kept." = "還有 %d 項待導入，它們的系統原件已保留。";
+"%d system originals moved to Recently Deleted." = "已將 %d 項系統原件移至“最近刪除”。";
+"Allow access to the selected photos in Settings, then retry. Originals have not been deleted." = "請在設置中允許訪問所選照片，然後重試。系統原件沒有被刪除。";
+"The selected items could not be linked to your photo library. Keep Full Access enabled, reopen Photos, and try again. Originals have not been deleted." = "已選項目無法與系統照片圖庫建立關聯。請保持「完整取用」權限，重新開啟照片選擇器後再試。系統原件沒有被刪除。";
+"Photo Calendar" = "照片日曆";
+"Previous Month" = "上個月";
+"Next Month" = "下個月";
+"No media for this calendar" = "日曆中沒有媒體";
+"Photos and videos will appear on their capture dates." = "照片和影片會顯示在對應的拍攝日期。";
+"Background transfer" = "後台轉存";
+"Continue transfer" = "繼續轉存";
+"Delete %d system originals…" = "刪除 %d 項系統原件…";
+"Delete verified system originals?" = "刪除已校驗的系統原件？";
+"Deleting system originals does not require cloud backup. Keep a backup if you need recovery after losing the phone or deleting the app." = "刪除系統原件不要求雲端備份。如需在手機丟失或卸載應用後恢復，請另行保留備份。";
+"Deletion needs confirmation. Check Photos; Mo Layer cannot verify it with the current photo access." = "刪除結果待確認。當前相冊權限不足以覈實，請在系統“照片”中檢查。";
+"Encrypted copies uploaded to iCloud." = "加密副本已上傳到 iCloud。";
+"Encrypted photo transfer" = "照片加密轉存";
+"Finish and keep remaining originals" = "結束任務並保留剩餘原件";
+"Finish this transfer?" = "結束本次轉存任務？";
+"Items needing attention" = "需要處理的項目";
+"Local copies are saved separately from iCloud. Cloud backup is pending or incomplete." = "本地副本與 iCloud 備份獨立保存。雲端備份尚未完成。";
+"Mo Layer will recheck both copies before asking iOS to delete. Originals go to Recently Deleted; iCloud Photos deletion syncs to your other devices. Local storage is not a cloud backup." = "墨層會再次校驗兩份內容，再請求 iOS 刪除。原件將進入“最近刪除”；iCloud 照片刪除會同步至其他設備。本地保存不等於雲端備份。";
+"No originals could be safely deleted. Review the transfer details and retry." = "沒有可以安全刪除的原件，請檢查轉存詳情後重試。";
+"On iOS 26, Mo Layer requests continued background processing. Older systems allow limited background time. If iOS stops the task or you force quit, unlock Mo Layer and tap Continue. Originals are never deleted automatically." = "在 iOS 26 上，墨層會申請持續後台處理；舊系統僅允許有限後台時間。如系統停止任務或你強制退出，解鎖墨層後點擊“繼續轉存”。系統原件絕不會自動刪除。";
+"Open Photos → Recently Deleted → unlock → select only the photos you transferred → Delete. Mo Layer cannot clear Recently Deleted or verify that you cleared it." = "打開系統“照片” → 最近刪除 → 解鎖 → 僅選擇本次轉存的照片 → 刪除。墨層無法清空“最近刪除”，也無法驗證你是否已清除。";
+"Pause transfer" = "暫停轉存";
+"Photo access settings" = "相冊權限設置";
+"Photo transfer" = "照片轉存";
+"Recently Deleted" = "最近刪除";
+"Review photo transfer" = "查看照片轉存";
+"Save first. Optionally delete system originals after verification." = "先安全保存，校驗後可選擇刪除系統原件。";
+"Saved Mo Layer copies remain. Any unfinished imports and original-deletion reminders will be dismissed. All remaining system originals are kept." = "已存入墨層的副本會保留。尚未完成的導入和原件刪除提醒將被取消，所有剩餘系統原件都會保留。";
+"Saved locally in Mo Layer. This is not an iCloud backup." = "已保存在墨層本地，這不代表已有 iCloud 備份。";
+"Saving photo %d of %d" = "正在保存第 %d / %d 項";
+"Saving to Mo Layer" = "正在存入墨層";
+"System deletion was cancelled or failed. Your Mo Layer copies are safe; originals were not confirmed deleted." = "系統刪除已取消或失敗。墨層副本不受影響，尚未確認原件已刪除。";
+"The original could not be downloaded completely. Please retry." = "原件未能完整下載，請重試。";
+"The saved transfer could not be opened. No system originals will be deleted." = "無法讀取已保存的轉存任務，不會刪除任何系統原件。";
+"The system original changed after import. It has been kept; import the updated photo again." = "系統原件在導入後發生了變化，已保留原件。請重新導入更新後的照片。";
+"The vault import limit has been reached. Open Pro or free space in the vault, then continue." = "已達到保險箱導入數量上限，請開通 Pro 或減少保險箱內的項目後繼續。";
+"This edited or multi-resource photo cannot yet be transferred losslessly. The original has been kept." = "暫不支持完整轉存這張編輯過或包含多種資源的照片，系統原件已保留。";
+"Transfer paused. Unlock Mo Layer and tap Continue to resume. System originals are kept." = "轉存已暫停。解鎖墨層後點擊“繼續轉存”即可恢復，系統原件已保留。";
+"Uploading encrypted copies to iCloud" = "正在將加密副本上傳到 iCloud";
+"Verify and delete originals" = "校驗並刪除原件";
+"Verifying original %d of %d" = "正在校驗第 %d / %d 項原件";
+"With iCloud Photos enabled, deletion also applies to other devices using the same photo library." = "開啓 iCloud 照片時，刪除操作也會同步到使用同一照片圖庫的其他設備。";
+"iCloud backup" = "iCloud 備份";
+"Import needs attention" = "匯入需要處理";
+"Import complete" = "匯入完成";
+"Items remaining: %d" = "剩餘 %d 項";
+"Finish importing and keep originals" = "結束匯入，保留原件";
+"Saved in Mo Layer: %d" = "已存入墨層：%d 項";
+"Delete the originals from Photos?" = "要刪除系統相簿中的原件嗎？";
+"Delete originals (%d)" = "刪除原件（%d 項）";
+"Keep originals" = "保留原件";
+"Items: %d" = "共 %d 項";
+"No readable photo or video resource was found. The original has been kept." = "未找到可讀取的照片或影片資源，系統原件已保留。";
+"Originals with edits or extra resources are kept in Photos." = "包含編輯記錄或額外資源的原件會保留在系統相簿中。";
+
+// Platform equivalents
+"Open System Settings" = "開啟系統設定";
+"Import document images from Photos or Files" = "從照片或檔案匯入文件圖片";
+"Import from Photos or Files" = "從照片或檔案匯入";
+"Open the App Store, select your account, choose Redeem Gift Card or Code, then return to Mo Layer and tap Restore Purchases." = "開啟 App Store，選擇你的帳號，點選「兌換禮品卡或代碼」。完成兌換後返回 Mo Layer，點選「回復購買」。";
+"Mo Layer requests permissions only when needed. Review or change this app’s permissions in System Settings." = "Mo Layer 僅在功能需要時要求權限。你可以在系統設定中查看或更改此 App 的權限。";
+"Default follows your device language and region. Choose a language here to override it inside the app." = "預設跟隨你的 裝置 語言與地區。也可以在這裡為 App 單獨選擇語言。";
+"You can delete vault items, manage permissions in System Settings, and choose whether to use iCloud features." = "你可以删除保险箱项目、在 裝置 设置中管理权限，并自行选择是否使用 iCloud 功能。";
+"Set up device authentication in System Settings. The app only receives a yes or no result from the system." = "在系統設定中設定裝置認證。App 僅接收系統傳回的認證成功或失敗結果。";
+"Open System Settings, sign in to iCloud, and allow this app to use iCloud. Your data remains encrypted locally until iCloud is available." = "開啟系統設定，登入 iCloud，並允許此 App 使用 iCloud。在 iCloud 可用前，你的資料會保持本機加密。";
+"Adult-content warnings are controlled by the system, not by this app." = "成人內容警告由系統控制，而非此 App。";
+"Sensitive Content Warning is managed by the system. Mo Layer cannot turn it off for you." = "敏感內容警告由系統管理。Mo Layer 無法替你關閉此功能。";
+"Where available, manage Sensitive Content Warning in System Settings > Privacy & Security." = "如果系統支援，請在系統設定 > 隱私權與安全性中管理敏感內容警告。";
+
+// Purchase restoration after reinstall
+"Already purchased Pro?" = "已經購買過 Pro？";
+"If you reinstalled Mo Layer or changed devices, restore purchases with the Apple Account used for your original purchase. You do not need to buy lifetime Pro again." = "重新安裝墨層或更換裝置後，請使用原購買時的 Apple 帳號恢復購買。永久會員無需重複購買。";
+
+/* Storage capacity and membership */
+"Your free 5 GB is full, or this file exceeds the remaining space. Open Pro to keep adding. Existing files stay available." = "免費 5 GB 空間已滿，或此檔案超過剩餘空間。開通 Pro 可繼續新增，已有檔案仍可使用。";
+"Free includes 5 GB, unlimited file count, automatic backup, and restore. Pro removes the 5 GB app limit." = "免費享有 5 GB，不限檔案數量，支援自動備份與還原。Pro 可解除 App 的 5 GB 容量限制。";
+"Choose your Pro plan" = "選擇適合你的 Pro";
+"Membership plans are currently unavailable. You can keep using your free storage." = "暫時無法載入會員方案，你仍可繼續使用免費空間。";
+"Your library" = "已用檔案容量";
+"Free · 5 GB" = "免費版 · 5 GB";
+"Counts files in every folder, including cloud-only files. No file count limit." = "統計所有目錄中的檔案，包含僅儲存在雲端的檔案。不限制檔案數量。";
+"Every folder, ready to use" = "所有目錄，直接使用";
+"Default folders and automatic encrypted backup are included for everyone." = "所有使用者均可使用預設目錄與自動加密備份。";
+"Your files come back with you" = "換裝置，檔案也能找回來";
+"Reinstall or change devices using the same iCloud account. Existing backups remain available after Pro ends." = "重裝或換裝置後，使用同一 iCloud 帳號還原。Pro 到期後，已有備份仍可查看和還原。";
+"More room with Pro" = "Pro，讓容量不再受限";
+"Free includes 5 GB. Pro removes the app limit; backups still use your own iCloud storage." = "免費版提供 5 GB 額度。Pro 解除 App 容量限制；備份仍使用你自己的 iCloud 空間。";
+"%@ once. No subscription renewal." = "一次性支付 %@，無需續訂。";
+"3 days free, then %@ / %@. Renews automatically unless canceled in Apple subscription settings." = "免費試用 3 天，之後 %@／%@。除非在 Apple 訂閱設定中取消，否則將自動續訂。";
+"%@ / %@. Renews automatically unless canceled in Apple subscription settings. Trial eligibility is confirmed by Apple." = "%@／%@。除非在 Apple 訂閱設定中取消，否則將自動續訂。試用資格由 Apple 確認。";
+"Room for what matters." = "珍貴的，都有空間。";
+"Start with 5 GB free. Keep every memory within reach." = "從免費 5 GB 開始，讓每一份珍藏隨時可見。";
+"year" = "年";
+"month" = "月";
+"Retry" = "重試";
+
+"Unlimited vault storage" = "保險庫容量無上限";
+
+"No app storage limit. Backups use your own iCloud storage." = "App 內容量無上限，備份使用你自己的 iCloud 空間。";

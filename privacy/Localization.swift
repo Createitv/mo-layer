@@ -18,6 +18,30 @@ enum L {
     static func format(_ key: String, _ arguments: CVarArg...) -> String {
         String(format: string(key), locale: AppLanguage.current.locale, arguments: arguments)
     }
+
+    // Older transfer journals store translated messages. Resolve their original
+    // key before display so changing the app language also updates saved errors.
+    static func persistedString(_ text: String) -> String {
+        string(canonicalKey(forPersistedString: text))
+    }
+
+    static func canonicalKey(forPersistedString text: String) -> String {
+        persistedMessageKeys[text] ?? text
+    }
+
+    private static let persistedMessageKeys: [String: String] = {
+        var result: [String: String] = [:]
+        for code in AppLanguage.allCases.compactMap(\.bundleCode) {
+            guard let path = Bundle.main.path(forResource: "Localizable", ofType: "strings", inDirectory: nil, forLocalization: code),
+                  let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+                  let table = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: String] else { continue }
+            for key in table.keys.sorted() {
+                result[key] = key
+                if let value = table[key], result[value] == nil { result[value] = key }
+            }
+        }
+        return result
+    }()
 }
 
 enum AppLanguage: String, CaseIterable, Identifiable {

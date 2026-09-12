@@ -578,7 +578,7 @@
 "Sync Trigger" = "Sync Trigger";
 "Synced" = "同期済み";
 "Syncing" = "同期中";
-"Take Photo or Video" = "Take Photo or Video";
+"Take Photo or Video" = "写真またはビデオを撮影";
 "Tap compose to create a note." = "Tap compose to create a note.";
 "Temporary Decrypted Preview" = "一時復号プレビュー";
 "Text" = "Text";
@@ -769,3 +769,110 @@
 "Play Live Photo" = "Play Live Photo";
 "Zoom Out" = "縮小";
 "Zoom In" = "拡大";
+
+/* Verified photo transfer */
+"%d duplicates skipped. Their system originals are kept." = "%d duplicates skipped. Their system originals are kept.";
+"%d of %d saved in Mo Layer" = "%d of %d saved in Mo Layer";
+"%d photos still need importing. Their system originals are kept." = "%d photos still need importing. Their system originals are kept.";
+"%d system originals moved to Recently Deleted." = "%d system originals moved to Recently Deleted.";
+"Allow access to the selected photos in Settings, then retry. Originals have not been deleted." = "Allow access to the selected photos in Settings, then retry. Originals have not been deleted.";
+"The selected items could not be linked to your photo library. Keep Full Access enabled, reopen Photos, and try again. Originals have not been deleted." = "選択した項目を写真ライブラリに関連付けられませんでした。フルアクセスを有効にしたまま写真選択画面を開き直し、もう一度お試しください。オリジナルは削除されていません。";
+"Photo Calendar" = "写真カレンダー";
+"Previous Month" = "前の月";
+"Next Month" = "次の月";
+"No media for this calendar" = "このカレンダーにメディアはありません";
+"Photos and videos will appear on their capture dates." = "写真とビデオは撮影日に表示されます。";
+"Background transfer" = "Background transfer";
+"Continue transfer" = "Continue transfer";
+"Delete %d system originals…" = "Delete %d system originals…";
+"Delete verified system originals?" = "Delete verified system originals?";
+"Deleting system originals does not require cloud backup. Keep a backup if you need recovery after losing the phone or deleting the app." = "Deleting system originals does not require cloud backup. Keep a backup if you need recovery after losing the phone or deleting the app.";
+"Deletion needs confirmation. Check Photos; Mo Layer cannot verify it with the current photo access." = "Deletion needs confirmation. Check Photos; Mo Layer cannot verify it with the current photo access.";
+"Encrypted copies uploaded to iCloud." = "Encrypted copies uploaded to iCloud.";
+"Encrypted photo transfer" = "Encrypted photo transfer";
+"Finish and keep remaining originals" = "Finish and keep remaining originals";
+"Finish this transfer?" = "Finish this transfer?";
+"Items needing attention" = "Items needing attention";
+"Local copies are saved separately from iCloud. Cloud backup is pending or incomplete." = "Local copies are saved separately from iCloud. Cloud backup is pending or incomplete.";
+"Mo Layer will recheck both copies before asking iOS to delete. Originals go to Recently Deleted; iCloud Photos deletion syncs to your other devices. Local storage is not a cloud backup." = "Mo Layer will recheck both copies before asking iOS to delete. Originals go to Recently Deleted; iCloud Photos deletion syncs to your other devices. Local storage is not a cloud backup.";
+"No originals could be safely deleted. Review the transfer details and retry." = "No originals could be safely deleted. Review the transfer details and retry.";
+"On iOS 26, Mo Layer requests continued background processing. Older systems allow limited background time. If iOS stops the task or you force quit, unlock Mo Layer and tap Continue. Originals are never deleted automatically." = "On iOS 26, Mo Layer requests continued background processing. Older systems allow limited background time. If iOS stops the task or you force quit, unlock Mo Layer and tap Continue. Originals are never deleted automatically.";
+"Open Photos → Recently Deleted → unlock → select only the photos you transferred → Delete. Mo Layer cannot clear Recently Deleted or verify that you cleared it." = "Open Photos → Recently Deleted → unlock → select only the photos you transferred → Delete. Mo Layer cannot clear Recently Deleted or verify that you cleared it.";
+"Pause transfer" = "Pause transfer";
+"Photo access settings" = "Photo access settings";
+"Photo transfer" = "Photo transfer";
+"Recently Deleted" = "Recently Deleted";
+"Review photo transfer" = "Review photo transfer";
+"Save first. Optionally delete system originals after verification." = "Save first. Optionally delete system originals after verification.";
+"Saved Mo Layer copies remain. Any unfinished imports and original-deletion reminders will be dismissed. All remaining system originals are kept." = "Saved Mo Layer copies remain. Any unfinished imports and original-deletion reminders will be dismissed. All remaining system originals are kept.";
+"Saved locally in Mo Layer. This is not an iCloud backup." = "Saved locally in Mo Layer. This is not an iCloud backup.";
+"Saving photo %d of %d" = "Saving photo %d of %d";
+"Saving to Mo Layer" = "Saving to Mo Layer";
+"System deletion was cancelled or failed. Your Mo Layer copies are safe; originals were not confirmed deleted." = "System deletion was cancelled or failed. Your Mo Layer copies are safe; originals were not confirmed deleted.";
+"The original could not be downloaded completely. Please retry." = "The original could not be downloaded completely. Please retry.";
+"The saved transfer could not be opened. No system originals will be deleted." = "The saved transfer could not be opened. No system originals will be deleted.";
+"The system original changed after import. It has been kept; import the updated photo again." = "The system original changed after import. It has been kept; import the updated photo again.";
+"The vault import limit has been reached. Open Pro or free space in the vault, then continue." = "The vault import limit has been reached. Open Pro or free space in the vault, then continue.";
+"This edited or multi-resource photo cannot yet be transferred losslessly. The original has been kept." = "This edited or multi-resource photo cannot yet be transferred losslessly. The original has been kept.";
+"Transfer paused. Unlock Mo Layer and tap Continue to resume. System originals are kept." = "Transfer paused. Unlock Mo Layer and tap Continue to resume. System originals are kept.";
+"Uploading encrypted copies to iCloud" = "Uploading encrypted copies to iCloud";
+"Verify and delete originals" = "Verify and delete originals";
+"Verifying original %d of %d" = "Verifying original %d of %d";
+"With iCloud Photos enabled, deletion also applies to other devices using the same photo library." = "With iCloud Photos enabled, deletion also applies to other devices using the same photo library.";
+"iCloud backup" = "iCloud backup";
+"Import needs attention" = "読み込みの確認が必要です";
+"Import complete" = "読み込み完了";
+"Items remaining: %d" = "残り：%d項目";
+"Finish importing and keep originals" = "読み込みを終了してオリジナルを保持";
+"Saved in Mo Layer: %d" = "Mo Layerに保存済み：%d件";
+"Delete the originals from Photos?" = "「写真」からオリジナルを削除しますか？";
+"Delete originals (%d)" = "オリジナルを削除（%d件）";
+"Keep originals" = "オリジナルを保持";
+"Items: %d" = "%d件";
+"No readable photo or video resource was found. The original has been kept." = "読み込める写真またはビデオのデータが見つかりませんでした。オリジナルは保持されています。";
+"Originals with edits or extra resources are kept in Photos." = "編集履歴や追加データを含むオリジナルは「写真」に保持されます。";
+
+// Platform equivalents
+"Open System Settings" = "システム設定を開く";
+"Import document images from Photos or Files" = "写真またはファイルから書類画像を読み込む";
+"Import from Photos or Files" = "写真またはファイルから読み込む";
+"Open the App Store, select your account, choose Redeem Gift Card or Code, then return to Mo Layer and tap Restore Purchases." = "App Store を開き、アカウントから「ギフトカードまたはコードを使う」を選択します。引き換え後、Mo Layer に戻って「購入を復元」をタップしてください。";
+"Mo Layer requests permissions only when needed. Review or change this app’s permissions in System Settings." = "Mo Layer は必要なときだけ権限を要求します。システム設定でこのアプリの権限を確認・変更できます。";
+"Default follows your device language and region. Choose a language here to override it inside the app." = "標準ではデバイスの言語と地域に従います。アプリ内だけ別の言語にする場合はここで選択します。";
+"You can delete vault items, manage permissions in System Settings, and choose whether to use iCloud features." = "You can delete vault items, manage permissions in System Settings, and choose whether to use iCloud features.";
+"Set up device authentication in System Settings. The app only receives a yes or no result from the system." = "システム設定でデバイス認証を設定してください。アプリはシステムから認証の成否のみを受け取ります。";
+"Open System Settings, sign in to iCloud, and allow this app to use iCloud. Your data remains encrypted locally until iCloud is available." = "システム設定で iCloud にサインインし、このアプリの利用を許可してください。利用可能になるまでデータはローカルで暗号化されます。";
+"Adult-content warnings are controlled by the system, not by this app." = "成人向けコンテンツの警告はアプリではなくシステムが管理します。";
+"Sensitive Content Warning is managed by the system. Mo Layer cannot turn it off for you." = "センシティブな内容の警告はシステムが管理します。Mo Layer から無効にすることはできません。";
+"Where available, manage Sensitive Content Warning in System Settings > Privacy & Security." = "対応している場合は、システム設定 > プライバシーとセキュリティでセンシティブな内容の警告を管理してください。";
+
+// Purchase restoration after reinstall
+"Already purchased Pro?" = "Pro を購入済みですか？";
+"If you reinstalled Mo Layer or changed devices, restore purchases with the Apple Account used for your original purchase. You do not need to buy lifetime Pro again." = "再インストールや機種変更後は、購入時の Apple Account で購入を復元してください。買い切りの Pro を再購入する必要はありません。";
+
+/* Storage capacity and membership */
+"Your free 5 GB is full, or this file exceeds the remaining space. Open Pro to keep adding. Existing files stay available." = "無料の 5 GB が満杯か、このファイルが空き容量を超えています。Pro で追加を続けられます。既存のファイルは引き続き利用できます。";
+"Free includes 5 GB, unlimited file count, automatic backup, and restore. Pro removes the 5 GB app limit." = "無料で 5 GB、ファイル数無制限、自動バックアップと復元を利用できます。Pro はアプリの 5 GB 制限を解除します。";
+"Choose your Pro plan" = "Pro プランを選択";
+"Membership plans are currently unavailable. You can keep using your free storage." = "現在プランを読み込めません。無料ストレージは引き続き利用できます。";
+"Your library" = "ライブラリ使用量";
+"Free · 5 GB" = "無料 · 5 GB";
+"Counts files in every folder, including cloud-only files. No file count limit." = "クラウド上のみのファイルを含め、すべてのフォルダを集計します。ファイル数の制限はありません。";
+"Every folder, ready to use" = "すべてのフォルダをすぐに利用";
+"Default folders and automatic encrypted backup are included for everyone." = "標準フォルダと暗号化自動バックアップは、すべてのユーザーが利用できます。";
+"Your files come back with you" = "ファイルも一緒に引っ越し";
+"Reinstall or change devices using the same iCloud account. Existing backups remain available after Pro ends." = "再インストールや機種変更後は同じ iCloud アカウントで復元。Pro 終了後も既存のバックアップを利用できます。";
+"More room with Pro" = "Pro でもっと保存";
+"Free includes 5 GB. Pro removes the app limit; backups still use your own iCloud storage." = "無料で 5 GB。Pro はアプリの制限を解除します。バックアップにはご自身の iCloud 容量を使用します。";
+"%@ once. No subscription renewal." = "%@ の買い切り。自動更新はありません。";
+"3 days free, then %@ / %@. Renews automatically unless canceled in Apple subscription settings." = "3 日間無料、その後 %@／%@。Apple のサブスクリプション設定で解約しない限り自動更新されます。";
+"%@ / %@. Renews automatically unless canceled in Apple subscription settings. Trial eligibility is confirmed by Apple." = "%@／%@。Apple で解約しない限り自動更新されます。無料体験の対象かどうかは Apple が確認します。";
+"Room for what matters." = "大切なものに、ゆとりを。";
+"Start with 5 GB free. Keep every memory within reach." = "無料の 5 GB から。大切な思い出をいつでも手元に。";
+"year" = "年";
+"month" = "月";
+"Retry" = "再試行";
+
+"Unlimited vault storage" = "保管庫の容量は無制限";
+
+"No app storage limit. Backups use your own iCloud storage." = "アプリ内の容量制限はありません。バックアップにはご自身のiCloud容量を使用します。";

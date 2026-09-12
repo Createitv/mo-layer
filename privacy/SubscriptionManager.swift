@@ -1,6 +1,15 @@
 import Combine
 import Foundation
+import SwiftData
 @preconcurrency import RevenueCat
+
+enum OfferCodePresentationAction: Equatable { case openSystemSheet, showInstructions }
+
+enum OfferCodePresentationPolicy {
+    static func action(for route: OfferCodeRoute) -> OfferCodePresentationAction {
+        route == .systemSheet ? .openSystemSheet : .showInstructions
+    }
+}
 
 enum SubscriptionLoadState: Equatable {
     case idle
@@ -19,27 +28,10 @@ enum MembershipAccessLevel: Equatable {
     case expiredReadOnly
     case lockedUntilPro
 
-    var allowsVaultEntry: Bool {
-        switch self {
-        case .activePro, .expiredReadOnly:
-            true
-        case .lockedUntilPro:
-            false
-        }
-    }
-
-    var allowsImportAndCloudSync: Bool {
-        self == .activePro
-    }
-
-    var allowsCloudPull: Bool {
-        switch self {
-        case .activePro, .expiredReadOnly:
-            true
-        case .lockedUntilPro:
-            false
-        }
-    }
+    // Membership controls capacity, never access to a user's existing files.
+    var allowsVaultEntry: Bool { true }
+    var allowsImportAndCloudSync: Bool { true }
+    var allowsCloudPull: Bool { true }
 
     var moLayerEntryAction: MoLayerEntryAction {
         allowsVaultEntry ? .enter : .explainPro
@@ -78,34 +70,62 @@ struct RestorePurchaseFeedback: Equatable {
     }
 }
 
-enum VaultFreeImportPolicy {
-    static let freeItemLimit = 99
+enum VaultStoragePolicy {
+    nonisolated static let freeByteLimit: Int64 = 5_000_000_000
 
-    static func countsTowardFreeLimit(_ kind: VaultItemKind) -> Bool {
-        switch kind {
-        case .image, .livePhoto, .video, .audio, .document, .archive, .other:
-            true
-        case .link:
-            false
+    nonisolated static func canImport(usedBytes: Int64, incomingBytes: Int64, isPro: Bool) -> Bool {
+        guard usedBytes >= 0, incomingBytes >= 0 else { return false }
+        if isPro { return true }
+        // Subtraction avoids overflow with very large files or restored libraries.
+        return usedBytes <= freeByteLimit && incomingBytes <= freeByteLimit - usedBytes
+    }
+
+    static func usedBytes(in items: [VaultItem]) -> Int64 {
+        items.filter { $0.deletedAt == nil }.reduce(Int64(0)) { total, item in
+            let (sum, overflow) = total.addingReportingOverflow(max(0, item.byteSize))
+            return overflow ? Int64.max : sum
         }
     }
 
-    static func countedItemCount(in items: [VaultItem]) -> Int {
-        items.filter { item in
-            item.deletedAt == nil && countsTowardFreeLimit(item.kind)
-        }.count
+    static var limitMessage: String {
+        L.string("Your free 5 GB is full, or this file exceeds the remaining space. Open Pro to keep adding. Existing files stay available.")
+    }
+}
+
+/// Reserve capacity across imports that suspend while preparing encrypted media.
+@MainActor
+enum VaultStorageQuota {
+    private static var proEnabled = false
+    static var proExpirationDate: Date?
+    static var hasProAccess: Bool {
+        get { proEnabled && (proExpirationDate.map { $0 > Date() } ?? true) }
+        set { proEnabled = newValue }
+    }
+    private static var reservations: [UUID: Int64] = [:]
+    static let limitReached = Notification.Name("vault.storageLimitReached")
+
+    struct LimitError: LocalizedError {
+        var errorDescription: String? { VaultStoragePolicy.limitMessage }
     }
 
-    static func remainingFreeSlots(currentCount: Int, isPro: Bool) -> Int? {
-        guard !isPro else { return nil }
-        return max(freeItemLimit - currentCount, 0)
+    static func reserve(bytes: Int64, context: ModelContext) throws -> UUID {
+        let items = try context.fetch(FetchDescriptor<VaultItem>())
+        let used = VaultStoragePolicy.usedBytes(in: items)
+        let reserved = reservations.values.reduce(Int64(0)) { partial, next in
+            let (sum, overflow) = partial.addingReportingOverflow(next)
+            return overflow ? Int64.max : sum
+        }
+        let (total, overflow) = used.addingReportingOverflow(reserved)
+        guard !overflow, VaultStoragePolicy.canImport(usedBytes: total, incomingBytes: bytes, isPro: hasProAccess) else {
+            NotificationCenter.default.post(name: limitReached, object: nil)
+            throw LimitError()
+        }
+        let token = UUID()
+        reservations[token] = bytes
+        return token
     }
 
-    static func canImport(currentCount: Int, incomingCount: Int, isPro: Bool) -> Bool {
-        guard incomingCount > 0 else { return true }
-        guard !isPro else { return true }
-        return currentCount + incomingCount <= freeItemLimit
-    }
+    static func release(_ token: UUID) { reservations[token] = nil }
 }
 
 struct MembershipStatusSummary: Equatable {
@@ -131,7 +151,7 @@ struct MembershipStatusSummary: Equatable {
         case .activePro:
             L.string("Pro Active")
         case .expiredReadOnly:
-            L.string("Read-Only Protection")
+            L.string("Free Plan")
         case .lockedUntilPro:
             L.string("Free Plan")
         }
@@ -169,9 +189,9 @@ struct MembershipStatusSummary: Equatable {
         case .activePro:
             L.string("You can add, edit, delete, and sync Mo Layer content.")
         case .expiredReadOnly:
-            L.string("You can view existing Mo Layer content. Renew Pro to add or sync new content.")
+            L.string("Free includes 5 GB, unlimited file count, automatic backup, and restore. Pro removes the 5 GB app limit.")
         case .lockedUntilPro:
-            L.format("Free vault includes up to %d photos, videos, audio, and files. Pro unlocks more imports, editing, and encrypted sync.", VaultFreeImportPolicy.freeItemLimit)
+            L.string("Free includes 5 GB, unlimited file count, automatic backup, and restore. Pro removes the 5 GB app limit.")
         }
     }
 
@@ -234,14 +254,21 @@ final class SubscriptionManager: NSObject, ObservableObject {
         return URL(string: "https://molayer.tech/\(path)")!
     }
 
+    @Published private(set) var introEligibility: [String: IntroEligibility] = [:]
+    @Published private(set) var isPurchasing = false
     @Published var packages: [Package] = []
     @Published var missingProductIDs: [String] = []
     @Published var loadState: SubscriptionLoadState = .idle
-    @Published var isPro = false
+    @Published private(set) var isRefreshingEntitlements = false
+    @Published var isPro = false {
+        didSet { VaultStorageQuota.hasProAccess = isPro }
+    }
     @Published var statusText = L.string("Free Plan")
     @Published var restoreFeedback: RestorePurchaseFeedback?
     @Published private(set) var activeProductIdentifier: String?
-    @Published private(set) var activeExpirationDate: Date?
+    @Published private(set) var activeExpirationDate: Date? {
+        didSet { VaultStorageQuota.proExpirationDate = activeExpirationDate }
+    }
     @Published private(set) var hasActivatedPro = UserDefaults.standard.bool(forKey: hasActivatedProStorageKey)
     private var isRevenueCatReady = false
 
@@ -332,7 +359,9 @@ final class SubscriptionManager: NSObject, ObservableObject {
             }
             missingProductIDs = Self.missingProductIDs(from: packages.map(\.storeProduct.productIdentifier))
             loadState = .loaded
-            await refreshEntitlements()
+            introEligibility = await Purchases.shared.checkTrialOrIntroDiscountEligibility(
+                productIdentifiers: packages.map(\.storeProduct.productIdentifier)
+            )
         } catch {
             packages = []
             missingProductIDs = Self.expectedProductIDs
@@ -340,9 +369,22 @@ final class SubscriptionManager: NSObject, ObservableObject {
             statusText = L.string("Unable to load membership products")
             applyDeveloperAccessIfNeeded()
         }
+        // Existing purchases must be checked even when the product catalog fails.
+        await refreshEntitlements()
+    }
+
+    func offersThreeDayTrial(_ package: Package) -> Bool {
+        guard !isPro,
+              introEligibility[package.storeProduct.productIdentifier]?.status == .eligible,
+              let offer = package.storeProduct.introductoryDiscount else { return false }
+        return offer.paymentMode == .freeTrial && offer.subscriptionPeriod.unit == .day
+            && offer.subscriptionPeriod.value == Self.freeTrialDays && offer.numberOfPeriods == 1
     }
 
     func purchase(_ package: Package) async {
+        guard !isPurchasing else { return }
+        isPurchasing = true
+        defer { isPurchasing = false }
         restoreFeedback = nil
         guard isRevenueCatReady else {
             statusText = L.string("RevenueCat API key is not configured.")
@@ -382,6 +424,7 @@ final class SubscriptionManager: NSObject, ObservableObject {
 
     func redeemOfferCode() async {
         restoreFeedback = nil
+        guard OfferCodePresentationPolicy.action(for: PlatformCapabilities.routes.offerCode) == .openSystemSheet else { return }
         guard isRevenueCatReady else {
             let feedback = RestorePurchaseFeedback.codeRedemptionUnavailable()
             restoreFeedback = feedback
@@ -414,6 +457,12 @@ final class SubscriptionManager: NSObject, ObservableObject {
     }
 
     func refreshEntitlements() async {
+        if let activeExpirationDate, activeExpirationDate <= Date() {
+            isPro = false
+        }
+        guard !isRefreshingEntitlements else { return }
+        isRefreshingEntitlements = true
+        defer { isRefreshingEntitlements = false }
         guard isRevenueCatReady else {
             isPro = false
             statusText = L.string("Free Plan")
@@ -433,6 +482,7 @@ final class SubscriptionManager: NSObject, ObservableObject {
     private func applyCustomerInfo(_ customerInfo: CustomerInfo) {
         let entitlement = customerInfo.entitlements[Self.revenueCatEntitlementID]
         let active = entitlement?.isActive == true
+            && ((entitlement?.expirationDate).map { $0 > Date() } ?? true)
         isPro = active
         activeProductIdentifier = active ? entitlement?.productIdentifier : nil
         activeExpirationDate = active ? entitlement?.expirationDate : nil

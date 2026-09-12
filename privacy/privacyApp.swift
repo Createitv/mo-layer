@@ -206,6 +206,9 @@ struct privacyApp: App {
             }
         }
         .modelContainer(modelContainerController.container)
+        #if targetEnvironment(macCatalyst)
+        .commands { MoLayerCommands() }
+        #endif
     }
 }
 

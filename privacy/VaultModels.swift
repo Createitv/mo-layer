@@ -122,11 +122,12 @@ struct VaultMetadata: Codable {
     var importedAt: Date
     var remoteURL: String? = nil
     var originalExtension: String? = nil
+    var capturedAt: Date? = nil
     var captureLocation: VaultCaptureLocation? = nil
     var mediaDurationSeconds: Double? = nil
 }
 
-struct LivePhotoPackage: Codable {
+nonisolated struct LivePhotoPackage: Codable, Sendable {
     var stillData: Data
     var pairedVideoData: Data
     var stillFilename: String

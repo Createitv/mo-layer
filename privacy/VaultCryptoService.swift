@@ -119,7 +119,7 @@ enum VaultCryptoService {
         return value
     }
 
-    static func encrypt(_ data: Data, using key: SymmetricKey) throws -> Data {
+    nonisolated static func encrypt(_ data: Data, using key: SymmetricKey) throws -> Data {
         let box = try AES.GCM.seal(data, using: key)
         guard let combined = box.combined else { throw CryptoError.invalidSealedBox }
         return combined

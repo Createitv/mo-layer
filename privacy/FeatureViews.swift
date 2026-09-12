@@ -3,6 +3,7 @@ import Combine
 import CoreLocation
 import CoreImage
 import CoreImage.CIFilterBuiltins
+import Photos
 import PhotosUI
 import SwiftData
 import SwiftUI
@@ -11,6 +12,14 @@ import UniformTypeIdentifiers
 #if canImport(VisionKit)
 import VisionKit
 #endif
+
+enum ImportAlternativeAction: Equatable { case scanner, photos, files }
+
+enum ImportAlternativePolicy {
+    static func actions(for route: DocumentScanRoute) -> [ImportAlternativeAction] {
+        route == .visionKit ? [.scanner] : [.photos, .files]
+    }
+}
 
 struct ImportHubView: View {
     @Environment(\.dismiss) private var dismiss
@@ -21,12 +30,20 @@ struct ImportHubView: View {
     @EnvironmentObject private var importQueue: VaultImportQueue
     @Query private var vaultItems: [VaultItem]
     var showsCloseButton = false
+    var opensCameraOnAppear = false
     var destinationFolderId: String? = nil
     var onImported: (ImportSummary) -> Void = { _ in }
-    @State private var pickerItems: [PhotosPickerItem] = []
+    @ObservedObject private var photoTransfer = PhotoTransferCoordinator.shared
+    @State private var showPhotosPicker = false
     @State private var showFileImporter = false
     @State private var showAudioRecorder = false
+    @State private var showCamera = false
+    @State private var pendingCapturedMedia: CapturedVaultMedia?
+    @State private var isImportingCapture = false
+    @State private var didOpenInitialCamera = false
     @State private var showScanner = false
+    @State private var showImportAlternatives = false
+    @State private var importAlternativesTitle = "Import from Photos or Files"
     @State private var showMembership = false
 
     var body: some View {
@@ -35,17 +52,22 @@ struct ImportHubView: View {
                 VStack(spacing: 14) {
                     if isFreeImportLimitReached {
                         AppCard {
-                            Label(freeImportLimitMessage, systemImage: "star.circle")
-                                .foregroundStyle(AppTheme.warning)
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                            VStack(alignment: .leading, spacing: 10) {
+                                Label(freeImportLimitMessage, systemImage: "star.circle")
+                                    .foregroundStyle(AppTheme.warning)
+                                Button(L.string("Pro")) { showMembership = true }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
 
-                    PhotosPicker(selection: $pickerItems, matching: .any(of: [.images, .videos, .livePhotos])) {
-                        ActionRow(icon: "photo.on.rectangle", title: L.string("Import from Photos"), subtitle: L.string("Photos and videos"))
+                    Button {
+                        openPhotos()
+                    } label: {
+                        ActionRow(icon: "photo.on.rectangle", title: L.string("Import from Photos"), subtitle: L.string("Save first. Optionally delete system originals after verification."))
                     }
                     .buttonStyle(.plain)
-                    .disabled(!canImportVaultItems(count: 1))
+                    .disabled(!canImportVaultItems(count: 1) || photoTransfer.isRunning || importQueue.isImporting || isImportingCapture)
 
                     Button {
                         showFileImporter = true
@@ -53,7 +75,15 @@ struct ImportHubView: View {
                         ActionRow(icon: "folder", title: L.string("Import from Files"), subtitle: L.string("PDFs, documents, and archives"))
                     }
                     .buttonStyle(.plain)
-                    .disabled(!canImportVaultItems(count: 1))
+                    .disabled(!canImportVaultItems(count: 1) || photoTransfer.isRunning || importQueue.isImporting || isImportingCapture)
+
+                    Button {
+                        openCamera()
+                    } label: {
+                        ActionRow(icon: "camera", title: L.string("Camera"), subtitle: L.string(PlatformCapabilities.routes.mediaCapture == .nativeCamera ? "Take Photo or Video" : "Import from Photos"))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!canImportVaultItems(count: 1) || photoTransfer.isRunning || importQueue.isImporting || isImportingCapture)
 
                     Button {
                         showAudioRecorder = true
@@ -61,23 +91,42 @@ struct ImportHubView: View {
                         ActionRow(icon: "waveform.circle", title: L.string("Record Audio"), subtitle: L.string("Record a voice memo directly into the vault"))
                     }
                     .buttonStyle(.plain)
-                    .disabled(!canImportVaultItems(count: 1))
+                    .disabled(!canImportVaultItems(count: 1) || photoTransfer.isRunning || importQueue.isImporting || isImportingCapture)
 
                     Button {
-                        showScanner = true
+                        if ImportAlternativePolicy.actions(for: PlatformCapabilities.routes.documentScan) == [.scanner] {
+                            showScanner = true
+                        } else {
+                            importAlternativesTitle = "Import document images from Photos or Files"
+                            showImportAlternatives = true
+                        }
                     } label: {
-                        ActionRow(icon: "doc.viewfinder", title: L.string("Scan Document"), subtitle: L.string("IDs, contracts, and receipts as encrypted images"))
+                        ActionRow(icon: "doc.viewfinder", title: L.string("Scan Document"), subtitle: L.string(PlatformCapabilities.routes.documentScan == .visionKit ? "IDs, contracts, and receipts as encrypted images" : "Import document images from Photos or Files"))
                     }
                     .buttonStyle(.plain)
-                    .disabled(!canImportVaultItems(count: 1) || !isDocumentScannerAvailable)
+                    .disabled(!canImportVaultItems(count: 1) || photoTransfer.isRunning || importQueue.isImporting || isImportingCapture)
                 }
                 .padding()
+            }
+            .accessibilityIdentifier("import.root")
+            .dropDestination(for: URL.self) { urls, _ in
+                guard PlatformCapabilities.currentPlatform == .macCatalyst else { return false }
+                return handleFileURLs(urls)
+            }
+            .confirmationDialog(L.string(importAlternativesTitle), isPresented: $showImportAlternatives, titleVisibility: .visible) {
+                Button(L.string("Import from Photos")) { openPhotos() }
+                Button(L.string("Import from Files")) { showFileImporter = true }
+                Button(L.string("Cancel"), role: .cancel) {}
             }
             .background(AppTheme.background)
             .navigationTitle(L.string("Import"))
             .navigationBarTitleDisplayMode(.inline)
             .onAppear {
                 vaultStore.setWriteAccess(canImportVaultItems(count: 1))
+                if opensCameraOnAppear && !didOpenInitialCamera {
+                    didOpenInitialCamera = true
+                    openCamera()
+                }
             }
             .onChange(of: subscription.isPro) { _, _ in
                 vaultStore.setWriteAccess(canImportVaultItems(count: 1))
@@ -86,39 +135,33 @@ struct ImportHubView: View {
                 if showsCloseButton {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button(L.string("Close")) { dismiss() }
+                            .accessibilityIdentifier("import.close")
                     }
                 }
             }
-            .onChange(of: pickerItems) { _, newItems in
-                guard canImportVaultItems(count: newItems.count) else {
-                    pickerItems = []
-                    showMembership = true
-                    return
+            .sheet(isPresented: $showPhotosPicker) {
+                PhotoAssetIdentifierPicker { identifiers in
+                    showPhotosPicker = false
+                    handlePhotoSelection(identifiers)
                 }
-                guard !newItems.isEmpty else { return }
-                vaultStore.setWriteAccess(true)
-                importQueue.importPickerItems(newItems, context: modelContext, vaultStore: vaultStore, sync: sync, folderId: destinationFolderId, syncAfterImportCompletion: subscription.canImportAndSync) { summary in
-                    handleImported(summary)
-                }
-                pickerItems = []
-                if showsCloseButton {
-                    dismiss()
-                }
+                .ignoresSafeArea()
             }
+            .alert(L.string("Photo transfer"), isPresented: Binding(get: { photoTransfer.message != nil && photoTransfer.journal == nil }, set: { if !$0 { photoTransfer.message = nil } })) {
+                Button(L.string("OK")) { photoTransfer.message = nil }
+                Button(L.string("Photo access settings")) {
+                    if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+                }
+            } message: { Text(photoTransfer.message ?? "") }
             .fileImporter(isPresented: $showFileImporter, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
                 if case .success(let urls) = result {
-                    guard canImportVaultItems(count: urls.count) else {
-                        showMembership = true
-                        return
-                    }
-                    vaultStore.setWriteAccess(true)
-                    importQueue.importFiles(urls: urls, context: modelContext, vaultStore: vaultStore, sync: sync, folderId: destinationFolderId, syncAfterImportCompletion: subscription.canImportAndSync) { summary in
-                        handleImported(summary)
-                    }
-                    if showsCloseButton {
-                        dismiss()
-                    }
+                    handleFileURLs(urls)
                 }
+            }
+            .fullScreenCover(isPresented: $showCamera, onDismiss: importPendingCapture) {
+                NativeCameraCaptureView { media in
+                    pendingCapturedMedia = media
+                }
+                .ignoresSafeArea()
             }
             .fullScreenCover(isPresented: $showAudioRecorder) {
                 AudioRecorderView { url, completion in
@@ -146,10 +189,81 @@ struct ImportHubView: View {
             }
             .sheet(isPresented: $showScanner) { scannerSheet }
             .fullScreenCover(isPresented: $showMembership) {
-                MembershipView(isRequiredBeforeUse: false)
+                MembershipView(isRequiredBeforeUse: false, presentationContext: .modal)
                     .environmentObject(subscription)
             }
         }
+    }
+
+    private func openCamera() {
+        guard !photoTransfer.isRunning, !importQueue.isImporting, !isImportingCapture else { return }
+        guard canImportVaultItems(count: 1) else {
+            showMembership = true
+            return
+        }
+        if PlatformCapabilities.routes.mediaCapture == .nativeCamera {
+            showCamera = true
+        } else {
+            importAlternativesTitle = "Import from Photos or Files"
+            showImportAlternatives = true
+        }
+    }
+
+    private func importPendingCapture() {
+        guard let media = pendingCapturedMedia else { return }
+        pendingCapturedMedia = nil
+        guard canImportVaultItems(count: 1) else {
+            media.discardTemporaryResources()
+            showMembership = true
+            return
+        }
+        isImportingCapture = true
+        Task { @MainActor in
+            defer { isImportingCapture = false }
+            vaultStore.setWriteAccess(true)
+            let summary = await media.importSummary(
+                context: modelContext,
+                vaultStore: vaultStore,
+                sync: sync,
+                folderId: destinationFolderId,
+                syncAfterImport: subscription.canImportAndSync
+            )
+            handleImported(summary)
+        }
+    }
+
+    private func openPhotos() {
+        guard !photoTransfer.isRunning, !importQueue.isImporting, !isImportingCapture else { return }
+        if photoTransfer.journal != nil {
+            dismiss()
+            photoTransfer.showReview = true
+            return
+        }
+        Task {
+            var access = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+            if access == .notDetermined {
+                access = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
+            }
+            if access == .authorized || access == .limited {
+                showPhotosPicker = true
+            } else {
+                photoTransfer.message = L.string("Allow access to the selected photos in Settings, then retry. Originals have not been deleted.")
+            }
+        }
+    }
+
+    @discardableResult
+    private func handleFileURLs(_ urls: [URL]) -> Bool {
+        guard !urls.isEmpty, urls.allSatisfy(\.isFileURL),
+              !photoTransfer.isRunning, !importQueue.isImporting, !isImportingCapture else { return false }
+        guard canImportVaultItems(count: urls.count) else {
+            showMembership = true
+            return false
+        }
+        vaultStore.setWriteAccess(true)
+        importQueue.importFiles(urls: urls, context: modelContext, vaultStore: vaultStore, sync: sync, folderId: destinationFolderId, syncAfterImportCompletion: subscription.canImportAndSync, onComplete: handleImported)
+        if showsCloseButton { dismiss() }
+        return true
     }
 
     private func handleImported(_ summary: ImportSummary) {
@@ -160,33 +274,44 @@ struct ImportHubView: View {
         }
     }
 
-    private var freeImportItemCount: Int {
-        VaultFreeImportPolicy.countedItemCount(in: vaultItems)
+    @MainActor
+    private func handlePhotoSelection(_ identifiers: [String?]) {
+        guard !identifiers.isEmpty else { return }
+        guard canImportVaultItems(count: identifiers.count) else {
+            showMembership = true
+            return
+        }
+        vaultStore.setWriteAccess(true)
+        photoTransfer.start(
+            assetIdentifiers: identifiers,
+            folderID: destinationFolderId,
+            context: modelContext,
+            sync: sync,
+            subscription: subscription
+        )
+        if showsCloseButton, photoTransfer.journal != nil {
+            dismiss()
+        }
+    }
+
+    private var freeImportUsedBytes: Int64 {
+        VaultStoragePolicy.usedBytes(in: vaultItems)
     }
 
     private var isFreeImportLimitReached: Bool {
-        !subscription.isPro && freeImportItemCount >= VaultFreeImportPolicy.freeItemLimit
+        !subscription.isPro && freeImportUsedBytes >= VaultStoragePolicy.freeByteLimit
     }
 
     private func canImportVaultItems(count incomingCount: Int) -> Bool {
-        VaultFreeImportPolicy.canImport(
-            currentCount: freeImportItemCount,
-            incomingCount: incomingCount,
+        VaultStoragePolicy.canImport(
+            usedBytes: freeImportUsedBytes,
+            incomingBytes: incomingCount > 0 ? 1 : 0,
             isPro: subscription.isPro
         )
     }
 
     private var freeImportLimitMessage: String {
-        L.format("Free vaults can hold up to %d photos, videos, audio, and files. Open Pro to keep adding.", VaultFreeImportPolicy.freeItemLimit)
-    }
-
-    private var isDocumentScannerAvailable: Bool {
-        guard PlatformCapabilities.supportsDocumentScanner else { return false }
-        #if canImport(VisionKit)
-        return VNDocumentCameraViewController.isSupported
-        #else
-        false
-        #endif
+        VaultStoragePolicy.limitMessage
     }
 
     @ViewBuilder
@@ -224,10 +349,50 @@ struct ImportHubView: View {
     }
 }
 
+private struct PhotoAssetIdentifierPicker: UIViewControllerRepresentable {
+    let completion: ([String?]) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(completion: completion)
+    }
+
+    func makeUIViewController(context: Context) -> PHPickerViewController {
+        var configuration = PHPickerConfiguration(photoLibrary: .shared())
+        configuration.filter = .any(of: [.images, .videos, .livePhotos])
+        configuration.selectionLimit = 0
+        configuration.selection = .ordered
+        configuration.preferredAssetRepresentationMode = .current
+        let controller = PHPickerViewController(configuration: configuration)
+        controller.delegate = context.coordinator
+        return controller
+    }
+
+    func updateUIViewController(_ uiViewController: PHPickerViewController, context: Context) {}
+
+    final class Coordinator: NSObject, PHPickerViewControllerDelegate {
+        let completion: ([String?]) -> Void
+
+        init(completion: @escaping ([String?]) -> Void) {
+            self.completion = completion
+        }
+
+        func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+            picker.dismiss(animated: true)
+            completion(results.map(\.assetIdentifier))
+        }
+    }
+}
+
 enum CapturedVaultMedia {
     case photo(UIImage, location: VaultCaptureLocation?)
     case video(URL, location: VaultCaptureLocation?)
     case livePhoto(LivePhotoPackage, originalName: String, location: VaultCaptureLocation?)
+
+    func discardTemporaryResources() {
+        if case .video(let url, _) = self {
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
 
     @MainActor
     func importSummary(
@@ -377,7 +542,7 @@ struct SecurityCenterView: View {
                                 .foregroundStyle(AppTheme.secondaryText)
                                 .fixedSize(horizontal: false, vertical: true)
                             VStack(alignment: .leading, spacing: 8) {
-                                SecurityNoteLine(icon: "faceid", text: L.string("Set up Face ID and a device passcode in iPhone Settings. The app only receives a yes or no result from iOS."))
+                                SecurityNoteLine(icon: "faceid", text: L.string("Set up device authentication in System Settings. The app only receives a yes or no result from the system."))
                                 SecurityNoteLine(icon: "scribble.variable", text: L.string("After Face ID succeeds, draw the gesture you enrolled. Wrong gestures continue into the decoy space."))
                                 SecurityNoteLine(icon: "lock.rotation", text: L.string("Leaving the app locks both layers again and clears temporary decrypted previews."))
                             }
@@ -437,7 +602,7 @@ struct SecurityCenterView: View {
                                         Text(L.string("Turn On iCloud Sync"))
                                             .font(.headline)
                                             .foregroundStyle(AppTheme.ink)
-                                        Text(L.string("Open iPhone Settings, sign in to iCloud, and allow this app to use iCloud. Your data remains encrypted locally until iCloud is available."))
+                                        Text(L.string("Open System Settings, sign in to iCloud, and allow this app to use iCloud. Your data remains encrypted locally until iCloud is available."))
                                             .font(.caption)
                                             .foregroundStyle(AppTheme.secondaryText)
                                             .fixedSize(horizontal: false, vertical: true)
@@ -448,7 +613,7 @@ struct SecurityCenterView: View {
                                     Button {
                                         openAppSettings()
                                     } label: {
-                                        Label(L.string("Open iPhone Settings"), systemImage: "gear")
+                                        Label(L.string("Open System Settings"), systemImage: "gear")
                                             .frame(maxWidth: .infinity)
                                     }
                                     .buttonStyle(AppButtonStyle())
@@ -944,7 +1109,7 @@ struct AppLanguageSettingsView: View {
                     }
                 }
             } footer: {
-                Text(L.string("Default follows your iPhone language and region. Choose a language here to override it inside the app."))
+                Text(L.string("Default follows your device language and region. Choose a language here to override it inside the app."))
             }
         }
         .id(preferenceRefreshToken)
@@ -1141,7 +1306,7 @@ struct PrivacyPolicyView: View {
             DocumentSection(
                 title: L.string("Your Control"),
                 paragraphs: [
-                    L.string("You can delete vault items, manage permissions in iPhone Settings, and choose whether to use iCloud features."),
+                    L.string("You can delete vault items, manage permissions in System Settings, and choose whether to use iCloud features."),
                     L.string("Deleting an item from the vault removes the app's local record and attempts to remove the matching encrypted cloud copy when sync is active.")
                 ]
             )
@@ -1208,7 +1373,7 @@ struct UserPermissionsView: View {
             DocumentSection(
                 title: L.string("How Permissions Work"),
                 paragraphs: [
-                    L.string("Palimpsest asks for a permission only when a feature needs it. You can change most permissions later in iPhone Settings."),
+                    L.string("Mo Layer requests permissions only when needed. Review or change this app’s permissions in System Settings."),
                     L.string("Denying a permission may disable the related feature, but the rest of the vault continues to work locally.")
                 ]
             )
@@ -1222,7 +1387,7 @@ struct UserPermissionsView: View {
                 PermissionDocumentRow(
                     icon: "eye.trianglebadge.exclamationmark",
                     title: L.string("Sensitive Content Warning"),
-                    detail: L.string("Adult-content warnings are controlled by iOS, not by this app.")
+                    detail: L.string("Adult-content warnings are controlled by the system, not by this app.")
                 )
                 PermissionDocumentRow(
                     icon: "camera",
@@ -1260,8 +1425,8 @@ struct UserPermissionsView: View {
                 DocumentSection(
                     title: L.string("Sensitive Content Warning"),
                     paragraphs: [
-                        L.string("If iOS shows an adult-content warning while importing from Photos, the warning comes from iPhone privacy settings. Mo Layer cannot turn this system feature off for you."),
-                        L.string("To change it, open iPhone Settings > Privacy & Security > Sensitive Content Warning, then turn off Sensitive Content Warning or adjust the supported apps shown there."),
+                        L.string("Sensitive Content Warning is managed by the system. Mo Layer cannot turn it off for you."),
+                        L.string("Where available, manage Sensitive Content Warning in System Settings > Privacy & Security."),
                         L.string("If the device uses Screen Time or a child account, also check Settings > Screen Time > Communication Safety.")
                     ]
                 )
@@ -1269,7 +1434,7 @@ struct UserPermissionsView: View {
                 DocumentSection(
                     title: L.string("Manage Permissions"),
                     paragraphs: [
-                        L.string("Open iPhone Settings to review or change camera, photo, location, and notification-style system permissions for this app.")
+                        L.string("Mo Layer requests permissions only when needed. Review or change this app’s permissions in System Settings.")
                     ]
                 )
 
@@ -1278,7 +1443,7 @@ struct UserPermissionsView: View {
                         openURL(url)
                     }
                 } label: {
-                    Label(L.string("Open iPhone Settings"), systemImage: "gear")
+                    Label(L.string("Open System Settings"), systemImage: "gear")
                 }
                 .buttonStyle(SecondaryButtonStyle())
             }

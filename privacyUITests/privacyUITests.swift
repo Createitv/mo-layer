@@ -41,3 +41,21 @@ final class privacyUITests: XCTestCase {
         }
     }
 }
+
+// Temporary review capture automation; removed after capture.
+extension privacyUITests {
+    @MainActor
+    func testReviewCapture() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-review-membership-capture", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        app.launch()
+        XCTAssertTrue(app.buttons["Close"].waitForExistence(timeout: 60))
+        sleep(15)
+        print("REVIEW_UI_START\n" + app.debugDescription + "\nREVIEW_UI_END")
+        let top = XCTAttachment(screenshot: app.screenshot()); top.name = "membership-overview"; top.lifetime = .keepAlways; add(top)
+        app.swipeUp()
+        sleep(2)
+        print("REVIEW_PLANS_START\n" + app.debugDescription + "\nREVIEW_PLANS_END")
+        let plans = XCTAttachment(screenshot: app.screenshot()); plans.name = "membership-plans"; plans.lifetime = .keepAlways; add(plans)
+    }
+}

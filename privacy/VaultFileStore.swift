@@ -32,7 +32,7 @@ enum VaultFileStore {
         }
     }
 
-    static func writeEncryptedObject(_ data: Data, itemId: String) throws -> String {
+    nonisolated static func writeEncryptedObject(_ data: Data, itemId: String) throws -> String {
         try prepareDirectories()
         let url = objectsDirectory.appendingPathComponent("\(itemId).enc")
         try data.write(to: url, options: encryptedDataWritingOptions)
@@ -211,7 +211,7 @@ enum VaultFileStore {
         return total
     }
 
-    private static func setEncryptedFileProtection(at url: URL) throws {
+    nonisolated private static func setEncryptedFileProtection(at url: URL) throws {
         try FileManager.default.setAttributes([.protectionKey: encryptedFileProtection], ofItemAtPath: url.path)
     }
 
@@ -234,7 +234,7 @@ enum VaultFileStore {
         return resolved
     }
 
-    private static func relativePath(for url: URL) -> String {
+    nonisolated private static func relativePath(for url: URL) -> String {
         let path = url.standardizedFileURL.path
         let vaultPath = vaultDirectory.standardizedFileURL.path
         guard path.hasPrefix(vaultPath + "/") else {

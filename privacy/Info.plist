@@ -43,7 +43,7 @@
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Used to save exported content back to your photo library when you choose to export.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Used to select photos and videos that you choose to encrypt and import into your private vault.</string>
+	<string>Used to save selected originals into your encrypted vault, resume interrupted transfers, and delete system originals only when you confirm after verification.</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>NSSupportsLiveActivities</key>
@@ -55,6 +55,7 @@
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>remote-notification</string>
+		<string>processing</string>
 	</array>
 	<key>UIApplicationShortcutItems</key>
 	<array>
@@ -74,6 +75,10 @@
 			<key>UIApplicationShortcutItemType</key>
 			<string>app.landlady.www.privacy.quick-recorder</string>
 		</dict>
+	</array>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>app.landlady.www.privacy.photo-transfer.*</string>
 	</array>
 </dict>
 </plist>

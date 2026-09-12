@@ -1,0 +1,9 @@
+Version 1.0.9 (build 8) adds a thumbnail filmstrip to photo and video previews, full-screen media viewing with tap-to-hide controls, and a simplified Pro membership screen.
+
+No account or login is required. Create a local vault PIN on first launch, unlock the vault, then use Import from Photos to select photos or videos. Imports can be paused and resumed. Edited and multi-resource assets can be saved for viewing; system originals containing additional resources are kept. Deletion of eligible originals is optional and requires an explicit user action followed by the iOS confirmation.
+
+Open a Live Photo in the vault and long-press it, or tap its Live icon, to play it. Swipe to browse adjacent photos. The calendar button in the album opens a calendar grouped by capture date; select a date with media to view its photos and videos.
+
+The app uses local encryption and optional user-enabled encrypted iCloud sync. Background transfer is subject to iOS background execution limits; unfinished imports can be resumed after reopening the app. The discreet file-cabinet cover and decoy space are intentional user-facing privacy features documented in the store description. A correct PIN opens the real vault; a decoy path opens non-sensitive sample content.
+
+Existing in-app purchase products are unchanged: privacy.vault.pro.monthly, privacy.vault.pro.yearly, and privacy.vault.pro.lifetime. Pro features and prices are shown in the in-app purchase screen. Free use includes 5 GB of vault content; Pro removes the app storage limit. Device and the user's own iCloud storage capacity still apply. The attached screenshot shows the purchase screen with live StoreKit prices. Debug-only preview tools and developer access are excluded from this release.

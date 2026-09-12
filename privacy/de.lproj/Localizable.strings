@@ -578,7 +578,7 @@
 "Sync Trigger" = "Sync Trigger";
 "Synced" = "Synchronisiert";
 "Syncing" = "Synchronisierung";
-"Take Photo or Video" = "Take Photo or Video";
+"Take Photo or Video" = "Foto oder Video aufnehmen";
 "Tap compose to create a note." = "Tap compose to create a note.";
 "Temporary Decrypted Preview" = "Temporary Decrypted Preview";
 "Text" = "Text";
@@ -769,3 +769,110 @@
 "Play Live Photo" = "Play Live Photo";
 "Zoom Out" = "Verkleinern";
 "Zoom In" = "Vergrößern";
+
+/* Verified photo transfer */
+"%d duplicates skipped. Their system originals are kept." = "%d duplicates skipped. Their system originals are kept.";
+"%d of %d saved in Mo Layer" = "%d of %d saved in Mo Layer";
+"%d photos still need importing. Their system originals are kept." = "%d photos still need importing. Their system originals are kept.";
+"%d system originals moved to Recently Deleted." = "%d system originals moved to Recently Deleted.";
+"Allow access to the selected photos in Settings, then retry. Originals have not been deleted." = "Allow access to the selected photos in Settings, then retry. Originals have not been deleted.";
+"The selected items could not be linked to your photo library. Keep Full Access enabled, reopen Photos, and try again. Originals have not been deleted." = "Die ausgewählten Elemente konnten nicht mit deiner Fotomediathek verknüpft werden. Lass den Vollzugriff aktiviert, öffne die Fotoauswahl erneut und versuche es noch einmal. Originale wurden nicht gelöscht.";
+"Photo Calendar" = "Fotokalender";
+"Previous Month" = "Vorheriger Monat";
+"Next Month" = "Nächster Monat";
+"No media for this calendar" = "Keine Medien in diesem Kalender";
+"Photos and videos will appear on their capture dates." = "Fotos und Videos erscheinen an ihrem Aufnahmedatum.";
+"Background transfer" = "Background transfer";
+"Continue transfer" = "Continue transfer";
+"Delete %d system originals…" = "Delete %d system originals…";
+"Delete verified system originals?" = "Delete verified system originals?";
+"Deleting system originals does not require cloud backup. Keep a backup if you need recovery after losing the phone or deleting the app." = "Deleting system originals does not require cloud backup. Keep a backup if you need recovery after losing the phone or deleting the app.";
+"Deletion needs confirmation. Check Photos; Mo Layer cannot verify it with the current photo access." = "Deletion needs confirmation. Check Photos; Mo Layer cannot verify it with the current photo access.";
+"Encrypted copies uploaded to iCloud." = "Encrypted copies uploaded to iCloud.";
+"Encrypted photo transfer" = "Encrypted photo transfer";
+"Finish and keep remaining originals" = "Finish and keep remaining originals";
+"Finish this transfer?" = "Finish this transfer?";
+"Items needing attention" = "Items needing attention";
+"Local copies are saved separately from iCloud. Cloud backup is pending or incomplete." = "Local copies are saved separately from iCloud. Cloud backup is pending or incomplete.";
+"Mo Layer will recheck both copies before asking iOS to delete. Originals go to Recently Deleted; iCloud Photos deletion syncs to your other devices. Local storage is not a cloud backup." = "Mo Layer will recheck both copies before asking iOS to delete. Originals go to Recently Deleted; iCloud Photos deletion syncs to your other devices. Local storage is not a cloud backup.";
+"No originals could be safely deleted. Review the transfer details and retry." = "No originals could be safely deleted. Review the transfer details and retry.";
+"On iOS 26, Mo Layer requests continued background processing. Older systems allow limited background time. If iOS stops the task or you force quit, unlock Mo Layer and tap Continue. Originals are never deleted automatically." = "On iOS 26, Mo Layer requests continued background processing. Older systems allow limited background time. If iOS stops the task or you force quit, unlock Mo Layer and tap Continue. Originals are never deleted automatically.";
+"Open Photos → Recently Deleted → unlock → select only the photos you transferred → Delete. Mo Layer cannot clear Recently Deleted or verify that you cleared it." = "Open Photos → Recently Deleted → unlock → select only the photos you transferred → Delete. Mo Layer cannot clear Recently Deleted or verify that you cleared it.";
+"Pause transfer" = "Pause transfer";
+"Photo access settings" = "Photo access settings";
+"Photo transfer" = "Photo transfer";
+"Recently Deleted" = "Recently Deleted";
+"Review photo transfer" = "Review photo transfer";
+"Save first. Optionally delete system originals after verification." = "Save first. Optionally delete system originals after verification.";
+"Saved Mo Layer copies remain. Any unfinished imports and original-deletion reminders will be dismissed. All remaining system originals are kept." = "Saved Mo Layer copies remain. Any unfinished imports and original-deletion reminders will be dismissed. All remaining system originals are kept.";
+"Saved locally in Mo Layer. This is not an iCloud backup." = "Saved locally in Mo Layer. This is not an iCloud backup.";
+"Saving photo %d of %d" = "Saving photo %d of %d";
+"Saving to Mo Layer" = "Saving to Mo Layer";
+"System deletion was cancelled or failed. Your Mo Layer copies are safe; originals were not confirmed deleted." = "System deletion was cancelled or failed. Your Mo Layer copies are safe; originals were not confirmed deleted.";
+"The original could not be downloaded completely. Please retry." = "The original could not be downloaded completely. Please retry.";
+"The saved transfer could not be opened. No system originals will be deleted." = "The saved transfer could not be opened. No system originals will be deleted.";
+"The system original changed after import. It has been kept; import the updated photo again." = "The system original changed after import. It has been kept; import the updated photo again.";
+"The vault import limit has been reached. Open Pro or free space in the vault, then continue." = "The vault import limit has been reached. Open Pro or free space in the vault, then continue.";
+"This edited or multi-resource photo cannot yet be transferred losslessly. The original has been kept." = "This edited or multi-resource photo cannot yet be transferred losslessly. The original has been kept.";
+"Transfer paused. Unlock Mo Layer and tap Continue to resume. System originals are kept." = "Transfer paused. Unlock Mo Layer and tap Continue to resume. System originals are kept.";
+"Uploading encrypted copies to iCloud" = "Uploading encrypted copies to iCloud";
+"Verify and delete originals" = "Verify and delete originals";
+"Verifying original %d of %d" = "Verifying original %d of %d";
+"With iCloud Photos enabled, deletion also applies to other devices using the same photo library." = "With iCloud Photos enabled, deletion also applies to other devices using the same photo library.";
+"iCloud backup" = "iCloud backup";
+"Import needs attention" = "Import prüfen";
+"Import complete" = "Import abgeschlossen";
+"Items remaining: %d" = "Verbleibende Objekte: %d";
+"Finish importing and keep originals" = "Import beenden und Originale behalten";
+"Saved in Mo Layer: %d" = "In Mo Layer gespeichert: %d";
+"Delete the originals from Photos?" = "Originale aus Fotos löschen?";
+"Delete originals (%d)" = "Originale löschen (%d)";
+"Keep originals" = "Originale behalten";
+"Items: %d" = "Objekte: %d";
+"No readable photo or video resource was found. The original has been kept." = "Keine lesbaren Foto- oder Videodaten gefunden. Das Original wurde behalten.";
+"Originals with edits or extra resources are kept in Photos." = "Originale mit Bearbeitungen oder zusätzlichen Daten bleiben in Fotos.";
+
+// Platform equivalents
+"Open System Settings" = "Systemeinstellungen öffnen";
+"Import document images from Photos or Files" = "Dokumentbilder aus Fotos oder Dateien importieren";
+"Import from Photos or Files" = "Aus Fotos oder Dateien importieren";
+"Open the App Store, select your account, choose Redeem Gift Card or Code, then return to Mo Layer and tap Restore Purchases." = "Öffne den App Store, wähle deinen Account und „Geschenkkarte einlösen“. Kehre nach dem Einlösen zu Mo Layer zurück und tippe auf „Käufe wiederherstellen“.";
+"Mo Layer requests permissions only when needed. Review or change this app’s permissions in System Settings." = "Mo Layer fragt nur bei Bedarf nach Berechtigungen. Du kannst sie in den Systemeinstellungen prüfen und ändern.";
+"Default follows your device language and region. Choose a language here to override it inside the app." = "Standardmassig folgt die App Sprache und Region deines Gerät. Hier kannst du die App-Sprache uberschreiben.";
+"You can delete vault items, manage permissions in System Settings, and choose whether to use iCloud features." = "You can delete vault items, manage permissions in System Settings, and choose whether to use iCloud features.";
+"Set up device authentication in System Settings. The app only receives a yes or no result from the system." = "Richte die Geräteauthentifizierung in den Systemeinstellungen ein. Die App erhält vom System nur ein Ja oder Nein.";
+"Open System Settings, sign in to iCloud, and allow this app to use iCloud. Your data remains encrypted locally until iCloud is available." = "Öffne die Systemeinstellungen, melde dich bei iCloud an und erlaube dieser App die Nutzung von iCloud. Bis dahin bleiben deine Daten lokal verschlüsselt.";
+"Adult-content warnings are controlled by the system, not by this app." = "Warnungen vor nicht jugendfreien Inhalten werden vom System gesteuert, nicht von dieser App.";
+"Sensitive Content Warning is managed by the system. Mo Layer cannot turn it off for you." = "Warnungen vor sensiblen Inhalten werden vom System verwaltet. Mo Layer kann sie nicht für dich deaktivieren.";
+"Where available, manage Sensitive Content Warning in System Settings > Privacy & Security." = "Verwalte Warnungen vor sensiblen Inhalten, falls verfügbar, unter Systemeinstellungen > Datenschutz & Sicherheit.";
+
+// Purchase restoration after reinstall
+"Already purchased Pro?" = "Pro bereits gekauft?";
+"If you reinstalled Mo Layer or changed devices, restore purchases with the Apple Account used for your original purchase. You do not need to buy lifetime Pro again." = "Nach einer Neuinstallation oder einem Gerätewechsel stelle deine Käufe mit dem ursprünglichen Apple Account wieder her. Du musst Pro auf Lebenszeit nicht erneut kaufen.";
+
+/* Storage capacity and membership */
+"Your free 5 GB is full, or this file exceeds the remaining space. Open Pro to keep adding. Existing files stay available." = "Deine kostenlosen 5 GB sind voll oder diese Datei ist zu groß für den verbleibenden Speicher. Mit Pro kannst du weitere Dateien hinzufügen. Vorhandene Dateien bleiben verfügbar.";
+"Free includes 5 GB, unlimited file count, automatic backup, and restore. Pro removes the 5 GB app limit." = "Kostenlos: 5 GB, unbegrenzte Dateianzahl, automatische Sicherung und Wiederherstellung. Pro hebt das App-Limit von 5 GB auf.";
+"Choose your Pro plan" = "Wähle deinen Pro-Tarif";
+"Membership plans are currently unavailable. You can keep using your free storage." = "Tarife sind derzeit nicht verfügbar. Du kannst deinen kostenlosen Speicher weiter nutzen.";
+"Your library" = "Deine Mediathek";
+"Free · 5 GB" = "Kostenlos · 5 GB";
+"Counts files in every folder, including cloud-only files. No file count limit." = "Zählt Dateien in allen Ordnern, auch reine Cloud-Dateien. Keine Begrenzung der Dateianzahl.";
+"Every folder, ready to use" = "Alle Ordner sofort nutzen";
+"Default folders and automatic encrypted backup are included for everyone." = "Standardordner und automatische verschlüsselte Sicherungen sind für alle enthalten.";
+"Your files come back with you" = "Deine Dateien kommen mit";
+"Reinstall or change devices using the same iCloud account. Existing backups remain available after Pro ends." = "Nach Neuinstallation oder Gerätewechsel mit demselben iCloud-Account wiederherstellen. Sicherungen bleiben auch nach Pro verfügbar.";
+"More room with Pro" = "Mehr Platz mit Pro";
+"Free includes 5 GB. Pro removes the app limit; backups still use your own iCloud storage." = "Kostenlos sind 5 GB enthalten. Pro hebt das App-Limit auf; Sicherungen nutzen weiterhin deinen iCloud-Speicher.";
+"%@ once. No subscription renewal." = "Einmalig %@. Keine Verlängerung.";
+"3 days free, then %@ / %@. Renews automatically unless canceled in Apple subscription settings." = "3 Tage kostenlos, danach %@ / %@. Automatische Verlängerung, sofern nicht in den Apple-Abonnementeinstellungen gekündigt.";
+"%@ / %@. Renews automatically unless canceled in Apple subscription settings. Trial eligibility is confirmed by Apple." = "%@ / %@. Automatische Verlängerung, sofern nicht bei Apple gekündigt. Apple bestätigt die Testberechtigung.";
+"Room for what matters." = "Platz für das Wesentliche.";
+"Start with 5 GB free. Keep every memory within reach." = "Starte mit 5 GB kostenlos. Deine Erinnerungen bleiben erreichbar.";
+"year" = "Jahr";
+"month" = "Monat";
+"Retry" = "Erneut versuchen";
+
+"Unlimited vault storage" = "Unbegrenzter Tresorspeicher";
+
+"No app storage limit. Backups use your own iCloud storage." = "Kein Speicherlimit in der App. Backups nutzen deinen eigenen iCloud-Speicher.";
